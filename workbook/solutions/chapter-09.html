@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 9 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-09.html">→ חזרה לפרק 9</a>
+    <span>פתרונות לפרק 9</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 9 · <span class="en">CI/CD</span></h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. הפלטים כאן הם מה שהתקבל באמת כשהתרגילים נעשו; הזמנים והמזהים אצלכם יהיו אחרים. הקוד המלא נמצא ב-<code>checkpoints\chapter-09</code>.</p>
+</header>
+
+<h2><span class="sec">1</span>שלוש דרכים להאדים</h2>
+<div class="codebox output">
+  <div class="label"><span>1. import os (shortened)</span></div>
+<pre><code>--- step 4: Lint
+    $ uv run ruff check
+F401 [*] `os` imported but unused
+ --&gt; agent\history.py:3:8
+Found 1 error.
+[*] 1 fixable with `--fix`.
+FAILED: step 4 of job checks ended with exit code 1. The steps after it did not run.</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>2. return raw (shortened)</span></div>
+<pre><code>--- step 6: Type check
+    $ uv run mypy agent scripts
+agent\config.py:41: error: Incompatible return value type (got "str", expected "int")  [return-value]
+Found 1 error in 1 file (checked 16 source files)
+FAILED: step 6 of job checks ended with exit code 1. The steps after it did not run.</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>3. the same change, uv run pytest -q (the end)</span></div>
+<pre><code>FAILED tests/test_config.py::test_defaults - AssertionError: assert '10' == 10
+FAILED tests/test_config.py::test_max_turns_from_the_environment - AssertionE...
+2 failed, 71 passed, 3 skipped in 12.52s</code></pre>
+</div>
+<p>הראשון נעצר בצעד 4, ולא רצו <span class="en">format</span>, <span class="en">type check</span> והבדיקות. השני עבר את <code>ruff</code> (הקוד תקין תחבירית ומסודר) ונעצר בצעד 6, לפני הבדיקות. גם הבדיקות היו תופסות אותו, כי יש בדיקה שמשווה את ברירת המחדל ל-<code>10</code>, אבל <code>mypy</code> אמר את זה אחרי שלוש שניות ובשורה המדויקת, והבדיקות אחרי עשרות שניות ובשורה של הבדיקה. ובפונקציה שאין לה בדיקה, רק <code>mypy</code> היה תופס.</p>
+<p><strong>למה מהזול ליקר:</strong> צעד נכשל עוצר את מה שאחריו, ולכן הכישלון הזול מגיע מהר, והמשוב מגיע בשנייה במקום בדקה. וגם כש-CI אדום, הבעיה הראשונה בסדר הזה היא בדרך כלל הפשוטה ביותר לתקן. החיסרון: רואים בעיה אחת בכל פעם. לכן מריצים את <code>ci_local.py</code> אצלכם לפני ה-<span class="en">push</span>, ולא מגלים את הבעיות אחת אחת ב-GitHub.</p>
+
+<h2><span class="sec">2</span>ה-<span class="en">lock file</span> ששכחו</h2>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>73 passed, 3 skipped in 9.04s
+ M uv.lock
+...
+============================= 76 passed in 11.29s =============================
+    ok (14.0s)
+All steps passed.
+Using CPython 3.13.13 interpreter at: C:\Users\you\AppData\Local\Python\pythoncore-3.13-64\python.exe
+Creating virtual environment at: .venv
+error: The lockfile at `uv.lock` needs to be updated, but `--locked` was provided. To update the lockfile, run `uv lock`.</code></pre>
+</div>
+<p>בתיקייה שלכם הכול ירוק, גם עם <code>--locked</code>: <code>uv run pytest</code> כבר עדכן את <code>uv.lock</code> על הדיסק, ו-<code>--locked</code> בודק שהקובץ <em>על הדיסק</em> תואם. הוא תואם. מה שלא תואם הוא מה שב-git, ואת זה רק עותק נקי רואה. ב-<code>ci-test</code>, <code>uv run --locked</code> סירב עוד לפני שהסקריפט התחיל; ב-GitHub הצעד <span class="en">Install the locked packages</span> נכשל עם אותה הודעה.</p>
+<p><strong>הרמז:</strong> <code> M uv.lock</code> ב-<code>git status</code>. קובץ ששונה ולא נכנס ל-<span class="en">commit</span> אחרי שינוי בתלויות הוא כמעט תמיד טעות. ההרגל שמונע את זה: <code>uv add</code> במקום עריכה ביד (הוא מעדכן את שני הקבצים יחד), ו-<code>git status</code> לפני כל <span class="en">commit</span>. וזו התשובה לשאלה "למה CI אם אני מריץ הכול אצלי": אתם בודקים את התיקייה; CI בודק את ה-<span class="en">commit</span>.</p>
+
+<h2><span class="sec">3</span>כמה שווה ה-<span class="en">cache</span></h2>
+<div class="table-wrap">
+<table>
+  <tr><th>מצב</th><th>השורה שמסבירה</th><th>זמן אצלי</th></tr>
+  <tr><td><span class="en">cache</span> מלא</td><td><code>Prepared 46 packages in 21ms</code></td><td>15.0 ו-11.6 שניות</td></tr>
+  <tr><td><span class="en">cache</span> ריק</td><td><code>Downloading mypy (10.9MiB)</code> ועוד שבע, ואז <code>Prepared 46 packages in 18.29s</code></td><td>32.3 שניות</td></tr>
+</table>
+</div>
+<p>שאר הזמן, בשני המצבים, הוא <code>Uninstalled</code> ו-<code>Installed</code> (כ-5 שניות כל אחד, בגלל <code>--reinstall</code>), ואותו יש גם ב-CI. ההבדל הוא ההורדה, וכאן היא בערך פי שניים בכל הריצה. ב-<span class="en">runner</span>, בלי <span class="en">cache</span> מורידים בכל ריצה, על כל <span class="en">pull request</span> וכל <span class="en">push</span>.</p>
+<p><strong>מתי מתחילים מאפס:</strong> כשמשתנה הקלט של המפתח. ב-<code>setup-uv</code> הוא נבנה מתוכן <code>uv.lock</code> ו-<code>pyproject.toml</code> (ומעוד כמה סוגי קבצים של תלויות). כל <code>uv add</code> או עדכון גרסה נותן מפתח חדש, וזה נכון: החבילות השתנו. בנוסף, GitHub מוחק <span class="en">caches</span> שלא היה בהם שימוש זמן מה, ויש להם מגבלת גודל לכל מאגר, כך שריצה ראשונה אחרי הפסקה ארוכה תהיה איטית. ה-<span class="en">cache</span> הוא חיסכון, לא תנאי: ריצה בלעדיו נותנת את אותה תוצאה, רק לאט יותר.</p>
+
+<h2><span class="sec">4</span>מה שומר על גרסת ה-Python</h2>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>FAILED tests/test_python_version.py::test_the_tests_run_on_the_pinned_python
+========================= 1 failed, 1 passed in 0.11s =========================
+Updated `.python-version` from `3.13` -&gt; `3.12`
+&gt;       assert base.group(1) == pinned_version()
+E       AssertionError: assert '3.13' == '3.12'
+FAILED tests/test_python_version.py::test_the_image_uses_the_pinned_python - ...
+========================= 1 failed, 1 passed in 0.16s =========================
+Updated `.python-version` from `3.12` -&gt; `3.13`
+2 passed in 0.02s</code></pre>
+</div>
+<p><strong>שלב 1:</strong> <code>--python 3.12</code> עוקף את הקובץ, והבדיקות רצו על 3.12. <code>test_the_tests_run_on_the_pinned_python</code> נכשלה: היא מגינה מפני הרצה שאינה על הגרסה המוסכמת, מה שקרה אצלכם עד הפרק הזה. <strong>שלב 2:</strong> הקובץ אומר 3.12, ולכן <code>uv</code> רץ על 3.12 והבדיקה הראשונה עברה. אבל ה-<code>Dockerfile</code> עדיין אומר 3.13, ו-<code>test_the_image_uses_the_pinned_python</code> נכשלה: היא מגינה מפני שינוי של מקום אחד בלי השני. שימו לב ש-<code>uv</code> בנה את ה-<code>.venv</code> מחדש בכל החלפה; בשלב 3 הוא חזר ל-3.13.</p>
+<p><strong>מעבר אמיתי ל-3.14</strong> הוא שינוי של שני קבצים באותו <span class="en">commit</span>: <code>uv python pin 3.14</code> ו-<code>FROM python:3.14-slim</code>, ואז <code>ci_local.py</code> מלא (הבדיקות, וגם בניית ה-<span class="en">image</span>, שבה החבילות מותקנות מחדש לגרסה החדשה). <code>requires-python = "&gt;=3.12"</code> מתיר את זה בלי שינוי. זה בדיוק סוג השינוי שכדאי לעשות ב-<span class="en">pull request</span> נפרד, כדי ש-CI יבדוק אותו לבד.</p>
+
+<h2><span class="sec">5</span><span class="en">Release</span> 0.9.0</h2>
+<div class="codebox">
+  <div class="label"><span>agent\__init__.py</span></div>
+<pre><code>"""my-agent: a small chat agent on the Claude API."""
+
+import tomllib
+from pathlib import Path
+
+PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
+
+
+def project_version() -&gt; str:
+    """The version of the project: written once, in pyproject.toml, and read from there."""
+    with PYPROJECT.open("rb") as file:
+        return str(tomllib.load(file)["project"]["version"])</code></pre>
+</div>
+<p>ב-<code>agent\api.py</code>: <code>from agent import project_version</code>, ו-<code>FastAPI(title="my-agent", version=project_version())</code>. ב-<code>tests\test_api.py</code> בדיקה אחת: <code>client.get("/openapi.json").json()["info"]["version"] == project_version()</code>. <code>pyproject.toml</code> נמצא ב-<span class="en">image</span> (ב-<code>/app</code>), ולכן זה עובד גם שם. ואחרי שינוי הגרסה, <code>uv lock</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Resolved 48 packages in 1.10s
+Updated my-agent v0.1.0 -&gt; v0.9.0</code></pre>
+</div>
+<p>גם הגרסה של הפרויקט עצמו רשומה ב-<code>uv.lock</code>. בלי <code>uv lock</code>, CI היה נכשל בדיוק כמו בתרגיל 2.</p>
+<div class="codebox">
+  <div class="label"><span>CHANGELOG.md</span></div>
+<pre><code># Changelog
+
+Every release of my-agent, newest first. Versions follow semantic versioning
+(MAJOR.MINOR.PATCH); while the major version is 0, the API may still change.
+New changes go under "Unreleased" in the pull request that makes them.
+
+## [Unreleased]
+
+## [0.9.0] - 2026-11-18
+
+### Added
+- CI on GitHub Actions: lint, type check and tests (also on Postgres) and an image build
+  on every pull request (`.github/workflows/ci.yml`).
+- `scripts/ci_local.py` runs the same commands on your computer.
+- A release workflow: a tag `vX.Y.Z` builds the image `ghcr.io/&lt;owner&gt;/&lt;repo&gt;:X.Y.Z` and
+  creates a GitHub release with these notes.
+
+### Changed
+- One Python version, 3.13, written in `.python-version` and used by uv, CI and the image.
+- The API reports the version from `pyproject.toml` (it was written in `api.py` by hand).
+
+## [0.8.0] - 2026-11-18
+
+### Added
+- A Dockerfile and `compose.yaml`: the API, its migrations and Postgres in containers.
+- `scripts/copy_conversations.py`, and the migration tests on Postgres (`TEST_DATABASE_URL`).
+
+Earlier versions were not recorded here.</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>scripts\release_notes.py</span></div>
+<pre><code>"""Print the notes of one release from CHANGELOG.md, after checking that the tag is right.
+
+    uv run python scripts/release_notes.py v0.9.0
+
+Exits with an error when the tag does not match the version in pyproject.toml, or when
+CHANGELOG.md has no section for it: then the release workflow stops before it builds.
+"""
+
+import argparse
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def project_version() -&gt; str:
+    with (ROOT / "pyproject.toml").open("rb") as file:
+        return str(tomllib.load(file)["project"]["version"])
+
+
+def notes(version: str, changelog: str) -&gt; str | None:
+    """The text under '## [version]', up to the next '## ' heading."""
+    pattern = rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## |\Z)"
+    found = re.search(pattern, changelog, re.MULTILINE | re.DOTALL)
+    return found.group(1).strip() if found else None
+
+
+def main() -&gt; None:
+    parser = argparse.ArgumentParser(description="Check a release tag and print its notes.")
+    parser.add_argument("tag", help="the git tag, for example v0.9.0")
+    tag = parser.parse_args().tag
+    version = project_version()
+    if tag != f"v{version}":
+        sys.exit(f"The tag {tag} does not match the version in pyproject.toml ({version}).")
+    text = notes(version, (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+    if not text:
+        sys.exit(f"CHANGELOG.md has no notes for {version}.")
+    print(text)
+
+
+if __name__ == "__main__":
+    main()</code></pre>
+</div>
+<p>הסקריפט קורא את <code>pyproject.toml</code> בעצמו ולא מייבא את <code>agent</code>: סקריפט שמריצים כ-<code>python scripts/...</code> לא רואה את החבילה (פרק 3). הבדיקות מריצות אותו כמו ה-<span class="en">workflow</span>:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_release_notes.py</span></div>
+<pre><code>"""The release check: run the script as the release workflow does."""
+
+import subprocess
+import sys
+from pathlib import Path
+
+from agent import project_version
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def release_notes(tag):
+    return subprocess.run(
+        [sys.executable, "scripts/release_notes.py", tag],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_the_current_version_has_release_notes():
+    # Fails as soon as pyproject.toml gets a new version without a CHANGELOG.md section.
+    result = release_notes(f"v{project_version()}")
+    assert result.returncode == 0, result.stderr
+    assert "### " in result.stdout
+
+
+def test_a_wrong_tag_stops_the_release():
+    result = release_notes("v0.0.1")
+    assert result.returncode == 1
+    assert "does not match" in result.stderr</code></pre>
+</div>
+<p>הבדיקה הראשונה מעבירה את הכלל "אין גרסה בלי <span class="en">changelog</span>" מה-<span class="en">release</span> אל ה-<span class="en">pull request</span>: מי ששינה את הגרסה ושכח את <code>CHANGELOG.md</code> רואה אדום עוד לפני המיזוג, לא ביום ה-<span class="en">release</span>.</p>
+<div class="codebox output">
+  <div class="label"><span>ci_local.py, tag, and the release steps (shortened)</span></div>
+<pre><code>============================= 79 passed in 11.71s =============================
+...
+0.9.0
+All steps passed.
+ * [new tag]         v0.9.0 -&gt; v0.9.0
+### Added
+- CI on GitHub Actions: lint, type check and tests (also on Postgres) and an image build
+...
+0.9.0
+IMAGE            ID             DISK USAGE   CONTENT SIZE
+my-agent:0.9.0   12d13cb47223        350MB         83.3MB</code></pre>
+</div>
+<p>(בבדיקת ההפעלה החלפתי את <code>my-agent:ci</code> ב-<code>my-agent:0.9.0</code>; ה-<span class="en">image</span> מדפיס את הגרסה מ-<code>pyproject.toml</code>.) <code>git show v0.9.0</code> מציג את מי שיצר את ה-<span class="en">tag</span>, מתי, ואת ה-<span class="en">commit</span> שהוא מצביע עליו.</p>
+<div class="codebox output">
+  <div class="label"><span>uv run --locked python scripts/release_notes.py v1.0.0</span></div>
+<pre><code>The tag v1.0.0 does not match the version in pyproject.toml (0.9.0).</code></pre>
+</div>
+<p><strong><code>v0.9.1</code> בלי שינוי:</strong> ה-<span class="en">workflow</span> רץ, והצעד הראשון שלו נכשל עם הודעה כזו. שום <span class="en">image</span> לא נבנה, שום דבר לא נדחף ל-<code>ghcr.io</code>, ואין <span class="en">release</span>. נשאר רק <span class="en">tag</span> שגוי, ומוחקים אותו (טבלת התקלות). <strong>מה לא רץ אצלכם:</strong> <code>docker/login-action</code>, <code>docker push</code> ו-<code>gh release create</code>. שלושתם צריכים את <code>GITHUB_TOKEN</code> של ריצה ב-GitHub, ושלושתם משנים משהו בעולם שמחוץ למחשב שלכם. בדיוק לכן הם במקום אחד, מאחורי <span class="en">tag</span>, ולא בסקריפט שמישהו מריץ ביד.</p>
+
+<h2><span class="sec">6</span>כללי הבית</h2>
+<p>אין פתרון יחיד. ב-<code>checkpoints\chapter-09\CONTRIBUTING.md</code> יש גרסה אחת: צעד 2 של ה-<span class="en">pull request</span> מריץ את <code>ci_local.py</code>, צעד חדש "חכו ל-CI, שני ה-<span class="en">checks</span> ירוקים, לא מדלגים", שורה ב-<code>CHANGELOG.md</code> בכל <span class="en">pull request</span>, וסעיפים חדשים:</p>
+<div class="codebox">
+  <div class="label"><span>CONTRIBUTING.md (part)</span></div>
+<pre><code>## When main is red
+
+A red `main` stops everyone: every new branch starts from broken code. Whoever merged the
+change that broke it fixes it first. If the fix takes more than an hour, revert the change
+(`git revert`) and fix it on a branch.</code></pre>
+</div>
+<p><strong>שינויים שוברים ב-my-agent, מעבר ל-<span class="en">API</span>:</strong> משתנה סביבה חדש בלי ברירת מחדל (מי שמפעיל את השירות חייב להוסיף אותו, אחרת הוא לא עולה); <span class="en">migration</span> שקוד ישן לא יכול לעבוד מולו, כמו <code>NOT NULL</code> מפרק 7; שינוי של הפורט או של ה-<code>CMD</code> ב-<code>Dockerfile</code>; שינוי שם של פקודה ב-<span class="en">CLI</span> (<code>/reset</code>) או של הדגל <code>--continue</code>. "שובר" נמדד במי שמשתמש בכם, ולא בכמה שורות השתנו.</p>
+<p><strong><span class="en">Continuous deployment</span>?</strong> לא עכשיו. אין שרת, אין ניטור, ואין דרך מסודרת לחזור לגרסה קודמת. וגם כשיהיו: הבדיקות רצות על <span class="en">mock</span>, ולא אומרות דבר על איכות התשובות של המודל האמיתי. שינוי ב-<span class="en">prompt</span> יכול לעבור את כל 79 הבדיקות ולהיות גרוע. פרק 21 יוסיף <span class="en">evals</span>; עד אז, אדם שמחליט על <span class="en">release</span> הוא חלק מהבדיקה.</p>
+<p>ההיסטוריה של הפרק, מהחדש לישן (כל ענף מוזג ב-<span class="en">fast-forward</span> ונמחק):</p>
+<div class="codebox output">
+  <div class="label"><span>git log --oneline (newest first)</span></div>
+<pre><code>Document how we work with CI and releases
+Add a release workflow, run by a version tag
+Add a changelog; version 0.9.0
+Read the API version from pyproject.toml
+Document CI and the local CI script
+Add ci_local.py: run the CI commands on this computer
+Add a CI workflow: lint, types, tests and the image on every pull request
+Pin Python 3.13 in one place, and test that the image uses it</code></pre>
+</div>
+<p>ה-<span class="en">tag</span> <code>v0.9.0</code> מצביע על <span class="en">Add a release workflow</span>; ה-<span class="en">commit</span> של התיעוד בא אחריו ולא משנה דבר למשתמשים, ולכן אינו מצדיק גרסה. בסוף, מתיקייה נקייה: <code>uv sync</code>, ו-<code>ci_local.py</code> עם <code>db</code> של compose: <code>79 passed</code>, ה-<span class="en">image</span> נבנה ומדפיס <code>0.9.0</code>, <code>actionlint</code> שקט.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-09.html">→ חזרה לפרק 9</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

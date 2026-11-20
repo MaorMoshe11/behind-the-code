@@ -1,0 +1,41 @@
+# Release: runs when a version tag (v1.2.3) is pushed, never on a pull request.
+# Builds the image, tags it with the version, pushes it to GitHub's registry (ghcr.io)
+# and creates a GitHub release with the notes from CHANGELOG.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write  # to create the GitHub release
+  packages: write  # to push the image to ghcr.io
+
+jobs:
+  release:
+    name: Release ${{ github.ref_name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.11.14"
+      - name: Check the tag, and take the notes from CHANGELOG.md
+        run: uv run --locked python scripts/release_notes.py "$GITHUB_REF_NAME" > notes.md
+      - name: Name the image
+        # ghcr.io/<owner>/<repo>:<version>, lowercase as the registry requires; v0.9.0 -> 0.9.0
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Build
+        run: docker build -t "$IMAGE" .
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}  # made by GitHub for this run only
+      - name: Push
+        run: docker push "$IMAGE"
+      - name: Create the GitHub release
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

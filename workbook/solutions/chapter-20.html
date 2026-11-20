@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 20 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-20.html">→ חזרה לפרק 20</a>
+    <span>פתרונות לפרק 20</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 20 · <span class="en">Multi-agent systems</span></h1>
+  <p class="lead">כל הפלטים כאן אמיתיים, מריצה במצב <span class="en">mock</span>, על השיחה של הדוגמה המודרכת (שיחה קודמת על המסיבה, שני זיכרונות, שש הערות). מספרי הטוקנים והזמנים הם של ה-<span class="en">mock</span>: טוקן לכל ארבעה תווים, וחצי שנייה לקריאה עם <code>CHAT_MOCK_DELAY=0.5</code>. ה-<span class="en">refs</span> של ההערות משתנים מריצה לריצה.</p>
+</header>
+
+<h2><span class="sec">1</span>לקרוא ריצה של צוות</h2>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$run = Get-Content agent.log | ConvertFrom-Json | Where-Object agent
+$run | Group-Object request_id | Format-Table Count, Name -AutoSize
+$run | Group-Object agent | Format-Table Count, Name -AutoSize
+$run | Where-Object { $_.message -like "subagent finished*" } | Format-Table agent, status, steps, tokens -AutoSize</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Count Name
+----- ----
+   16 d2e9d7d4bb99413c93456e8245b556ff
+
+Count Name
+----- ----
+    5 orchestrator
+    5 orchestrator/notes
+    6 orchestrator/memory
+
+agent               status steps tokens
+-----               ------ ----- ------
+orchestrator/memory ok         2   1628
+orchestrator/notes  ok         2    975</code></pre>
+</div>
+<p><strong>מזהה אחד</strong> לכל 16 השורות, גם לאלה שנכתבו ב-<span class="en">threads</span> של המומחים: <code>Team.answer</code> קובע אותו, ו-<code>copy_context()</code> מעביר אותו לכל <span class="en">thread</span>. בטרמינל אין מזהה לבקשה (פרק 13 קבע אותו ב-<span class="en">middleware</span> של ה-<span class="en">API</span>), ולכן הצוות יוצר אחד לכל ריצה. <strong>השורה של הנתב</strong>, <code>routed to team</code>, היא בלי <code>request_id</code> ובלי <code>agent</code>: הנתב רץ לפני שהריצה מתחילה. ב-<span class="en">API</span> היא כן נושאת את המזהה של הבקשה. בטרמינל הייתי קובע מזהה לכל הודעה ב-<code>chat_loop</code>, לפני <code>send()</code>, כך שגם הנתב, ה-<span class="en">compaction</span> והצ'אט הרגיל יהיו תחתיו. זה שינוי ב-<span class="en">CLI</span> כולו, ומקומו הטבעי בפרק 21, עם מעקב אחרי ריצות.</p>
+
+<h2><span class="sec">2</span>תדריך חלש למומחה הזיכרון</h2>
+<div class="codebox output">
+  <div class="label"><span>weak, then strong (CHAT_TEAM=1)</span></div>
+<pre><code>you&gt; Go over it. [mock:call delegate {"specialist": "memory", "goal": "Check the earlier conversations."}]
+agent&gt; [mock reply, turn 1] What the specialists found:
+memory:
+- I am allergic to peanuts (saved 2026-11-19) ([5b3a19ba])
+- I prefer short answers (saved 2026-11-19) ([01670462])
+
+you&gt; Go over it. [mock:call delegate {"specialist": "memory", "goal": "Find what the user said about the party in earlier conversations.", "context": "The party is on March 3; the user wants what is still open.", "done_when": "Every open item is listed with its conversation and date."}]
+agent&gt; [mock reply, turn 2] What the specialists found:
+memory:
+- assistant: [mock reply, turn 5] You said: Who brings the music to the party is still open. (2026-11-19, "Keep in mind that I am allergic to peanuts.")
+- user: Who brings the music to the party is still open. (2026-11-19, "Keep in mind ...")
+- ... (cake, March 3)</code></pre>
+</div>
+<p>עם התדריך החלש, המומחה לא חיפש בשיחות בכלל: אין נושא, אז אין מה לשלוח ל-<code>search_conversations</code> (השדה <code>query</code> חובה). הוא קרא ל-<code>recall</code>, והחזיר את הזיכרונות כממצאים. <strong>הדוח נראה תקין</strong>: <code>ok</code>, שני ממצאים עם מקור, שניהם עוברים את <code>check()</code>, ו-<code>not_found</code> ריק. אבל הוא עונה על שאלה אחרת מזו שנשאלה, ואף שורה בו לא אומרת את זה. זה הכישלון הקשה ביותר לתפוס: לא שגיאה, אלא עבודה סבירה על הדבר הלא נכון.</p>
+<p>שני תיקונים, אחד בכל צד. בפרומפט של המומחה, שורה כמו "<span class="en">If you could not do part of the goal, or did something else instead, say so in not_found.</span>". ובצד המתזמר, מה שהפרק אומר על תדריך: נושא, הקשר ו"מתי זה גמור". וגם אז, ה-<span class="en">mock</span> מראה את הגבול: הוא לא היה מודה בזה, כי הוא לא קורא את ההוראות. מודל אמיתי בדרך כלל כן, ואת ה"בדרך כלל" הזה מודדים ב-<span class="en">evals</span> של פרק 21.</p>
+
+<h2><span class="sec">3</span>במקביל, ואחד אחרי השני</h2>
+<div class="codebox output">
+  <div class="label"><span>Format-Table message, llm_ms, context_tokens, seconds: three runs, put together (shortened)</span></div>
+<pre><code>CHAT_TEAM=0 (the three tools of 20.1)   model replied           1044   616
+CHAT_TEAM_PARALLEL=1                     team run finished: done                    2.04
+                                         model replied           2545   585
+CHAT_TEAM_PARALLEL=0                     team run finished: done                    3.04
+                                         model replied           3542   585</code></pre>
+</div>
+<p>המקביליות חסכה 997 מילישניות: בדיוק שתי הקריאות של המומחה השני (2 כפול 0.5 שנייה), שרצו בזמן הקריאות של הראשון. היא לא יכולה לחסוך יותר, כי הנתב, הצעד הראשון של המתזמר והצעד האחרון שלו תלויים זה בזה. ובמקביל או לא, סוכן אחד מהיר יותר בשנייה וחצי.</p>
+<p><strong>בלי התנאי <code>t.writes</code></strong>, שני <code>add_note</code> באותו צעד היו רצים בבת אחת. אם שניהם על אותה הערה, ה-<span class="en">Idempotency-Key</span> של פרק 18 שומר אחת; אבל <code>delete_note</code> ו-<code>add_note</code> באותו צעד יכולים להסתיים בכל סדר, והתוצאה תלויה במזל. ובצוות: מומחה שכותב וממשיך, בזמן שהשני נכשל, משאיר שינוי בחצי, והשאלה של ה-<span class="en">saga</span> מפרק 12 חוזרת: מה מתקנים, ובאיזה סדר.</p>
+
+<h2><span class="sec">4</span>ממצא שאף כלי לא החזיר</h2>
+<div class="codebox output">
+  <div class="label"><span>the review with [mock:invent] (shortened)</span></div>
+<pre><code>agent&gt; [mock reply, turn 1] What the specialists found:
+notes:
+- party: book the community hall by Friday, deposit 200 ([c6c6ceae])
+...
+unchecked (no tool returned this source; not a fact):
+- The party was moved to Friday. ([0badc0de])
+memory:
+- user: Who brings the music to the party is still open. (2026-11-19, ...)
+...
+unchecked (no tool returned this source; not a fact):
+- The party was moved to Friday. ([0badc0de])</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>with kept = list(report.findings): uv run pytest tests\test_team.py (shortened)</span></div>
+<pre><code>E       assert 'unchecked (no tool returned this source; not a fact):' in '[mock reply, turn 1] What the specialists found:\nnotes:\n- party: hall ([a1b2c3d0])\n- The party was moved to Friday...'
+FAILED tests/test_team.py::test_a_finding_no_tool_returned_is_kept_apart_as_unchecked
+1 failed, 15 passed in 15.60s</code></pre>
+</div>
+<p>בלי הבדיקה, "<span class="en">The party was moved to Friday</span>" היה מגיע למשתמש כשורה רגילה, עם <span class="en">ref</span> שנראה כמו של הערה אמיתית, ובתשובה סופית של מודל אמיתי הוא היה נשמע כמו עובדה. <strong>מה היא לא תופסת:</strong> מקור אמיתי עם עובדה שגויה (ה-<span class="en">ref</span> של ההערה על האולם, עם "<span class="en">the hall is booked</span>" כשההערה אומרת "<span class="en">book the hall</span>"), סיכום שמעוות, ומסקנה שאין לה מקור אחד. כדי לתפוס אותם צריך להשוות את התוכן, לא רק את המקור: עוד קריאה (סוקר, 20.4) או בדיקה של קטע מצוטט. שני אלה עולים, ונמדדים בפרק 21.</p>
+
+<h2><span class="sec">5</span>כשמשהו נכשל</h2>
+<div class="codebox output">
+  <div class="label"><span>(a) CHAT_TEAM_MAX_STEPS=3</span></div>
+<pre><code>agent&gt; I stopped before finishing: the run made its 3 model calls. Ask for less at once.
+
+"subagent finished: budget", "agent": "orchestrator/memory", "status": "budget", "tokens": 545, "steps": 1
+"subagent finished: budget", "agent": "orchestrator/notes", "status": "budget", "tokens": 376, "steps": 1
+"team run finished: budget", "model_calls": 3, "tokens": 1664, "tokens_by_agent": {"orchestrator": 743, "notes": 376, "memory": 545}</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>(b) the notes service stopped (shortened)</span></div>
+<pre><code>agent&gt; [mock reply, turn 1] What the specialists found:
+notes:
+- nothing
+problem: The notes service is unavailable right now. Tell the user; do not retry now.
+memory:
+- user: Who brings the music to the party is still open. (2026-11-19, ...)
+
+"team run finished: done", "model_calls": 6, "tokens": 4491, "seconds": 6.16</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>(c) [mock:loop], default limits</span></div>
+<pre><code>agent&gt; I stopped before finishing: the run made its 20 model calls. Ask for less at once.
+
+"team run finished: budget", "model_calls": 20, "tokens": 11572, "tokens_by_agent": {"orchestrator": 3348, "notes": 8224}</code></pre>
+</div>
+<p><strong>(א)</strong> המתזמר, ואחריו כל מומחה, עשו קריאה אחת ומיצו את שלוש הקריאות; הקריאה השנייה של כל מומחה נעצרה, וגם הקריאה הבאה של המתזמר. המשתמש קיבל משפט כן, בלי חצי תשובה. <strong>(ב)</strong> כלי שנכשל הוא לא מומחה שנכשל: מומחה ההערות סיים <code>ok</code>, עם הבעיה בדוח, והתשובה אומרת מה חסר. אבל הריצה לקחה 6.16 שניות, כי הלקוח של שירות ההערות ניסה שלוש פעמים (פרק 11), והמתזמר חיכה לו גם אחרי שמומחה הזיכרון כבר סיים. <strong>(ג)</strong> <code>[mock:loop]</code> משאיר בלולאה גם את המתזמר, שמאציל שוב בכל צעד, וגם את מומחה ההערות, שעוצר ב-<code>gave_up</code> אחרי 5 צעדים. בלי התקציב של הריצה כולה, זה היה נעצר רק אחרי 5 צעדים של המתזמר ועד 5 של מומחה בכל אחד: כ-30 קריאות במקום 20. את הלולאה עצר <code>Budget</code>, לא <code>CHAT_MAX_STEPS</code>.</p>
+
+<h2><span class="sec">6</span>כלי, לא מומחה</h2>
+<div class="codebox output">
+  <div class="label"><span>before: "Go over my notes about the party. What day is it?" (0.19.0)</span></div>
+<pre><code>agent&gt; [mock reply, turn 1] What the specialists found:
+notes:
+- party: book the community hall by Friday, deposit 200 ([585de72d])
+...</code></pre>
+</div>
+<p>השאלה על היום פשוט נעלמה: למתזמר אין שעון, ואף מומחה לא אחראי לו. השינוי, ב-<code>agent\team.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\team.py</span></div>
+<pre><code><span class="hl"># Tools the orchestrator calls itself: small, read-only, and not worth a subagent (a whole
+# loop, its prompt and its tokens, for one line of text).
+OWN_TOOLS = ("current_time",)</span>
+
+...
+        try:
+            <span class="hl">own = [t for t in self.tools.toolbox(context).tools.values() if t.name in OWN_TOOLS]
+            tools = [self.delegate_tool(context, budget), *own]
+            toolbox = Toolbox(tools, context, self.parallel)</span></code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>tests\test_team.py</span></div>
+<pre><code>def test_the_orchestrator_reads_the_clock_itself_while_specialists_work():
+    conversations, current = chat(make_team(), notes_service("party: hall"))
+    reply = conversations.send(current, "Go over my notes about the party. What day is it?")
+
+    assert "(UTC)" in reply  # current_time, called by the orchestrator
+    assert "notes specialist: ok" in reply  # and the delegation, in the same step</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>after</span></div>
+<pre><code>agent&gt; [mock reply, turn 1] I looked it up. The tool said:
+Thursday 2026-11-19 14:15 (UTC)
+I looked it up. The tool said:
+notes specialist: ok (model calls: 2, tool calls: 1, tokens: 953, 1.0 s)
+found:
+- party: book the community hall by Friday, deposit 200 ([e61a2311])
+...</code></pre>
+</div>
+<p>(ה-<span class="en">mock</span> מצטט כאן את התוצאות כמו שהן, כי אחת מהן אינה דוח של מומחה.) <code>current_time</code> וה-<code>delegate</code> יצאו באותו צעד ורצו במקביל, כי אף אחד מהם לא כותב. <strong>הכלל שלי:</strong> מומחה כשהעבודה קוראת הרבה ומחזירה מעט, או צריכה כלים שהמתזמר לא צריך לראות. כלי של המתזמר כשהתוצאה קצרה ממילא, והיא בדיוק מה שהמתזמר צריך. <strong>והטענה "המתזמר לא עושה עבודה"</strong> הופכת מדויקת יותר: הוא לא עושה עבודה <em>שממלאת הקשר</em>. בשורה אחת מהשעון אין מה לבודד. ב-<code>CHANGELOG.md</code>, תחת <span class="en">Unreleased</span>: "<span class="en">The orchestrator reads the clock itself</span>".</p>
+
+<h2><span class="sec">7</span>האם להדליק את הצוות?</h2>
+<p>ההחלטה, ב-<code>docs\adr\0005-keep-the-team-off-by-default.md</code>: <code>CHAT_TEAM</code> נשאר <code>0</code> ב-<span class="en">staging</span> וב-<span class="en">prod</span>. המספרים, מהקוד בסוף התרגילים:</p>
+<div class="table-wrap">
+<table>
+  <tr><th>מי עונה על הסקירה</th><th>קריאות</th><th>טוקנים</th><th>עלות</th><th>זמן</th><th>הקשר ההודעה הבאה</th></tr>
+  <tr><td>סוכן אחד</td><td>2</td><td>2,140</td><td>$0.014</td><td>1.0 s</td><td>1,471</td></tr>
+  <tr><td>צוות, אחד אחרי השני</td><td>6 ונתב</td><td>4,711 ועוד כ-100</td><td>$0.033</td><td>3.6 s</td><td>873</td></tr>
+  <tr><td>צוות, במקביל</td><td>6 ונתב</td><td>4,711 ועוד כ-100</td><td>$0.033</td><td>2.5 s</td><td>873</td></tr>
+  <tr><td>צוות, מומחים ונתב על <code>claude-haiku-5-5</code></td><td>6 ונתב</td><td>אותו דבר</td><td>כ-$0.015</td><td>2.5 s</td><td>873</td></tr>
+</table>
+</div>
+<p>החשבון של סוכן אחד: 616 ו-479 טוקנים נכתבו למטמון (5 דולר למיליון), 616 נקראו ממנו (0.20), ו-429 טוקני פלט (20): כ-0.014 דולר. של הצוות: 1,335 טוקני קלט, 1,954 כתיבה, 544 קריאה ו-878 פלט: כ-0.033. עם <code>claude-haiku-5-5</code> לעובדים, רוב החשבון הוא המתזמר, וכמעט כולו פלט: כ-0.015, קרוב לסוכן אחד. <strong>המספר שהכריע:</strong> פי שניים ויותר בטוקנים ובכסף, ושנייה וחצי יותר, בשביל הקשר קטן ב-600 טוקנים בהמשך. ומה שחסר כדי להחליט אחרת: איכות. אם צוות עונה טוב יותר על סקירות גדולות, ייתכן שזה שווה; את זה מודדים ב-<span class="en">eval</span> של פרק 21, ורק אז מנסים מודל קטן לעובדים.</p>
+<p><strong>למה 4,711 ולא 4,479 כמו ב-20.13?</strong> בתרגיל 6 קיבל המתזמר את ההגדרה של <code>current_time</code>, והקידומת שלו עברה את המינימום של 512 טוקנים: הצעד הראשון שלו נכתב למטמון (544), והשני קורא את ה-544 האלה וכותב את השאר. הקריאה מהמטמון נספרת בטוקנים של הריצה, ולכן הסכום גדל, והמחיר כמעט לא. עוד דוגמה לכך ששינוי קטן בכלים משנה את המטמון (פרק 19).</p>
+
+<h2><span class="sec">·</span>ההיסטוריה ב-git</h2>
+<p>ענף <code>feature/team</code>, ממוזג ב-<span class="en">fast-forward</span>: "<span class="en">A team of agents: a router, an orchestrator that delegates, and two reading specialists</span>"; "<span class="en">Document the team; version 0.19.0</span>". אחריו התג <code>v0.19.0</code>. התרגילים: <code>feature/orchestrator-clock</code> (6, תחת <span class="en">Unreleased</span>), ואז ב-<code>main</code> ה-<span class="en">ADR</span> של תרגיל 7 ושורה ב-<code>agent\team.py</code> וב-README שאומרת שהמתזמר קורא את השעון בעצמו. תרגילים 1 עד 5 לא משאירים שינוי (4: <code>git restore</code>). הקומיט הראשון גדול; בעבודה אמיתית עדיף לפצל אותו לפי הצעדים של הדוגמה המודרכת, כשכל חלק עובר בדיקות.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-20.html">→ חזרה לפרק 20</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 3 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-03.html">→ חזרה לפרק 3</a>
+    <span>פתרונות לפרק 3</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 3 · איכות קוד</h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. הפלטים כאן הם מה שהתקבל באמת כשהתרגילים נעשו. המזהים, הזמנים והנתיבים אצלכם יהיו אחרים. הקוד המלא של כל הקבצים נמצא ב-<code>checkpoints\chapter-03</code>.</p>
+</header>
+
+<h2><span class="sec">1</span>בדיקה ל-<code>/reset</code></h2>
+<div class="codebox">
+  <div class="label"><span>tests\test_cli.py</span></div>
+<pre><code>def test_reset_starts_a_new_conversation(monkeypatch, capsys):
+    type_lines(monkeypatch, "one", "two", "/reset", "three", "exit")
+    chat_loop(MockClient(), SETTINGS)
+    output = capsys.readouterr().out
+    assert "Conversation cleared. Starting over." in output
+    # After /reset the mock sees only the new message, so it counts from 1 again.
+    assert "[mock reply, turn 1] You said: three" in output</code></pre>
+</div>
+<p>כש-<code>messages.clear()</code> הפך להערה:</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>E       assert '[mock reply, turn 1] You said: three' in "... Conversation cleared. Starting over.\n\nagent&gt; [mock reply, turn 3] You said: three\n\nBye!\n"
+1 failed, 8 passed in 8.55s</code></pre>
+</div>
+<p>הופיע <code>turn 3</code>. ההודעה "Conversation cleared" עדיין הודפסה, אבל השיחה לא נמחקה: היו בה שני תורות, ועוד <code>three</code>, כלומר חמש הודעות, וה-<span class="en">mock</span> סופר <code>(5 + 1) // 2 = 3</code>. ושימו לב: אילו הבדיקה בדקה רק שההודעה הודפסה, היא הייתה עוברת. בודקים את ההתנהגות, לא את ההודעה עליה.</p>
+
+<h2><span class="sec">2</span>מקרי קצה ב-<code>trim_history</code></h2>
+<div class="codebox">
+  <div class="label"><span>tests\test_history.py</span></div>
+<pre><code>def test_trim_before_the_reply_arrives():
+    # Five questions, only four answers: the last question waits for its reply.
+    messages = make_conversation(turns=4)
+    messages.append({"role": "user", "content": "question 5"})
+    trimmed = trim_history(messages, max_turns=2)
+    assert trimmed[0]["role"] == "user"
+    assert trimmed[-1] == {"role": "user", "content": "question 5"}
+
+
+def test_zero_turns_is_an_error():
+    with pytest.raises(ValueError):
+        trim_history(make_conversation(turns=3), max_turns=0)</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>&gt;       assert trimmed[0]["role"] == "user"
+E       AssertionError: assert 'assistant' == 'user'
+...
+&gt;       with pytest.raises(ValueError):
+E       Failed: DID NOT RAISE ValueError
+...
+FAILED tests/test_history.py::test_trim_before_the_reply_arrives - AssertionE...
+FAILED tests/test_history.py::test_zero_turns_is_an_error - Failed: DID NOT R...
+2 failed, 23 passed in 4.89s</code></pre>
+</div>
+<p>בקובץ רצו 25 בדיקות: שתיים מהדוגמה המודרכת, 21 מה-<code>parametrize</code> (7 אורכים כפול 3 ערכים), ושתי החדשות. שתי החדשות נכשלו.</p>
+<p><strong><code>max_turns=0</code></strong> החזיר את כל השיחה. <code>-0 * 2</code> הוא <code>0</code>, ו-<code>messages[-0:]</code> הוא <code>messages[0:]</code>: הכול. בדיוק ההפך ממה שהמספר אומר, ובלי שום שגיאה.</p>
+<p><strong>למה 21 הבדיקות עברו:</strong> כל הקלטים שלהן באו מ-<code>make_conversation</code>, שתמיד בונה מספר זוגי של הודעות, ו-<code>max_turns</code> היה לפחות 1. שני הבאגים חיים בדיוק מחוץ לטווח הזה: רשימה באורך אי-זוגי, ואפס. <code>parametrize</code> מכסה הרבה ערכים, אבל רק את אלה שחשבתם עליהם. מקרי קצה מוצאים כשחושבים איך הפונקציה <em>תיקרא</em>, לא רק על מה שנוח לבנות.</p>
+<div class="codebox">
+  <div class="label"><span>agent\history.py</span></div>
+<pre><code>def trim_history(messages: list[MessageParam], max_turns: int) -&gt; list[MessageParam]:
+    """Keep only the last `max_turns` turns of the conversation.
+
+    One turn is two messages: the user's message and the assistant's reply.
+    The result always starts with a user message, because the API requires it.
+    """
+    if max_turns &lt; 1:
+        # messages[-0:] would silently return everything, so refuse instead.
+        raise ValueError(f"max_turns must be 1 or more, got {max_turns}")
+    if len(messages) &lt;= max_turns * 2:
+        return messages
+    trimmed = messages[-max_turns * 2 :]
+    if trimmed[0]["role"] != "user":
+        # The cut fell between a question and its answer: drop the orphan answer.
+        trimmed = trimmed[1:]
+    return trimmed</code></pre>
+</div>
+<p>אחרי התיקון: <code>32 passed</code> בכל הפרויקט.</p>
+
+<h2><span class="sec">3</span>הגדרה שגויה</h2>
+<p>לפני:</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>  File "C:\Users\you\projects\my-agent\agent\config.py", line 28, in load_settings
+    max_turns=int(os.getenv("CHAT_MAX_TURNS", "10")),
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: invalid literal for int() with base 10: 'ten'</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>agent\config.py</span></div>
+<pre><code>class ConfigError(Exception):
+    """A setting has a value the program cannot use."""
+
+
+def read_positive_int(name: str, default: int) -&gt; int:
+    """Read a whole number of 1 or more from an environment variable."""
+    raw = os.getenv(name, str(default))
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ConfigError(f"{name} must be a whole number, got {raw!r}.") from None
+    if value &lt; 1:
+        raise ConfigError(f"{name} must be 1 or more, got {value}.")
+    return value</code></pre>
+</div>
+<p>וב-<code>load_settings</code>: <code>max_turns=read_positive_int("CHAT_MAX_TURNS", 10)</code>. כאן <code>from None</code> ולא <code>from error</code>: ה-<code>ValueError</code> של <code>int()</code> לא מוסיף מידע על מה שכבר כתוב בהודעה, אז מסתירים אותו.</p>
+<div class="codebox">
+  <div class="label"><span>agent\cli.py</span></div>
+<pre><code>def main() -&gt; None:
+    load_dotenv()
+    try:
+        settings = load_settings()
+    except ConfigError as error:
+        print(f"Configuration error: {error}")
+        print("Fix the value in .env (or in the terminal) and run again.")
+        sys.exit(1)
+    ...</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>tests\test_config.py</span></div>
+<pre><code>"""Tests for agent.config."""
+
+import pytest
+
+from agent.config import ConfigError, load_settings
+
+
+def test_defaults(monkeypatch):
+    monkeypatch.delenv("CHAT_MAX_TURNS", raising=False)
+    monkeypatch.delenv("CHAT_MODEL", raising=False)
+    settings = load_settings()
+    assert settings.max_turns == 10
+    assert settings.model == "claude-opus-5-5"
+
+
+def test_max_turns_from_the_environment(monkeypatch):
+    monkeypatch.setenv("CHAT_MAX_TURNS", "3")
+    assert load_settings().max_turns == 3
+
+
+@pytest.mark.parametrize("value", ["ten", "", "2.5", "0", "-4"])
+def test_bad_max_turns_is_a_clear_error(monkeypatch, value):
+    monkeypatch.setenv("CHAT_MAX_TURNS", value)
+    with pytest.raises(ConfigError, match="CHAT_MAX_TURNS"):
+        load_settings()</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Configuration error: CHAT_MAX_TURNS must be a whole number, got 'ten'.
+Fix the value in .env (or in the terminal) and run again.</code></pre>
+</div>
+<p><strong>למה יוצאים כאן וממשיכים כשהרשת נופלת:</strong> הגדרה שגויה לא תתקן את עצמה. כל תור יכשל באותה צורה, ולכן עדיף להיכשל מיד, בהודעה שאומרת בדיוק מה לתקן (<span class="en">fail fast</span>). רשת שנפלה היא תקלה חולפת: ייתכן שהתור הבא יצליח.</p>
+<p><strong>למה <code>.env</code> לא משפיע על הבדיקות:</strong> <code>load_dotenv()</code> נקרא רק ב-<code>main</code>, ואף בדיקה לא קוראת ל-<code>main</code>. <code>load_settings</code> קורא רק את משתני הסביבה, והבדיקות קובעות אותם עם <code>monkeypatch</code>. זו עוד סיבה להפריד בין "לטעון קובץ" לבין "לקרוא הגדרות": החלק שנבדק לא תלוי במחשב שעליו הוא רץ.</p>
+
+<h2><span class="sec">4</span>מפתח שנדחה, ו-log שנבדק</h2>
+<div class="codebox">
+  <div class="label"><span>tests\test_llm.py</span></div>
+<pre><code>def test_rejected_key_is_fatal():
+    sdk = Mock()
+    sdk.messages.create.side_effect = anthropic.AuthenticationError(
+        "invalid x-api-key", response=Mock(status_code=401), body=None
+    )
+    client = ClaudeClient("test-model", "Be brief.", sdk=sdk)
+
+    with pytest.raises(LLMError) as caught:
+        client.reply([{"role": "user", "content": "hello"}])
+
+    assert caught.value.fatal
+    # `raise ... from error` keeps the original error, for the log.
+    assert isinstance(caught.value.__cause__, anthropic.AuthenticationError)
+
+
+def test_token_counts_are_logged(caplog):
+    caplog.set_level(logging.INFO)
+    sdk = Mock()
+    sdk.messages.create.return_value = Mock(
+        stop_reason="end_turn",
+        content=[Mock(type="text", text="Hi")],
+        usage=Mock(input_tokens=12, output_tokens=3),
+    )
+    ClaudeClient("test-model", "Be brief.", sdk=sdk).reply([{"role": "user", "content": "hi"}])
+
+    assert "12 input tokens, 3 output tokens" in caplog.text</code></pre>
+</div>
+<p>(בראש הקובץ נוסף <code>import logging</code>.) בלי <code>caplog.set_level</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>FAILED tests/test_llm.py::test_token_counts_are_logged - AssertionError: asse...
+1 failed, 4 passed in 4.91s</code></pre>
+</div>
+<p><strong>למה:</strong> את רמת ה-<span class="en">logging</span> קובע <code>setup_logging</code>, ואותו קורא רק <code>main</code>. בזמן הבדיקה אף אחד לא קרא לו, ולכן חלה ברירת המחדל של Python: רק <code>WARNING</code> ומעלה. הודעת ה-<code>INFO</code> לא נוצרת בכלל, ו-<code>caplog</code> לא יכול לתפוס מה שלא נוצר. <code>caplog.set_level(logging.INFO)</code> מוריד את הרמה רק לבדיקה הזו.</p>
+<p>ב-<code>Mock(status_code=401)</code> יש רק מה שה-SDK צריך כדי לבנות את החריגה. גם זה <span class="en">test double</span>. אחרי האיחוד, ב-<code>main</code> יש 41 בדיקות שעוברות.</p>
+
+<h2><span class="sec">5</span>לקרוא את ה-SDK</h2>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>PS&gt; Select-String -Path .venv\Lib\site-packages\anthropic\_exceptions.py -Pattern "^class .*(AuthenticationError|APIStatusError|APIError|AnthropicError)\("
+.venv\Lib\site-packages\anthropic\_exceptions.py:43:class AnthropicError(Exception):
+.venv\Lib\site-packages\anthropic\_exceptions.py:49:class APIError(AnthropicError):
+.venv\Lib\site-packages\anthropic\_exceptions.py:85:class APIStatusError(APIError):
+.venv\Lib\site-packages\anthropic\_exceptions.py:186:class AuthenticationError(APIStatusError):
+PS&gt; Select-String -Path .venv\Lib\site-packages\anthropic\*.py -Pattern "MAX_RETRIES ="
+.venv\Lib\site-packages\anthropic\_constants.py:11:DEFAULT_MAX_RETRIES = 2</code></pre>
+</div>
+<ol>
+  <li><code>AuthenticationError</code> יורשת מ-<code>APIStatusError</code>, שיורשת מ-<code>APIError</code>, שיורשת מ-<code>AnthropicError</code>, שיורשת מ-<code>Exception</code>. כולן ב-<code>anthropic\_exceptions.py</code>. גם <code>APIConnectionError</code> יורשת מ-<code>APIError</code>, אבל בענף אחר: אין לה קוד סטטוס, כי לא הגיעה שום תשובה.</li>
+  <li><code>DEFAULT_MAX_RETRIES = 2</code>, ב-<code>anthropic\_constants.py</code>. כלומר עד שלושה ניסיונות. <code>_should_retry</code> ב-<code>_base_client.py</code> מנסה שוב על <code>408</code>, <code>409</code>, <code>429</code> וכל <code>500</code> ומעלה, וגם כשהשרת שולח את הכותרת <code>x-should-retry: true</code>. מתודה שכנה, <code>_should_retry_exception</code>, מנסה שוב גם על <code>APIConnectionError</code>: בדיוק המקרה של סעיף 3.9.</li>
+  <li>אחרי ההחלפה:</li>
+</ol>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>E       AssertionError: assert False
+E        +  where False = LLMError('The API returned an error (401).').fatal
+1 failed, 41 passed in 4.99s</code></pre>
+</div>
+<p>(הרצנו את הניסוי אחרי תרגיל 6, ולכן יש 42 בדיקות. אצלכם, אחרי תרגיל 4, יהיו 41.) הבדיקה מתרגיל 4 תפסה את זה. <code>except anthropic.APIStatusError</code> תופס גם <code>AuthenticationError</code>, כי היא תת-מחלקה שלו, ולכן ה-<code>except</code> שבא אחריו לא מגיע אליה אף פעם. מפתח שגוי הפך לשגיאה "רגילה", והצ'אט היה ממשיך לשלוח בקשות שנדחות. Python לא מזהיר על <code>except</code> שאי אפשר להגיע אליו, ולכן כאן בדיקה היא ההגנה.</p>
+<p><strong>עשר השניות:</strong> שלושה ניסיונות חיבור, ושתי המתנות ביניהם (<code>0.47</code> ו-<code>0.80</code> שניות ב-<span class="en">log</span>, כי ההמתנה גדלה בכל ניסיון ויש בה רכיב אקראי). ולפי השעות ב-<span class="en">log</span>, כל ניסיון לקח בערך שתי שניות עד ש-Windows החזיר "סירוב". לבקשה שנכשלה בגלל רשת זה הגיוני. למשתמש שמחכה, זה ארוך, וזה מידע שימושי כשבוחרים <span class="en">timeout</span> ומספר ניסיונות. נחזור לזה בפרק 11.</p>
+
+<h2><span class="sec">6</span><code>/history</code>, הפעם עם בדיקה קודם</h2>
+<p>אין פתרון יחיד. זה מה שאנחנו בחרנו:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_cli.py</span></div>
+<pre><code>def test_history_counts_turns_not_messages(monkeypatch, capsys):
+    type_lines(monkeypatch, "/history", "one", "two", "/history", "exit")
+    chat_loop(MockClient(), SETTINGS)
+    output = capsys.readouterr().out
+    assert "0 turns in memory." in output
+    # Two questions and two answers are four messages, but two turns.
+    assert "2 turns in memory." in output</code></pre>
+</div>
+<p>לפני המימוש היא נכשלה מהסיבה הנכונה: הצ'אט לא הכיר את הפקודה, ושלח <code>/history</code> ל-<span class="en">mock</span> כהודעה רגילה.</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>E       assert '0 turns in memory.' in "... agent&gt; [mock reply, turn 3] You said: /history\n\nBye!\n"
+1 failed, 41 passed in 4.86s</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>agent\cli.py</span></div>
+<pre><code>        if user_text == "/history":
+            # One turn is a question and its answer: two messages.
+            print(f"{len(messages) // 2} turns in memory.\n")
+            continue</code></pre>
+</div>
+<p>שורת העזרה הפכה ל-<code>"Type a message and press Enter. Commands: /reset, /history, exit.\n"</code>, כי הגרסה הארוכה עברה את 100 התווים ש-<code>ruff</code> מרשה. ב-<code>README.md</code> נוספה שורה לטבלת הפקודות.</p>
+<p><strong>ההחלטה:</strong> המספר הוא <em>אחרי</em> החיתוך, כלומר מה שהסוכן באמת זוכר ושולח למודל. לכן "in memory". הבדיקה מתעדת את זה: ב-<code>SETTINGS</code> של הבדיקות <code>max_turns=2</code>, ואילו הבדיקה הייתה מקלידה שלוש הודעות, היא הייתה מצפה ל-<code>2</code> ולא ל-<code>3</code>. ריצה ביד:</p>
+<div class="codebox output">
+  <div class="label"><span>output (CHAT_MAX_TURNS=2)</span></div>
+<pre><code>you&gt; three
+agent&gt; [mock reply, turn 3] You said: three
+
+you&gt; /history
+2 turns in memory.</code></pre>
+</div>
+<p>החלטה אחרת לגיטימית באותה מידה, למשל להדפיס גם את המגבלה (<code>2 of 2 turns</code>). מה שחשוב הוא שהבדיקה תאמר מה החלטתם, כך שמי שישנה את זה יידע שהוא משנה החלטה, ולא מתקן באג.</p>
+
+<h2><span class="sec">*</span>ההיסטוריה בסוף הפרק</h2>
+<p>להשוואה עם שלכם. הצורה צריכה להיות זהה (קו ישר, כי כל האיחודים היו <span class="en">fast-forward</span>), המזהים לא. מתחת ל-<code>186ccf7</code> נמצאת ההיסטוריה מפרק 2.</p>
+<div class="codebox output">
+  <div class="label"><span>git log --oneline --graph</span></div>
+<pre><code>* 1022721 Add /history command, test first
+* 24f5737 Test the rejected-key path and the token log line
+* 6a90c88 Report a bad CHAT_MAX_TURNS as a clear configuration error
+* b6d742d Make trim_history always start with a user message
+* 685d6da Test that /reset starts a new conversation
+* e17106d Document the package layout and the checks
+* 80db5b5 Log to agent.log, with the full traceback when a request fails
+* 4493b88 Turn API errors into LLMError at the client boundary
+* a5f2f75 Add mypy in strict mode
+* 31f8375 Add ruff, remove an unused import, format the code
+* 9ddefd6 Test the clients and the chat loop with the mock
+* 9b31b07 Add pytest and tests for trim_history
+* fc53338 Split chat.py into the agent package
+* 186ccf7 ...</code></pre>
+</div>
+<p>בסוף, מתיקייה נקייה: <code>uv run pytest</code> מדווח <code>42 passed</code>, ו-<code>ruff check</code>, <code>ruff format --check</code> ו-<code>mypy agent</code> נקיים.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-03.html">→ חזרה לפרק 3</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

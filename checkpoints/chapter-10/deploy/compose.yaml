@@ -1,0 +1,62 @@
+# One deployed environment of my-agent: its own database, migrations and API.
+# The same file serves staging and prod; deploy/<environment>.env says how they differ.
+# Run it through scripts/deploy.py, which passes the project name and the env file.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_DB: agent
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password  # the image reads the file itself
+    secrets: [db_password]
+    volumes:
+      - pgdata:/var/lib/postgresql/data  # one volume per environment: separate data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  migrate:
+    image: my-agent:${IMAGE_TAG:?IMAGE_TAG is not set}  # the image is built once, never here
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent@db:5432/agent  # where: configuration
+      DATABASE_PASSWORD_FILE: /run/secrets/db_password  # the password: a secret
+      APP_ENV: ${APP_ENV:?APP_ENV is not set}
+    secrets: [db_password]
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: [migrate]  # runs only when asked for: a separate step of a deploy
+
+  api:
+    image: my-agent:${IMAGE_TAG:?IMAGE_TAG is not set}
+    environment:
+      APP_ENV: ${APP_ENV}
+      DATABASE_URL: postgresql+psycopg://agent@db:5432/agent
+      DATABASE_PASSWORD_FILE: /run/secrets/db_password
+      AGENT_API_KEY_FILE: /run/secrets/agent_api_key
+      CHAT_MOCK: ${CHAT_MOCK:-0}
+      CHAT_MODEL: ${CHAT_MODEL:-claude-opus-5-5}
+      CHAT_MAX_TURNS: ${CHAT_MAX_TURNS:-10}
+      CHAT_LOG_LEVEL: ${CHAT_LOG_LEVEL:-INFO}
+    secrets: [db_password, agent_api_key]
+    ports:
+      - "127.0.0.1:${API_PORT:?API_PORT is not set}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped  # if the process exits, Docker starts it again
+
+# Each secret is a file on the host that never enters git or the image. Compose mounts it
+# read-only at /run/secrets/<name> inside the containers that list it.
+secrets:
+  db_password:
+    file: ./secrets/${APP_ENV}/db_password.txt
+  agent_api_key:
+    file: ./secrets/${APP_ENV}/agent_api_key.txt
+
+volumes:
+  pgdata:

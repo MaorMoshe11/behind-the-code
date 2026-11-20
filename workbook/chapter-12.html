@@ -1,0 +1,824 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 12 · Messaging ו-pipelines | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="12">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 12 · Messaging ו-pipelines</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 12 מתוך 21</div>
+  <h1><span class="en">Messaging</span> ו-<span class="en">pipelines</span></h1>
+  <p class="lead">עבודה שהמשתמש לא צריך לחכות לה, פעולה שחוצה שני שירותים בלי <span class="en">transaction</span> משותפת, ועבודה שרצה פעם בלילה: שלוש צורות של "לא עכשיו, ולא כאן".</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>להבדיל בין קריאה סינכרונית להודעה, ובין <span class="en">queue</span> ל-<span class="en">stream</span>, ולבחור ביניהם.</li>
+    <li>להסביר <span class="en">topic</span>, <span class="en">partition</span>, <span class="en">key</span>, <span class="en">offset</span> ו-<span class="en">consumer group</span> ב-Kafka, ולקרוא את ה-<span class="en">lag</span> של צרכן.</li>
+    <li>להסביר את שלוש הבטחות המסירה, ולמה "<span class="en">exactly once</span>" בפועל הוא "<span class="en">at least once</span>" ועוד צרכן <span class="en">idempotent</span>.</li>
+    <li>לבנות <span class="en">saga</span> עם פעולת תיקון לכל צעד, ולומר מה היא לא נותנת.</li>
+    <li>לקרוא ולכתוב <span class="en">DAG</span> של Airflow, ולדעת מתי מספיק <span class="en">cron</span> ומתי צרכן של Kafka.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> חמש עד שש שעות. <strong>מה צריך:</strong> הפרויקט מסוף פרק 11, Docker Desktop עם כ-3 GB זיכרון פנוי, וחלון <span class="en">terminal</span> אחד. הכול במצב <span class="en">mock</span>.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.1</span>הבעיה: מה שלא צריך לקרות עכשיו, ומה שצריך לקרות בשני מקומות</h2>
+
+<p>בתרגיל 6 של פרק 11 מחקתם שיחה שיש לה הערה, והסתכלתם ב-<code>notes-db</code>:</p>
+
+<div class="codebox output">
+  <div class="label"><span>from chapter 11, exercise 6</span></div>
+<pre><code>204
+         conversation_id          |       text
+----------------------------------+------------------
+ e3dab0a6ac1a48938b8d13a9bc32555e | flight on Sunday
+(1 row)</code></pre>
+</div>
+
+<p>השיחה נמחקה, וההערה נשארה. ועכשיו מגיעות שתי בקשות חדשות: סטטיסטיקת שימוש לכל שיחה (כמה תורות, כמה תווים), ודוח שימוש יומי. הפתרון הראשון שעולה בראש הוא עוד קריאת HTTP בתוך <code>/chat</code>, לשירות סטטיסטיקה. פרק 11 לימד מה זה עולה: כל קריאה כזו מוסיפה המתנה לתשובה של המשתמש, ונכשלת יחד איתה. והמשתמש בכלל לא צריך את הסטטיסטיקה כדי לקבל תשובה.</p>
+
+<p>שלוש בעיות, שלושה כלים. עבודה שאיש לא מחכה לה: <strong>הודעות</strong> (<span class="en">messaging</span>), עם Kafka. פעולה שחוצה שני שירותים: <strong><span class="en">saga</span></strong>. ועבודה שרצה בלוח זמנים על הרבה נתונים: <strong><span class="en">pipeline</span></strong>, עם Airflow.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.2</span>המפה</h2>
+
+<div class="diagram">
+  <div class="flow">
+    <div class="layer l2"><div class="name">api</div><div class="what">שומר את ההודעה, מפרסם אירוע, עונה. לא מחכה לאיש</div></div>
+    <div class="hop">&rarr;<b>event</b></div>
+    <div class="layer machine">
+      <div class="name">kafka: topic chat-events</div>
+      <div class="what">האירועים נשמרים לפי הסדר, ונשארים שם גם אחרי שנקראו</div>
+      <div class="inner"><div class="row">
+        <div class="layer l3"><div class="name">partition 0</div></div>
+        <div class="layer l3"><div class="name">partition 1</div></div>
+        <div class="layer l3"><div class="name">partition 2</div></div>
+      </div></div>
+    </div>
+    <div class="hop">&rarr;<b>group</b></div>
+    <div class="layer l4"><div class="name">worker</div><div class="what">סטטיסטיקה, ב-<code>usage.db</code> משלו</div></div>
+  </div>
+  <div class="flow steps">
+    <div class="layer l2"><div class="name">saga</div><div class="what">מחיקת שיחה: ארכוב, מחיקת ההערות (ב-<code>notes</code>), מחיקה. נכשל? מתקנים אחורה</div></div>
+    <div class="layer l4"><div class="name">airflow, 02:00</div><div class="what">כל לילה: הודעות של יום אתמול, <code>reports/usage-&lt;day&gt;.csv</code></div></div>
+  </div>
+  <div class="caption">למעלה: <span class="en">streaming</span>, כל אירוע מטופל כשהוא מגיע. למטה משמאל: <span class="en">batch</span>, הרבה נתונים בבת אחת, בלוח זמנים.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.3</span>קריאה, <span class="en">queue</span> ו-<span class="en">stream</span></h2>
+
+<p>בקריאה סינכרונית (פרק 11) השולח מחכה, והצד השני חייב להיות למעלה <em>עכשיו</em>. בהודעה, השולח מוסר אותה ל<strong>מתווך</strong> (<span class="en">broker</span>), שרת שתפקידו לשמור הודעות, וממשיך. מי שצריך אותה יקרא אותה כשיוכל. אם הוא למטה, ההודעה מחכה. יש שני סוגים של מתווכים, והם מתנהגים אחרת לגמרי:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th><span class="en">queue</span> (תור)</th><th><span class="en">stream / log</span> (יומן)</th></tr>
+  <tr><td>דוגמאות</td><td>Amazon SQS, RabbitMQ</td><td>Kafka, Amazon Kinesis, Redpanda</td></tr>
+  <tr><td>מי מקבל הודעה</td><td>צרכן אחד, ואז היא נמחקת</td><td>כל קבוצת צרכנים מקבלת את כולן; ההודעה נשארת</td></tr>
+  <tr><td>איך יודעים מה כבר נקרא</td><td>המתווך מוחק מה שאושר</td><td>כל קבוצה שומרת מיקום, <span class="en">offset</span>, ומזיזה אותו בעצמה</td></tr>
+  <tr><td>לקרוא שוב מההתחלה (<span class="en">replay</span>)</td><td>אי אפשר: נמחק</td><td>אפשר, כל עוד ההודעות שמורות (ב-Kafka, 7 ימים כברירת מחדל)</td></tr>
+  <tr><td>מתאים ל</td><td>משימות: "שלח מייל", "עבד תמונה"; עובד אחד לכל משימה</td><td>עובדות: "נוצרה הודעה"; כמה צרכנים שונים, כל אחד לצורכו</td></tr>
+</table>
+</div>
+
+<p>האירועים של הצ'אט הם עובדות, ויהיו להם כמה צרכנים (היום סטטיסטיקה, מחר סיכומים). לכן <span class="en">stream</span>. שימו לב לשם: <strong>אירוע</strong> (<span class="en">event</span>) מתאר מה <em>קרה</em>, בזמן עבר (<code>message.created</code>), ולא מה לעשות. הצ'אט לא יודע מי קורא, וזה בדיוק העניין.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.4</span><span class="en">Kafka</span> בשש מילים</h2>
+
+<div class="codebox output">
+  <div class="label"><span>a sketch of chat-events: 3 partitions, each an append-only list</span></div>
+<pre><code>partition 0:  [0] [1] [2] [3] [4] [5]  &lt;- every event with key 6b77... lands here
+                          ^ usage-worker committed offset 3: it is done with 0 to 2
+partition 1:  [0]                      &lt;- key 02a1... lands here
+partition 2:                           (no key has landed here yet)</code></pre>
+</div>
+
+<ul>
+  <li><strong><span class="en">Topic</span></strong>: שם לזרם של אירועים מסוג אחד, כמו טבלה. אצלנו <code>chat-events</code>.</li>
+  <li><strong><span class="en">Partition</span></strong>: topic מחולק לכמה רשימות, שנכתבות ונקראות במקביל. הסדר נשמר <em>בתוך</em> <span class="en">partition</span>, לא בין <span class="en">partitions</span>.</li>
+  <li><strong><span class="en">Key</span></strong>: ממנו נקבעת ה-<span class="en">partition</span>. מפתח זהה, <span class="en">partition</span> זהה, ולכן סדר. המפתח שלנו הוא מזהה השיחה: האירועים של שיחה אחת מגיעים לפי הסדר. בלי מפתח, אין הבטחה כזו.</li>
+  <li><strong><span class="en">Offset</span></strong>: המיקום של הודעה בתוך ה-<span class="en">partition</span>: 0, 1, 2, וכן הלאה. לא משתנה לעולם.</li>
+  <li><strong><span class="en">Consumer group</span></strong>: צרכנים שעובדים יחד על <span class="en">topic</span>. Kafka מחלק ביניהם את ה-<span class="en">partitions</span>, כל אחת לצרכן אחד בקבוצה, ושומר לכל קבוצה את ה-<span class="en">offset</span> שלה. שתי קבוצות שונות לא מפריעות זו לזו.</li>
+  <li><strong><span class="en">Commit</span></strong>: הצרכן מודיע "סיימתי עד כאן". מה שלא אושר יגיע שוב אחרי נפילה. <strong><span class="en">Lag</span></strong> הוא הפער בין סוף ה-<span class="en">partition</span> ל-<span class="en">offset</span> שאושר: כמה הקבוצה מפגרת.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.5</span>הבטחות מסירה</h2>
+
+<p>הצרכן קורא הודעה, עושה את העבודה, ומאשר. נפילה יכולה לקרות בין כל שני צעדים, והסדר שבחרתם קובע מה יקרה:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>הבטחה</th><th>איך</th><th>אחרי נפילה</th></tr>
+  <tr><td><span class="en">at most once</span></td><td>מאשרים, ואז עושים</td><td>ההודעה לא תגיע שוב: אם העבודה לא נעשתה, היא <strong>אבדה</strong></td></tr>
+  <tr><td><span class="en">at least once</span></td><td>עושים, ואז מאשרים</td><td>ההודעה תגיע שוב: אם העבודה כבר נעשתה, היא תיעשה <strong>פעמיים</strong></td></tr>
+  <tr><td><span class="en">exactly once</span></td><td><span class="en">at least once</span>, ועוד צרכן שזוכר מה כבר עשה</td><td>ההודעה מגיעה שוב, והצרכן מזהה ומדלג</td></tr>
+</table>
+</div>
+
+<p>בפועל בוחרים כמעט תמיד <span class="en">at least once</span>, ומטפלים בכפילויות. זה אותו רעיון של פרק 11: שם השירות זכר <code>Idempotency-Key</code>; כאן הצרכן זוכר <code>event_id</code>, <strong>באותה <span class="en">transaction</span></strong> של העבודה עצמה, כך שהשתיים נשמרות יחד או לא נשמרות בכלל. ל-Kafka יש גם מנגנון שנקרא <span class="en">exactly-once</span>, אבל הוא מכסה רק כתיבות ל-Kafka עצמו; ברגע שהעבודה נכתבת לבסיס נתונים אחר, הוא לא עוזר.</p>
+
+<p>שני מושגים נוספים. <strong><span class="en">Dead letter queue</span></strong> (DLQ): הודעה שאי אפשר להבין (JSON שבור) תיכשל בכל ניסיון, והצרכן ייתקע עליה לנצח, כי בלי <span class="en">commit</span> היא חוזרת. לכן מעבירים אותה ל-<span class="en">topic</span> צדדי, <code>chat-events-dlq</code>, שאדם יסתכל בו, וממשיכים. ו<strong>כתיבה כפולה</strong> (<span class="en">dual write</span>): ה-<code>api</code> שומר הודעה ב-Postgres, ואז מפרסם אירוע ל-Kafka. אם התהליך נופל בין השניים, ההודעה נשמרה והאירוע לא נשלח לעולם. אין <span class="en">transaction</span> שעוטפת Postgres ו-Kafka. הפתרון המקובל הוא <strong><span class="en">outbox</span></strong>: כותבים את האירוע לטבלה באותו בסיס נתונים, באותה <span class="en">transaction</span> של ההודעה, ותהליך נפרד קורא מהטבלה ומפרסם. בפרק הזה לא נבנה אותו; תתכננו אותו בתרגיל 6.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.6</span>דוגמה מודרכת, חלק א': אירועים ו-<span class="en">worker</span></h2>
+
+<div class="step">
+  <h3><span class="step-num">1</span>Kafka ב-compose</h3>
+  <p><code>git switch -c feature/events</code>. שלושה שירותים חדשים ב-<code>compose.yaml</code>: המתווך, צעד שיוצר את ה-<span class="en">topics</span>, וה-<span class="en">worker</span>:</p>
+<div class="codebox">
+  <div class="label"><span>compose.yaml (the new parts, shortened)</span></div>
+<pre><code>  <span class="cm"># Kafka: one broker in KRaft mode (it is its own controller; no ZooKeeper).</span>
+  kafka:
+    image: apache/kafka:3.9.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092  <span class="cm"># the address clients are told to use</span>
+      ...
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"  <span class="cm"># topics are created on purpose (topics below)</span>
+      KAFKA_HEAP_OPTS: -Xmx256m -Xms256m  <span class="cm"># small, for a laptop</span>
+    volumes:
+      - kafkadata:/var/lib/kafka/data  <span class="cm"># the events survive `docker compose down`</span>
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9092"]
+    <span class="cm"># No ports: only containers in this compose project talk to it.</span>
+
+  <span class="cm"># Creates the topics once, like migrate creates the tables. --if-not-exists: safe to rerun.</span>
+  topics:
+    image: apache/kafka:3.9.1
+    command:
+      - bash
+      - -c
+      - |
+        for topic in chat-events chat-events-dlq; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists \
+            --topic $$topic --partitions 3 --replication-factor 1
+        done
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: ["python", "-m", "worker"]
+    healthcheck:
+      disable: true  <span class="cm"># the image checks the api on port 8000; a worker has no port</span>
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      USAGE_DATABASE_URL: sqlite:////data/usage.db
+      WORKER_CRASH_BEFORE_COMMIT: ${WORKER_CRASH_BEFORE_COMMIT:-0}  <span class="cm"># fault injection (step 5)</span>
+    volumes:
+      - usagedata:/data
+    depends_on:
+      topics:
+        condition: service_completed_successfully</code></pre>
+</div>
+  <p><strong>KRaft</strong> הוא המצב שבו Kafka מנהל את עצמו; פעם היה צריך לצידו שירות נוסף, ZooKeeper, ובגרסאות 4 הוא כבר לא קיים. (<code>$$topic</code> כתוב עם שני סימני דולר, כי אחרת compose היה מחליף את <code>$topic</code> בעצמו, לפני ש-bash רואה אותו.) ל-<code>api</code> נוספת שורה אחת: <code>KAFKA_BOOTSTRAP_SERVERS: kafka:9092</code>, בלי <code>depends_on</code>: הצ'אט עולה ועונה גם בלי Kafka. ה-<span class="en">worker</span> רץ מאותו <span class="en">image</span> של ה-<code>api</code>, פקודה אחרת: הוא חלק משירות הצ'אט, תהליך שני שלו. הנתונים שלו נגזרים מהאירועים, ולכן הם בקובץ SQLite משלו, עם <code>create_all</code>: אם הטבלה תשתנה, מוחקים ובונים מחדש מהאירועים (צעד 6).</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>הצ'אט מפרסם</h3>
+  <p><code>uv add confluent-kafka</code> (הלקוח של Kafka הנפוץ ב-Python, מעל ספריית C בשם <code>librdkafka</code>), ושדה חדש ב-<code>Settings</code>: <code>kafka_servers</code>, מ-<code>KAFKA_BOOTSTRAP_SERVERS</code>. בלעדיו, <code>make_events</code> מחזירה <code>None</code> ושום דבר לא מתפרסם: הבדיקות ו-<code>uv run</code> לא צריכים Kafka. הלב של <code>agent\events.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\events.py (shortened)</span></div>
+<pre><code>def event(kind: str, conversation_id: str, **fields: Any) -&gt; dict[str, Any]:
+    """One event. event_id is unique, so a consumer can tell a repeat from a new event."""
+    return {"event_id": uuid.uuid4().hex, "type": kind, "conversation_id": conversation_id,
+            "occurred_at": datetime.now(UTC).isoformat(), **fields}
+
+
+class KafkaEvents:
+    """Publishes events to a Kafka topic. Never blocks the chat: produce() only queues."""
+
+    def __init__(self, servers: str, topic: str = TOPIC) -&gt; None:
+        self.topic = topic
+        self.producer = Producer({
+            "bootstrap.servers": servers,
+            "acks": "all",  <span class="cm"># the broker confirms only after the event is safely stored</span>
+            "enable.idempotence": True,  <span class="cm"># a retried send is stored once, not twice</span>
+            "message.timeout.ms": 30000,  <span class="cm"># give up on an event after 30 s</span>
+        })
+
+    def publish(self, event: dict[str, Any]) -&gt; None:
+        <span class="cm"># The key decides the partition: all events of one conversation stay in order.</span>
+        self.producer.produce(self.topic, key=event["conversation_id"],
+                              value=json.dumps(event).encode("utf-8"), on_delivery=self._delivered)
+        self.producer.poll(0)  <span class="cm"># run the callbacks of earlier sends; do not wait</span></code></pre>
+</div>
+  <p><code>_delivered</code> רושם ללוג אירוע שלא הגיע, ו-<code>close()</code> שולח את מה שעוד בתור, ונקרא כש-<code>uvicorn</code> נעצר (<code>lifespan</code> של FastAPI). ב-<code>api.py</code>, אחרי ש-<code>conversations.send</code> הצליח: <code>publish("message.created", conversation_id, user_chars=..., reply_chars=...)</code>, ואחרי מחיקה <code>conversation.deleted</code>. <code>create_app</code> מקבל פרמטר שלישי, <code>events</code>, ו-<code>tests\test_events.py</code> מעביר רשימה שמשחקת את Kafka. <span class="en">Commit</span>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>ה-<span class="en">worker</span></h3>
+  <p>חבילה חדשה, <code>worker</code>. ב-<code>worker\usage.py</code> טבלה <code>usage</code> (שיחה, תורות, תווים), ופונקציה שמחילה אירוע אחד, בלי Kafka, כדי שאפשר יהיה לבדוק אותה:</p>
+<div class="codebox">
+  <div class="label"><span>worker\usage.py (first version)</span></div>
+<pre><code>def apply(session: Session, event: dict[str, Any]) -&gt; bool:
+    """Apply one event, inside the caller's transaction."""
+    conversation_id = event["conversation_id"]
+    row = session.get(UsageRow, conversation_id)
+    if event["type"] == "message.created":
+        if row is None:
+            row = UsageRow(conversation_id=conversation_id, turns=0, chars=0)
+            session.add(row)
+        row.turns += 1
+        row.chars += event.get("user_chars", 0) + event.get("reply_chars", 0)
+    elif event["type"] == "conversation.deleted" and row is not None:
+        session.delete(row)
+    return True</code></pre>
+</div>
+  <p>וב-<code>worker\__main__.py</code> הלולאה. שימו לב לסדר בסוף: קודם העבודה, אחר כך ה-<span class="en">commit</span>. זה <span class="en">at least once</span>:</p>
+<div class="codebox">
+  <div class="label"><span>worker\__main__.py (the loop, shortened)</span></div>
+<pre><code>    consumer = Consumer({
+        "bootstrap.servers": servers,
+        "group.id": group,  <span class="cm"># the group's offsets are kept by Kafka, per partition</span>
+        "enable.auto.commit": False,  <span class="cm"># we commit ourselves, after the work is done</span>
+        "auto.offset.reset": "earliest",  <span class="cm"># a new group starts at the oldest event</span>
+    })
+    consumer.subscribe([TOPIC])
+    while running:  <span class="cm"># SIGTERM (docker stop) sets running = False</span>
+        message = consumer.poll(1.0)
+        ...
+        try:
+            event = parse(message.value())
+        except BadEvent as problem:
+            dead_letter(producer, message, str(problem))  <span class="cm"># park it in chat-events-dlq</span>
+        else:
+            with sessions.begin() as session:
+                apply(session, event)
+            log.info("partition %s offset %s: %s %s", ...)
+            if crash:  <span class="cm"># WORKER_CRASH_BEFORE_COMMIT=1, for step 5</span>
+                os._exit(1)  <span class="cm"># die at once, like a power cut: no cleanup, no commit</span>
+        <span class="cm"># Done with this message: move the group's offset past it.</span>
+        consumer.commit(message=message, asynchronous=False)
+    consumer.close()  <span class="cm"># leave the group, so its partitions move to another worker at once</span></code></pre>
+</div>
+  <p><code>python -m worker stats</code> מדפיס את הטבלה. בדיקות ב-<code>tests\test_worker.py</code>, <span class="en">commit</span>, ומריצים:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose up --build -d --wait
+docker compose ps -a --format "table {{.Service}}\t{{.Status}}"
+uv run python scripts/ask.py "hello"
+$c = "&lt;the conversation id it printed&gt;"
+uv run python scripts/ask.py "how are you?" --conversation $c
+uv run python scripts/ask.py "bye for now" --conversation $c
+docker compose logs worker --no-log-prefix
+docker compose exec worker python -m worker stats</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>SERVICE    STATUS
+api        Up 11 seconds (healthy)
+kafka      Up 21 seconds (healthy)
+topics     Exited (0) 7 seconds ago
+worker     Up 6 seconds
+...
+19:46:52 INFO worker: worker started: group usage-worker, topic chat-events
+19:46:58 INFO worker: partition 0 offset 0: message.created 6b77fce08be94600b3fe0411263f45d4
+19:47:10 INFO worker: partition 0 offset 1: message.created 6b77fce08be94600b3fe0411263f45d4
+19:47:10 INFO worker: partition 0 offset 2: message.created 6b77fce08be94600b3fe0411263f45d4
+6b77fce08be94600b3fe0411263f45d4  turns   3  chars   149</code></pre>
+</div>
+  <p>שלוש הודעות באותה שיחה, אותה <span class="en">partition</span>, <span class="en">offsets</span> עוקבים. אפשר להציץ ב-<span class="en">topic</span> עצמו עם הכלים שבאים עם Kafka, מתוך ה-<span class="en">container</span> שלו:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic chat-events --from-beginning --property print.offset=true --max-messages 1</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Offset:0	{"event_id": "988c98d648da43b6ac8099774bb836c5", "type": "message.created", "conversation_id": "6b77fce08be94600b3fe0411263f45d4", "occurred_at": "2026-11-18T19:46:57.954812+00:00", "user_chars": 5, "reply_chars": 36}
+Processed a total of 1 messages</code></pre>
+</div>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>ה-<span class="en">worker</span> למטה, הצ'אט עונה</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose stop worker
+Measure-Command { uv run python scripts/ask.py "are you there?" --conversation $c } | ForEach-Object { "{0:N1} s" -f $_.TotalSeconds }
+uv run python scripts/ask.py "and now?"
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group usage-worker</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>0.6 s
+[mock reply, turn 1] You said: and now?
+(conversation 02a1605c57854cfb8c4710cb6d18c994, turns: 1)
+Consumer group 'usage-worker' has no active members.
+GROUP           TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG
+usage-worker    chat-events     0          3               4               1</code></pre>
+</div>
+  <p>חצי שנייה, כמו תמיד: הצ'אט לא יודע שה-<span class="en">worker</span> למטה, וגם לא צריך לדעת. ב-<span class="en">partition</span> 0 אירוע אחד מחכה: <span class="en">lag</span> של 1. האירוע של השיחה החדשה הגיע ל-<span class="en">partition</span> אחרת, שבה לקבוצה עוד אין <span class="en">offset</span> מאושר, ולכן היא בכלל לא ברשימה: גם <span class="en">lag</span> צריך לקרוא בזהירות. מפעילים, ומסתכלים שוב:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose start worker
+docker compose logs worker --no-log-prefix --tail 4
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9092 --describe --group usage-worker</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>19:47:16 INFO worker: worker stopped
+19:47:26 INFO worker: worker started: group usage-worker, topic chat-events
+19:47:26 INFO worker: partition 0 offset 3: message.created 6b77fce08be94600b3fe0411263f45d4
+19:47:27 INFO worker: partition 1 offset 0: message.created 02a1605c57854cfb8c4710cb6d18c994
+GROUP           TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG   CONSUMER-ID
+usage-worker    chat-events     2          -               0               -     rdkafka-40d11768-...
+usage-worker    chat-events     0          4               4               0     rdkafka-40d11768-...
+usage-worker    chat-events     1          1               1               0     rdkafka-40d11768-...</code></pre>
+</div>
+  <p>הוא המשיך בדיוק מאיפה שעצר, ותפס את מה שפספס. <code>worker stopped</code> מראה שהוא קיבל את האות של <code>docker stop</code>, סיים את האירוע שבידיו, ויצא מהקבוצה כראוי.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>נפילה לפני ה-<span class="en">commit</span></h3>
+  <p>עכשיו נפילה ברגע הגרוע ביותר: אחרי שהעבודה נשמרה, לפני ה-<span class="en">commit</span>. <code>docker compose up -d</code> יוצר את ה-<span class="en">container</span> מחדש עם ההגדרה:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$env:WORKER_CRASH_BEFORE_COMMIT = "1"
+docker compose up -d worker
+uv run python scripts/ask.py "one more" --conversation $c
+docker compose ps -a worker --format "table {{.Service}}\t{{.Status}}"
+docker compose logs worker --no-log-prefix --tail 2
+Remove-Item Env:WORKER_CRASH_BEFORE_COMMIT
+docker compose up -d worker
+docker compose logs worker --no-log-prefix --tail 2
+docker compose exec worker python -m worker stats</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>[mock reply, turn 5] You said: one more
+SERVICE   STATUS
+worker    Exited (1) 3 seconds ago
+19:47:46 INFO worker: partition 0 offset 4: message.created 6b77fce08be94600b3fe0411263f45d4
+19:47:46 ERROR worker: fault injection: crashing before the commit
+19:47:58 INFO worker: worker started: group usage-worker, topic chat-events
+19:47:59 INFO worker: partition 0 offset 4: message.created 6b77fce08be94600b3fe0411263f45d4
+6b77fce08be94600b3fe0411263f45d4  turns   6  chars   302</code></pre>
+</div>
+  <p><span class="en">Offset</span> 4 טופל פעמיים, והשיחה עם חמש תורות רשומה עם שש. Kafka עשה בדיוק מה שהבטיח: מה שלא אושר, מגיע שוב. התיקון שייך לצרכן.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">6</span>צרכן <span class="en">idempotent</span>, ובנייה מחדש</h3>
+  <p>טבלה שנייה, <code>processed_events</code>, עם <code>event_id</code> כמפתח ראשי, ושלוש שורות בתחילת <code>apply</code>:</p>
+<div class="codebox">
+  <div class="label"><span>worker\usage.py (in apply)</span></div>
+<pre><code>    if session.get(ProcessedEvent, event["event_id"]) is not None:
+        return False  <span class="cm"># a repeat: Kafka delivered it again, and it changes nothing</span>
+    <span class="cm"># Saved in the same transaction as the change: both are stored, or neither.</span>
+    session.add(ProcessedEvent(event_id=event["event_id"]))</code></pre>
+</div>
+  <p>הלולאה רושמת <code>(seen before: skipped)</code> כש-<code>apply</code> מחזירה <code>False</code>, ובבדיקה חדשה אותו אירוע מוחל פעמיים ונספר פעם אחת. אבל הספירה השגויה כבר בקובץ. כאן היתרון של <span class="en">stream</span>: הנתונים נגזרים מהאירועים, ולכן אפשר למחוק ולבנות מחדש. עוצרים, מוחקים את הקובץ, מחזירים את ה-<span class="en">offset</span> של הקבוצה להתחלה, ומפעילים את הקוד החדש:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose stop worker
+docker compose run --rm --no-deps worker rm /data/usage.db
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9092 --group usage-worker --reset-offsets --to-earliest --topic chat-events --execute
+docker compose up -d --build worker
+docker compose exec worker python -m worker stats</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>6b77fce08be94600b3fe0411263f45d4  turns   5  chars   255
+02a1605c57854cfb8c4710cb6d18c994  turns   1  chars    47</code></pre>
+</div>
+  <p>ששת האירועים ב-<span class="en">topic</span> נקראו שוב, ו-<span class="en">offset</span> 4, שנמצא שם פעם אחת, נספר פעם אחת. עכשיו שוב את צעד 5, עם <code>"and again"</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>the worker's log after the restart, and stats</span></div>
+<pre><code>19:49:12 INFO worker: partition 0 offset 5: message.created 6b77fce08be94600b3fe0411263f45d4 (seen before: skipped)
+6b77fce08be94600b3fe0411263f45d4  turns   6  chars   304</code></pre>
+</div>
+  <p>האירוע הגיע שוב, והצרכן זיהה אותו. זה ה-"<span class="en">exactly once</span>" האמיתי. <span class="en">Commit</span>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">7</span>קבוצה חדשה קוראת הכול</h3>
+  <p>צרכן חדש, למשל שירות ביקורת (<span class="en">audit</span>) שיתווסף מחר, לא צריך שאף אחד ישלח לו את העבר:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic chat-events --group audit --from-beginning --property print.key=true --max-messages 7
+docker compose exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server kafka:9092 --list</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>6b77fce08be94600b3fe0411263f45d4	{"event_id": "988c98d648da43b6ac8099774bb836c5", "type": "message.created", ...
+...
+6b77fce08be94600b3fe0411263f45d4	{"event_id": "fa2c194915f945a78e932cb78e9cd28b", "type": "message.created", ...
+02a1605c57854cfb8c4710cb6d18c994	{"event_id": "b0c43bb05371452180c7339574f3856f", "type": "message.created", ...
+Processed a total of 7 messages
+usage-worker
+audit
+console-consumer-56097</code></pre>
+</div>
+  <p>שבעה אירועים, מההתחלה, וה-<span class="en">offset</span> של <code>usage-worker</code> לא זז. ב-<span class="en">queue</span> הם כבר היו נמחקים. (<code>console-consumer-56097</code> היא קבוצה זמנית שהכלי יצר בצעד 3, כשלא קיבל <code>--group</code>.)</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.7</span><span class="en">Saga</span>: <span class="en">transaction</span> בלי <span class="en">transaction</span></h2>
+
+<p>מחיקת שיחה צריכה לשנות שני בסיסי נתונים, של שני שירותים. <strong><span class="en">Saga</span></strong> מחליפה את ה-<span class="en">transaction</span> הגדולה, שאין, בשרשרת של צעדים מקומיים, שכל אחד מהם <span class="en">transaction</span> רגילה בשירות אחד. לכל צעד יש <strong>פעולת תיקון</strong> (<span class="en">compensating action</span>). אם צעד נכשל, מריצים את פעולות התיקון של הצעדים שכבר הצליחו, מהאחרון לראשון.</p>
+
+<p>פעולת תיקון היא לא <span class="en">rollback</span>. <span class="en">Rollback</span> מבטל משהו שאף אחד לא ראה. פעולת תיקון היא פעולה <em>חדשה</em> שמבטלת במובן העסקי: הערה שנמחקה "חוזרת" כהערה חדשה, עם מזהה חדש. כך גם בעולם: טיסה שבוטלה לא נמחקת מההיסטוריה, מקבלים החזר.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th><span class="en">orchestration</span></th><th><span class="en">choreography</span></th></tr>
+  <tr><td>איך</td><td>מתזמר אחד מריץ את הצעדים לפי הסדר, ויודע מה לתקן</td><td>אין מרכז: כל שירות מגיב לאירוע ומפרסם את הבא</td></tr>
+  <tr><td>יתרון</td><td>הזרימה כתובה במקום אחד; קל להבין ולבדוק</td><td>אין תלות בשירות מרכזי; הוספת משתתף לא משנה אחרים</td></tr>
+  <tr><td>חיסרון</td><td>המתזמר מכיר את כולם</td><td>קשה לראות את כל התהליך, וקשה לדעת איפה הוא נתקע</td></tr>
+  <tr><td>אצלנו</td><td>מחיקת שיחה והערות: <code>agent/saga.py</code></td><td>ה-<span class="en">worker</span> מוחק סטטיסטיקה כשהוא שומע <code>conversation.deleted</code></td></tr>
+</table>
+</div>
+
+<p>שלושה כללים. <strong>כל צעד וכל תיקון חייבים להיות <span class="en">idempotent</span></strong>: אחרי <span class="en">timeout</span> לא יודעים אם צעד קרה (פרק 11), ומנסים שוב. <strong>הסדר חשוב</strong>: קודם צעדים שקל לתקן, ואחרונה <strong>נקודת האל-חזור</strong> (<span class="en">pivot</span>), שאחריה רק מתקדמים. ו<strong>אין בידוד</strong> (<span class="en">isolation</span>): בין הצעדים, אחרים רואים מצב ביניים, למשל שיחה שעוד קיימת וההערות שלה כבר נמחקו. לכן הצעד הראשון שלנו מסתיר את השיחה (ארכוב), כדי שאיש לא יכתוב אליה בזמן המחיקה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.8</span>דוגמה מודרכת, חלק ב': מחיקה כ-<span class="en">saga</span></h2>
+
+<div class="step">
+  <h3><span class="step-num">1</span>שני הצדדים</h3>
+  <p>בשירות ההערות, <span class="en">endpoint</span> חדש:<code>DELETE /v1/notes?conversation_id=...</code>, שמוחק את כל ההערות של שיחה ומחזיר אותן (שוב: <code>[]</code>, וזו לא שגיאה). זו תוספת, ולכן נשארת ב-<code>/v1</code>; גרסה <code>0.2.0</code>, ו-<code>"delete"</code> נכנס לבדיקת החוזה. ב-<code>agent\notes.py</code>: <code>delete_all(conversation_id)</code>, ו-<code>restore(conversation_id, notes)</code> ששולח כל הערה שוב עם <code>Idempotency-Key</code> שנגזר מהמזהה הישן, <code>f"restore-{note.id}"</code>: תיקון שרץ פעמיים משחזר כל הערה פעם אחת. בצ'אט, עמודה <code>archived_at</code> (<code class="wrap">uv run alembic revision --autogenerate -m "conversations can be archived" --rev-id 0006</code>, פרק 7), ו-<code>archive</code>, <code>unarchive</code> ב-<code>Conversations</code>. שיחה בארכיון מתנהגת כאילו נמחקה: 404, ולא ברשימה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>המתזמר</h3>
+<div class="codebox">
+  <div class="label"><span>agent\saga.py (shortened)</span></div>
+<pre><code>@dataclass(frozen=True)
+class Step:
+    name: str
+    action: Callable[[], None]
+    compensate: Callable[[], None] | None = None  <span class="cm"># None: nothing to undo</span>
+
+
+def run_saga(name: str, steps: list[Step]) -&gt; None:
+    """Run the steps in order. If one fails, compensate those done, then raise its error."""
+    done: list[Step] = []
+    for step in steps:
+        try:
+            step.action()
+        except Exception:
+            log.warning("saga %s: step %r failed; compensating", name, step.name)
+            for finished in reversed(done):
+                if finished.compensate is None:
+                    continue
+                try:
+                    finished.compensate()
+                    log.warning("saga %s: compensated %r", name, finished.name)
+                except Exception:
+                    <span class="cm"># Now the data is inconsistent, and only a person can fix it: say so loudly.</span>
+                    log.exception("saga %s: COMPENSATION FAILED for %r", name, finished.name)
+            raise
+        log.info("saga %s: step %r done", name, step.name)
+        done.append(step)
+
+
+def delete_conversation(conversations, notes, conversation_id) -&gt; list[Step]:
+    deleted: list[Note] = []  <span class="cm"># what step 2 deleted, kept for its compensation</span>
+    ...
+    return [
+        Step("archive the conversation", lambda: conversations.archive(conversation_id),
+             lambda: conversations.unarchive(conversation_id)),
+        Step("delete its notes", delete_notes, restore_notes),  <span class="cm"># the step that may fail</span>
+        Step("delete the conversation", lambda: conversations.delete(conversation_id)),  <span class="cm"># pivot</span>
+    ]</code></pre>
+</div>
+  <p><code>DELETE /conversations/{id}</code> קורא ל-<code>saga.run_saga</code> עם הצעדים של <code>saga.delete_conversation</code>. <code>ConversationNotFound</code> נשאר 404, ו-<code>NotesUnavailable</code> הופך ל-503 עם "<span class="en">nothing was deleted</span>". אחרי הצלחה, <code>conversation.deleted</code>. ב-<code>tests\test_saga.py</code> שירות הערות מזויף בזיכרון, ובדיקה לכל מסלול. <span class="en">Commit</span>, <code>docker compose up --build -d --wait</code> (ה-<code>migrate</code> מריץ את 0006).</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>מסלול ההצלחה, ומסלול התיקון</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python scripts/ask.py "/note buy milk" --conversation $c
+uv run python scripts/ask.py "/note call Dana" --conversation $c
+$h = @{ "X-API-Key" = "&lt;AGENT_API_KEY from .env&gt;" }
+(Invoke-WebRequest "http://127.0.0.1:8000/conversations/$c" -Method Delete -Headers $h -UseBasicParsing).StatusCode
+docker compose exec notes-db psql -U notes -c "SELECT count(*) FROM notes;"
+docker compose exec api grep "saga" agent.log
+docker compose logs worker --no-log-prefix --tail 1</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>204
+ count
+-------
+     0
+INFO agent.saga: saga delete: step 'archive the conversation' done
+INFO agent.saga: saga delete: step 'delete its notes' done
+INFO agent.saga: saga delete: step 'delete the conversation' done
+INFO worker: partition 0 offset 6: conversation.deleted 6b77fce08be94600b3fe0411263f45d4</code></pre>
+</div>
+  <p>השיחה, ההערות, וגם הסטטיסטיקה: ה-<span class="en">worker</span> שמע את האירוע ומחק את השורה שלו, בלי שהצ'אט ידע עליו. עכשיו שיחה שנייה, <code>$c2</code> (זו של <code>"and now?"</code>), עם הערה, ושירות ההערות למטה:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python scripts/ask.py "/note pack the bags" --conversation $c2
+docker compose stop notes
+$t = Get-Date
+try { Invoke-WebRequest "http://127.0.0.1:8000/conversations/$c2" -Method Delete -Headers $h -UseBasicParsing } catch { $_.ErrorDetails.Message }
+"{0:N1} s" -f ((Get-Date) - $t).TotalSeconds
+(Invoke-RestMethod "http://127.0.0.1:8000/conversations/$c2" -Headers $h).title
+docker compose exec api grep "saga delete" agent.log
+docker compose start notes
+uv run python scripts/ask.py "/notes" --conversation $c2</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>{"detail":"The notes service is unavailable, so nothing was deleted. Try again later."}
+7.7 s
+and now?
+...
+INFO agent.saga: saga delete: step 'archive the conversation' done
+WARNING agent.saga: saga delete: step 'delete its notes' failed; compensating
+WARNING agent.saga: saga delete: compensated 'archive the conversation'
+- pack the bags</code></pre>
+</div>
+  <p>הצעד השני נכשל (שלושה ניסיונות, כמו בפרק 11), התיקון החזיר את השיחה מהארכיון, והמשתמש קיבל תשובה כנה. שום דבר לא נמחק בחצי. ומה אם הצעד <em>השלישי</em> נכשל, אחרי שההערות כבר נמחקו? תכתבו את הבדיקה הזו בתרגיל 4.</p>
+  <p>שני דברים שה-<span class="en">saga</span> הזו לא עושה, ושכדאי לדעת: היא שומרת את ההתקדמות שלה בזיכרון, ולכן אם ה-<code>api</code> נופל באמצע, שיחה יכולה להישאר בארכיון וההערות שלה מחוקות. מתזמרים אמיתיים (Temporal, AWS Step Functions) שומרים כל צעד, וממשיכים אחרי נפילה. ובפרק 20, כשתבנו סוכן-מתזמר שמחלק עבודה לסוכנים אחרים, תפגשו את אותה שאלה בדיוק: מה עושים כשצעד באמצע נכשל.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.9</span><span class="en">Batch</span>, <span class="en">streaming</span> ו-Airflow</h2>
+
+<p>ה-<span class="en">worker</span> הוא <strong><span class="en">streaming</span></strong>: כל אירוע מטופל כשהוא מגיע, והתוצאה תמיד כמעט עדכנית. דוח יומי הוא <strong><span class="en">batch</span></strong>: פעם בלילה, על כל הנתונים של יום שהסתיים, ממקור האמת (טבלת ההודעות). <span class="en">Batch</span> פשוט יותר, זול יותר, וקל לתקן: באג בדוח של אתמול? מתקנים, ומריצים את אתמול שוב.</p>
+
+<p><strong>מתזמן</strong> (<span class="en">scheduler</span>) או <strong>מתזמר</strong> (<span class="en">orchestrator</span>) של <span class="en">pipelines</span> מריץ עבודות לפי לוח זמנים ולפי תלויות ביניהן. Airflow הוא הנפוץ שבהם. המושגים שלו:</p>
+<ul>
+  <li><strong><span class="en">DAG</span></strong> (<span class="en">directed acyclic graph</span>): <span class="en">pipeline</span> אחד, משימות וחצים ביניהן, בלי מעגלים. נכתב כקובץ Python.</li>
+  <li><strong><span class="en">Task</span></strong>: צעד אחד. <strong>תלות</strong>: <code>write</code> רץ רק אחרי ש-<code>extract</code> הצליח.</li>
+  <li><strong><span class="en">Schedule</span></strong>: מתי, בתחביר של <span class="en">cron</span>. <strong><span class="en">Retries</span></strong>: כמה פעמים לנסות שוב משימה שנכשלה.</li>
+  <li><strong><span class="en">Backfill</span></strong>: הרצה על ימים שעברו, למשל אחרי תיקון באג. אפשרי רק אם כל משימה <span class="en">idempotent</span>: יום שרץ פעמיים נותן אותה תוצאה, לא שתי תוצאות.</li>
+</ul>
+
+<p>הקוד עצמו נמצא ב-<code>pipelines\usage_report.py</code>, ב-Python רגיל, בלי Airflow: <code>extract(database_url, day)</code> מחזירה שורה לכל שיחה (שאילתת <code>GROUP BY</code> על <code>messages</code> בין חצות לחצות, UTC), ו-<code>write_report(rows, day, folder)</code> כותבת <code>reports\usage-&lt;day&gt;.csv</code> לקובץ צדדי ואז מחליפה, כך שהרצה שנייה דורסת את הראשונה ואין לעולם חצי קובץ. כך בודקים אותן ב-pytest, ומריצים ביד:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$env:DATABASE_URL = "postgresql+psycopg://agent:agent@127.0.0.1:5432/agent"
+uv run python -m pipelines.usage_report --day 2026-11-18
+cat reports\usage-2026-11-18.csv
+Remove-Item Env:DATABASE_URL</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>wrote reports\usage-2026-11-18.csv (1 rows)
+conversation_id,turns,chars
+02a1605c57854cfb8c4710cb6d18c994,1,47</code></pre>
+</div>
+<p>(ב-<code>.gitignore</code>: <code>reports/</code>.) וה-<span class="en">DAG</span> שמריץ אותן כל לילה:</p>
+<div class="codebox">
+  <div class="label"><span>dags\daily_usage_report.py (without the docstring)</span></div>
+<pre><code>import os
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from airflow.sdk import dag, task
+
+from pipelines import usage_report
+
+DATABASE_URL = os.environ.get("REPORT_DATABASE_URL", "sqlite:///agent.db")
+REPORTS = Path(os.environ.get("REPORT_FOLDER", "reports"))
+
+
+def day_before(logical_date: datetime | None) -&gt; date:
+    """The run at 02:00 on the 19th reports on the 18th, a day that is over."""
+    assert logical_date is not None  <span class="cm"># Airflow passes it to every scheduled run</span>
+    return logical_date.date() - timedelta(days=1)
+
+
+@dag(
+    schedule="0 2 * * *",  <span class="cm"># cron: every day at 02:00 UTC</span>
+    start_date=datetime(2026, 11, 1),  <span class="cm"># no run is about anything earlier</span>
+    catchup=False,  <span class="cm"># do not run every missed night at once; backfill on purpose</span>
+    default_args={"retries": 2, "retry_delay": timedelta(minutes=5)},
+    tags=["my-agent"],
+)
+def daily_usage_report() -&gt; None:
+    @task
+    def extract(logical_date: datetime | None = None) -&gt; list[dict[str, Any]]:
+        <span class="cm"># Airflow fills logical_date from the run (it is a name Airflow knows).</span>
+        return usage_report.extract(DATABASE_URL, day_before(logical_date))
+
+    @task
+    def write(rows: list[dict[str, Any]], logical_date: datetime | None = None) -&gt; str:
+        return str(usage_report.write_report(rows, day_before(logical_date), REPORTS))
+
+    write(extract())  <span class="cm"># extract runs first; its rows reach write through XCom</span>
+
+
+daily_usage_report()</code></pre>
+</div>
+<ol>
+  <li><code>from airflow.sdk import dag, task</code>: הממשק של Airflow 3 לכתיבת <span class="en">DAGs</span>. Airflow <em>לא</em> תלות של הפרויקט: הקובץ רץ בתוך התקנה של Airflow, שצריכה גם את <code>pipelines</code> (ולכן <code>pipelines</code> לא מייבא את <code>agent</code>).</li>
+  <li>ההגדרות מגיעות ממשתני סביבה, כמו בכל השירותים שלנו: Airflow רץ במקום אחר, עם בסיס נתונים בכתובת אחרת.</li>
+  <li><code>day_before</code>: על איזה יום הריצה. <code>logical_date</code> הוא הזמן שהריצה "שייכת" לו. הריצה של 02:00 ב-19 מדווחת על ה-18, יום שכבר נגמר. בלי זה, הדוח היה על יום שרק התחיל.</li>
+  <li><code>@dag(...)</code>: לוח הזמנים (<span class="en">cron</span>: דקה 0, שעה 2, כל יום), מאיזה תאריך, ו-<code>catchup=False</code>: מי שמפעיל את ה-<span class="en">DAG</span> לראשונה לא מקבל ריצה על כל לילה מאז <code>start_date</code>. ימים שעברו מריצים בכוונה (<span class="en">backfill</span>). <code>retries=2</code>: בסיס נתונים שלא ענה בשתיים בלילה מקבל עוד שתי הזדמנויות, חמש דקות זו מזו.</li>
+  <li><code>@task</code>: כל פונקציה היא משימה, שרצה בתהליך משלה, אולי על מכונה אחרת. לכן היא דקה: קוראת לפונקציה הרגילה, ולא יותר.</li>
+  <li><code>write(extract())</code>: נראה כמו קריאה, אבל בזמן שהקובץ נקרא היא רק <em>מתארת</em> את הגרף: <code>extract</code> לפני <code>write</code>. ערך ההחזרה של <code>extract</code> נשמר ב-<strong>XCom</strong>, המנגנון של Airflow להעביר ערכים קטנים בין משימות, ומגיע ל-<code>write</code>. נתונים גדולים לא מעבירים כך: כותבים לקובץ או לטבלה, ומעבירים את השם.</li>
+</ol>
+<p>Airflow לא רץ ישירות על Windows, והפריסה המלאה שלו (מתזמן, שרת, <span class="en">workers</span>, בסיס נתונים) כבדה. כדי לראות שה-<span class="en">DAG</span> באמת עובד, <code>dags\try_in_docker.sh</code> מתקין את Airflow 3.4 ב-<span class="en">container</span> חד-פעמי ומריץ <code>airflow dags test</code>: ריצה אחת של כל המשימות, בלי מתזמן. עם <code>db</code> של compose למעלה (ושמרו את הקובץ עם סופי שורה <code>LF</code>):</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker run --rm --network my-agent_default -v "${PWD}:/project:ro" python:3.13-slim bash /project/dags/try_in_docker.sh</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (after about 100 seconds; shortened)</span></div>
+<pre><code>installing Airflow (a few minutes)...
+extract
+write
+... Done. Returned value was: [{'conversation_id': '02a1605c57854cfb8c4710cb6d18c994', 'turns': 1, 'chars': 47}]
+... Done. Returned value was: /tmp/reports/usage-2026-11-18.csv
+... DagRun Finished: dag_id=daily_usage_report, logical_date=2026-11-19 00:00:00+00:00, ... state=success, ...
+conversation_id,turns,chars
+02a1605c57854cfb8c4710cb6d18c994,1,47</code></pre>
+</div>
+
+<p><strong>מתי מה?</strong> משימה אחת בלוח זמנים, בלי תלויות: <strong><span class="en">cron</span></strong> (או ה-<span class="en">scheduler</span> של הענן) שמריץ <code>python -m pipelines.usage_report</code>; זה מספיק להרבה מאוד צוותים. כמה משימות עם תלויות, ניסיונות חוזרים, <span class="en">backfill</span>, ומסך שמראה מה רץ ומה נכשל: <strong>Airflow</strong> (או Dagster, Prefect). תגובה לכל אירוע תוך שניות: <strong>צרכן של Kafka</strong>. ושאלו תמיד אם צריך את זה כל רגע, או מספיק פעם בלילה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.10</span><span class="en">CI</span>, <span class="en">deploy</span>, וגרסה 0.12.0</h2>
+
+<p>ב-<code>ci.yml</code>, <code>mypy agent scripts worker pipelines</code>; הבדיקות לא צריכות Kafka. ב-<code>deploy\compose.yaml</code> נוספים <code>kafka</code>, <code>topics</code> ו-<code>worker</code>, כמו ב-compose המקומי, עם <code>restart: unless-stopped</code>, ה-<span class="en">worker</span> מ-<code>my-agent:${IMAGE_TAG}</code>, ול-<code>api</code> <code>KAFKA_BOOTSTRAP_SERVERS</code>. ב-<code>.dockerignore</code>: <code>dags/</code>. גרסה <code>0.12.0</code> ו-<code>NOTES_IMAGE_TAG=0.2.0</code>, <code>CHANGELOG.md</code>, README (שלושה סעיפים חדשים), <code>docs\architecture.md</code>, <code>.env.example</code>. <span class="en">Merge</span>, תגית <code>v0.12.0</code>, ו-<code>deploy.py staging</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code> Container my-agent-staging-worker-1 Healthy
+ Container my-agent-staging-api-1 Healthy
+--- 3. /ready reports the new version
+    {'status': 'ready', 'database': 'ok', 'version': '0.12.0', 'environment': 'staging', 'notes': 'ok'}
+--- 4. smoke test: one message, then delete the conversation
+    ok: [mock reply, turn 1] You said: smoke test
+staging runs my-agent:0.12.0.</code></pre>
+</div>
+<p>ה-<span class="en">smoke test</span> מוחק את השיחה שלו, כלומר עובר כבר דרך ה-<span class="en">saga</span>, וב-<code>logs worker</code> של <span class="en">staging</span> מופיעים <code>message.created</code> ו-<code>conversation.deleted</code> שלו.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.11</span>תרגילים</h2>
+
+<p>על compose מהדוגמה המודרכת (<code>docker compose up -d --wait</code>). שינויי קוד על ענף, עם שורה תחת <span class="en">Unreleased</span>. פתרונות, עם הפלטים, <a href="solutions/chapter-12.html">בדף נפרד</a>. בסוף, <code>docker compose stop</code>: Kafka אוכל זיכרון.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · הודעה רעילה</h3><span class="level">מודרך</span></div>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>"hello, I am not JSON" | docker compose exec -T kafka /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server kafka:9092 --topic chat-events
+docker compose logs worker --no-log-prefix --tail 1
+docker compose exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server kafka:9092 --topic chat-events-dlq --from-beginning --property print.headers=true --max-messages 1</code></pre>
+</div>
+  <label class="answer-label" for="n-ex1">מה רשם ה-<span class="en">worker</span>, ומה יש ב-DLQ? מה היה קורה בלי DLQ, אם ה-<span class="en">worker</span> היה זורק שגיאה ולא מאשר את ההודעה?</label>
+  <textarea class="answer" id="n-ex1" data-id="c12-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c12-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · מפתחות ומחיצות</h3><span class="level">מודרך</span></div>
+  <p>שלחו הודעה ראשונה בארבע שיחות חדשות (<code class="wrap">foreach ($i in 1..4) { uv run python scripts/ask.py "first message $i" | Select-Object -Last 1 }</code>), ועוד הודעה בשיחה קיימת. אחר כך <code>docker compose logs worker --no-log-prefix --tail 5</code>.</p>
+  <label class="answer-label" for="n-ex2">לאילו <span class="en">partitions</span> הגיעו האירועים? למה ה-<span class="en">offset</span> הראשון שראיתם בכל אחת אינו בהכרח 0, ומה כבר יושב שם לפניו? מה היה נשבר אילו פרסמנו בלי מפתח?</label>
+  <textarea class="answer" id="n-ex2" data-id="c12-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c12-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · שני <span class="en">workers</span>, ואז ארבעה</h3><span class="level mid">בינוני</span></div>
+  <p><code>docker compose up -d --scale worker=2 worker</code>, חכו כמה שניות, ו-<code>kafka-consumer-groups.sh ... --describe --group usage-worker</code>. שלחו הודעות בשתי שיחות שהאירועים שלהן ב-<span class="en">partitions</span> שונות, ו-<code>docker compose logs worker --tail 2</code>. אחר כך <code>--scale worker=4</code>, ו-<code>--describe --group usage-worker --members</code>. בסוף, <code>--scale worker=1</code>.</p>
+  <label class="answer-label" for="n-ex3">איך התחלקו ה-<span class="en">partitions</span>? מה עשה ה-<span class="en">worker</span> הרביעי? מה זה אומר על בחירת מספר ה-<span class="en">partitions</span> כשיוצרים <span class="en">topic</span>?</label>
+  <textarea class="answer" id="n-ex3" data-id="c12-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c12-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · הצעד השלישי נכשל</h3><span class="level mid">בינוני</span></div>
+  <p>ב-<code>tests\test_saga.py</code>, כתבו <code>test_a_failure_after_the_notes_were_deleted_restores_them</code>: שיחה עם שתי הערות בשירות המזויף, ו-<code>monkeypatch.setattr(conversations, "delete", broken_delete)</code> עם פונקציה שזורקת <code>RuntimeError</code>. הריצו את ה-<span class="en">saga</span>, ובדקו ששתי ההערות חזרו, באילו מזהים, ושהשיחה עדיין נגישה (<code>conversations.title</code>).</p>
+  <label class="answer-label" for="n-ex4">אילו פעולות תיקון רצו, ובאיזה סדר? למה המזהים של ההערות השתנו, ומי עלול להיפגע מזה? למה המפתח של השחזור נגזר מהמזהה הישן ולא נוצר באקראי?</label>
+  <textarea class="answer" id="n-ex4" data-id="c12-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c12-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · <span class="en">Backfill</span></h3><span class="level mid">בינוני</span></div>
+  <p>עם <code>DATABASE_URL</code> של צעד 12.9: <code class="wrap">foreach ($d in 15..18) { uv run python -m pipelines.usage_report --day "2026-11-$d" }</code> (החליפו בתאריכים שלכם), ואז את היום האחרון שוב, ו-<code>ls reports</code>. אם יש לכם זמן וזיכרון, הריצו גם את <code>try_in_docker.sh</code>, עם תאריך משלכם כפרמטר אחרון.</p>
+  <label class="answer-label" for="n-ex5">כמה קבצים יש, ולמה ההרצה השנייה לא יצרה שני? מה היה קורה ב-<span class="en">backfill</span> אילו <code>write_report</code> הוסיפה שורות לקובץ קיים במקום לכתוב אותו מחדש?</label>
+  <textarea class="answer" id="n-ex5" data-id="c12-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c12-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · תכנון <span class="en">outbox</span></h3><span class="level open">פתוח</span></div>
+  <p>היום, אירוע שה-<code>api</code> לא הספיק לשלוח אובד (12.5). כתבו ב-<code>docs\architecture.md</code> סעיף "<span class="en">Plan: an outbox</span>": איזו טבלה, מי כותב אליה ובאיזו <span class="en">transaction</span>, מי קורא ממנה ושולח, מתי שורה נחשבת "נשלחה", ומה קורה כשהשולח נופל בין השליחה לסימון. עדכנו גם את "<span class="en">Known gaps</span>". <span class="en">Commit</span>.</p>
+  <label class="answer-label" for="n-ex6">איזו הבטחת מסירה נותן ה-<span class="en">outbox</span>, ולמה ה-<span class="en">worker</span> שכבר בניתם מסתדר איתה? והאם מחיקת השיחה הייתה צריכה להיות <span class="en">choreography</span> במקום <span class="en">orchestration</span>? נמקו.</label>
+  <textarea class="answer" id="n-ex6" data-id="c12-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c12-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.12</span>בדקו את עצמכם</h2>
+
+<p>סמנו רק מה שאתם מסוגלים להסביר בקול רם לאדם אחר, בלי להציץ בפרק.</p>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c12-chk1"><span>אני יודע/ת להסביר מה ההבדל בין <span class="en">queue</span> ל-<span class="en">stream</span>, ולתת דוגמה למתי כל אחד.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c12-chk2"><span>אני יודע/ת מה קובע את ה-<span class="en">partition</span> של אירוע, ואיזה סדר Kafka מבטיח ואיזה לא.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c12-chk3"><span>אני יודע/ת מה זה <span class="en">consumer group</span>, <span class="en">offset</span>, <span class="en">commit</span> ו-<span class="en">lag</span>, ואיך קוראים אותם.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c12-chk4"><span>אני יודע/ת להסביר <span class="en">at most once</span> ו-<span class="en">at least once</span> לפי סדר העבודה וה-<span class="en">commit</span>, ולמה "<span class="en">exactly once</span>" דורש צרכן <span class="en">idempotent</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c12-chk5"><span>אני יודע/ת למה רישום ה-<code>event_id</code> חייב להיות באותה <span class="en">transaction</span> של העבודה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c12-chk6"><span>אני יודע/ת מה זה DLQ ולמה בלעדיו צרכן נתקע.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c12-chk7"><span>אני יודע/ת להסביר את בעיית ה-<span class="en">dual write</span> ואיך <span class="en">outbox</span> פותר אותה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c12-chk8"><span>אני יודע/ת להסביר <span class="en">saga</span>, פעולת תיקון, <span class="en">pivot</span>, ומה <span class="en">saga</span> לא נותנת (<span class="en">isolation</span>).</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c12-chk9"><span>אני יודע/ת להשוות <span class="en">orchestration</span> ו-<span class="en">choreography</span>, עם דוגמה מהפרויקט לכל אחד.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c12-chk10"><span>אני יודע/ת לקרוא <span class="en">DAG</span> של Airflow, ולבחור בין <span class="en">cron</span>, Airflow וצרכן של Kafka.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.13</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td><code>container my-agent-worker-1 is unhealthy</code></td><td>ה-<span class="en">worker</span> יורש את ה-<code>HEALTHCHECK</code> של ה-<span class="en">image</span>, שבודק <code>/ready</code> על פורט 8000</td><td><code>healthcheck: disable: true</code> ל-<code>worker</code></td></tr>
+  <tr><td><code>KAFKA_BOOTSTRAP_SERVERS is not set: the worker has nothing to read.</code></td><td>הרצתם <code>uv run python -m worker</code> מחוץ ל-compose</td><td>הריצו אותו ב-compose; ל-Kafka אין פורט על המחשב</td></tr>
+  <tr><td>ב-Git Bash: <code class="wrap">exec: "C:/Program Files/Git/opt/kafka/bin/kafka-topics.sh": no such file or directory</code></td><td>Git Bash הופך נתיב שמתחיל ב-<code>/</code> לנתיב של Windows</td><td>הריצו מ-PowerShell, או ב-Git Bash קודם <code>export MSYS_NO_PATHCONV=1</code></td></tr>
+  <tr><td>הסטטיסטיקה גבוהה מהמציאות</td><td>אירוע טופל פעמיים (נפילה לפני <span class="en">commit</span>), בלי <code>processed_events</code></td><td>צעד 6, ובנייה מחדש מהאירועים</td></tr>
+  <tr><td>ה-<span class="en">worker</span> רץ ולא מעבד; <span class="en">lag</span> גדל</td><td>הוא נתקע על הודעה שזורקת שגיאה, או שאין לו <span class="en">partitions</span> (תרגיל 3)</td><td><code>logs worker</code>, ו-<code>--describe --group usage-worker --members</code></td></tr>
+  <tr><td><code>DELETE /conversations/...</code> עונה 503</td><td>שירות ההערות למטה: ה-<span class="en">saga</span> תיקנה, ושום דבר לא נמחק</td><td><code>docker compose start notes</code>, ונסו שוב</td></tr>
+  <tr><td><code>set: -: invalid option</code> ב-<code>try_in_docker.sh</code></td><td>הקובץ נשמר עם סופי שורה <code>CRLF</code> של Windows</td><td>ב-VS Code, <code>CRLF</code> בשורת המצב, ובחרו <code>LF</code>; <code>.gitattributes</code> שומר על <code>*.sh</code> ב-<code>LF</code></td></tr>
+  <tr><td><code>try_in_docker.sh</code> נכשל בהתקנה</td><td>אין אינטרנט מתוך ה-<span class="en">container</span>, או שאין מספיק זיכרון</td><td><code>docker compose stop</code> לכל השאר חוץ מ-<code>db</code>, ונסו שוב</td></tr>
+  <tr><td>דוח ריק ליום שבו דיברתם</td><td>הימים הם ב-UTC; שיחה מ-01:00 בלילה אצלכם שייכת ליום הקודם</td><td>בדקו ב-<code>messages.created_at</code></td></tr>
+  <tr><td><code>Kafka</code> לא עולה, <span class="en">container</span> יוצא בלי הודעה ברורה</td><td>מעט מדי זיכרון ל-Docker Desktop</td><td>סגרו שירותים אחרים, או הגדילו את הזיכרון בהגדרות של Docker Desktop</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.14</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>message broker</dt><dd>שרת ששומר הודעות בין מי ששולח למי שקורא.</dd>
+  <dt>queue</dt><dd>מתווך שבו כל הודעה הולכת לצרכן אחד ונמחקת אחרי שאושרה.</dd>
+  <dt>stream / log</dt><dd>מתווך שבו ההודעות נשמרות לפי הסדר, וכל קבוצת צרכנים קוראת את כולן בקצב שלה.</dd>
+  <dt>event</dt><dd>הודעה שמתארת עובדה שקרתה, בזמן עבר.</dd>
+  <dt>topic</dt><dd>שם לזרם של אירועים ב-Kafka.</dd>
+  <dt>partition</dt><dd>חלק של <span class="en">topic</span>; הסדר נשמר בתוכו.</dd>
+  <dt>key</dt><dd>הערך שקובע את ה-<span class="en">partition</span> של אירוע.</dd>
+  <dt>offset</dt><dd>המיקום של הודעה בתוך <span class="en">partition</span>.</dd>
+  <dt>consumer group</dt><dd>צרכנים שמחלקים ביניהם את ה-<span class="en">partitions</span>; לכל קבוצה <span class="en">offsets</span> משלה.</dd>
+  <dt>commit</dt><dd>אישור של צרכן: "קראתי עד כאן".</dd>
+  <dt>lag</dt><dd>כמה הודעות קבוצה עוד לא אישרה.</dd>
+  <dt>replay</dt><dd>קריאה מחדש של הודעות ישנות.</dd>
+  <dt>at least once</dt><dd>כל הודעה מטופלת, אולי יותר מפעם אחת.</dd>
+  <dt>idempotent consumer</dt><dd>צרכן שזוכר מה כבר טיפל בו, ומדלג על חזרות.</dd>
+  <dt>dead letter queue</dt><dd>מקום צדדי להודעות שאי אפשר לטפל בהן.</dd>
+  <dt>dual write</dt><dd>כתיבה לשני מקומות בלי <span class="en">transaction</span> משותפת; אחת יכולה להצליח והשנייה לא.</dd>
+  <dt>outbox</dt><dd>טבלה שבה נכתב האירוע יחד עם השינוי, ותהליך נפרד שמפרסם ממנה.</dd>
+  <dt>saga</dt><dd>פעולה על כמה שירותים, כשרשרת צעדים מקומיים עם פעולת תיקון לכל אחד.</dd>
+  <dt>compensating action</dt><dd>פעולה חדשה שמבטלת צעד במובן העסקי.</dd>
+  <dt>orchestration / choreography</dt><dd>מתזמר אחד שמריץ את הצעדים / שירותים שמגיבים לאירועים זה של זה.</dd>
+  <dt>batch / streaming</dt><dd>הרבה נתונים בבת אחת, בלוח זמנים / כל אירוע כשהוא מגיע.</dd>
+  <dt>DAG</dt><dd><span class="en">pipeline</span> ב-Airflow: משימות, ותלויות ביניהן בלי מעגלים.</dd>
+  <dt>backfill</dt><dd>הרצה של <span class="en">pipeline</span> על תקופות שעברו.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">12.15</span>מה הלאה</h2>
+
+<p>תסתכלו כמה מקומות פתחתם בפרק הזה כדי להבין מה קרה: <code>agent.log</code> בתוך ה-<span class="en">container</span> של ה-<code>api</code>, <code>docker compose logs worker</code>, כלי של Kafka בתוך עוד <span class="en">container</span>, ו-<code>psql</code> בשני בסיסי נתונים. עכשיו דמיינו שמשתמש כותב "מחקתי שיחה, והיא חזרה". איזו בקשה זו הייתה? באיזה שירות הצעד נכשל, כמה זמן זה לקח, ומי עוד הושפע? היום אין דרך לחבר שורה בלוג של הצ'אט לשורה בלוג של שירות ההערות ולאירוע ב-Kafka.</p>
+
+<p>לוגים מובנים עם מזהה בקשה שעובר בין שירותים, מדדים, <span class="en">tracing</span>, התראות, ותקלה שתאבחנו מהלוגים בלבד: <strong>פרק 13: מערכת חיה</strong>.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-12</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים, בלי <code>.git</code> ובלי סודות. עם <code>db</code> של compose למעלה, <code>uv run --locked python scripts/ci_local.py</code> מריץ 116 בדיקות בצ'אט ו-11 בשירות ההערות, ושני <span class="en">images</span> שמדפיסים <code>0.12.0</code> ו-<code>0.2.0</code>. אף בדיקה לא צריכה Kafka.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-12.html">פתרונות לפרק 12</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

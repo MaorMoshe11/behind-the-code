@@ -1,0 +1,32 @@
+# What one million tokens cost, in US dollars, per model. Prices change: check the provider's
+# pricing page (https://platform.claude.com/docs/en/about-claude/pricing) and update this file,
+# with the date you checked it. agent/cost.py reads it when the program starts.
+#
+# input: tokens neither read from nor written to the cache. cache_write: written to the
+# 5-minute cache (1.25 x input). cache_read: read from the cache. output: everything the model
+# writes, its thinking included. The Batch API costs half of these (not used here).
+checked = "2026-11-19"
+
+[models.claude-opus-5-5]
+input = 4.00
+cache_write = 5.00
+cache_read = 0.20
+output = 20.00
+
+[models.claude-opus-4-8]  # the default CHAT_FALLBACK_MODEL
+input = 5.00
+cache_write = 6.25
+cache_read = 0.50
+output = 25.00
+
+[models.claude-sonnet-5-5]
+input = 2.00
+cache_write = 2.50
+cache_read = 0.10
+output = 10.00
+
+[models.claude-haiku-5-5]  # up to 100K tokens of prompt; above that, $0.50 and $2.50
+input = 0.10
+cache_write = 0.125
+cache_read = 0.01
+output = 0.50

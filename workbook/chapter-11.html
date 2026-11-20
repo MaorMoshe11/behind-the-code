@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 11 · ארכיטקטורה | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="11">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 11 · ארכיטקטורה</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 11 מתוך 21</div>
+  <h1>ארכיטקטורה</h1>
+  <p class="lead">מתי נכון לפצל שירות שני מהשירות היחיד, מה הפיצול עולה, ואיך קוראים לשירות אחר ברשת כך שהוא יכול להיות איטי, נופל או חצי-מצליח, והצ'אט עדיין עונה.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>להשוות בין <span class="en">monolith</span>, <span class="en">modular monolith</span> ו-<span class="en">microservices</span>, ולומר מה כל אחד עולה ב-<span class="en">deploy</span>, בנתונים, בתקלות וב-<span class="en">debugging</span>.</li>
+    <li>להסביר למה כל שירות מחזיק את הנתונים שלו, ומה מפסידים כשאין בסיס נתונים משותף.</li>
+    <li>להבדיל בין קריאה סינכרונית ב-HTTP להודעה אסינכרונית, ולבחור ביניהן.</li>
+    <li>לזהות את ארבע הדרכים שבהן קריאה ברשת נכשלת, ולהשתמש בכלי הנכון לכל אחת: <span class="en">timeout</span>, <span class="en">retry</span> עם <span class="en">backoff</span> ו-<span class="en">jitter</span>, <span class="en">idempotency key</span>, <span class="en">circuit breaker</span>, ו-<span class="en">graceful degradation</span>.</li>
+    <li>לנסח חוזה בין שירותים ולשנות אותו בלי לשבור את מי שמשתמש בו.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> חמש עד שש שעות. <strong>מה צריך:</strong> הפרויקט מסוף פרק 10, Docker Desktop, ושלושה חלונות <span class="en">terminal</span>. הכול רץ במצב <span class="en">mock</span>, בלי מפתח ובלי עלות.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.1</span>הבעיה: תכונה חדשה, ואיפה היא גרה</h2>
+
+<p>הסוכן צריך לזכור דברים קטנים לאורך שיחה: "הטיסה ביום ראשון", "דנה מעדיפה בוקר". נקרא להם <strong>הערות</strong> (<span class="en">notes</span>): הפקודה <code>/note buy milk</code> שומרת הערה, ו-<code>/notes</code> מציגה את ההערות של השיחה. בפרק 18 הסוכן עצמו יקבל אותן ככלים, ויקרא וישמור אותן בלי שתבקשו.</p>
+
+<p>השאלה הראשונה היא לא איך לכתוב את זה, אלא איפה. נזכרים בפרק 10: בגרסה 0.10.1 נכנסו שני שינויים, כותרות ארוכות ועמודה לארכיון. הכותרות נשברו, ו-<span class="en">rollback</span> החזיר אחורה את שניהם:</p>
+
+<div class="codebox output">
+  <div class="label"><span>from chapter 10, section 10.7 (shortened)</span></div>
+<pre><code>--- 1. migrations: skipped
+    {'status': 'ready', 'database': 'ok', 'version': '0.10.0', 'environment': 'staging'}
+staging runs my-agent:0.10.0.</code></pre>
+</div>
+
+<p>כל תכונה נכנסת לאותו <span class="en">image</span>, לאותו בסיס נתונים ולאותו <span class="en">deploy</span>. כשיהיו הרבה תכונות, וכמה צוותים שעובדים עליהן, זה יכאב: צוות ההערות יחכה ל-<span class="en">release</span> של צוות הצ'אט, ובאג באחד יחזיר אחורה את השני. מכאן הרעיון: <strong>שירות</strong> (<span class="en">service</span>) נפרד להערות, עם קוד, בסיס נתונים, <span class="en">image</span> וגרסה משלו, שהצ'אט קורא לו ב-HTTP.</p>
+
+<div class="callout warn">
+  <span class="title">בכנות: בפרויקט בגודל הזה, לא הייתם מפצלים</span>
+  <p>יש לכם מפתח אחד, שירות קטן ומעט משתמשים. ברירת המחדל הנכונה כאן היא <span class="en">monolith</span>, שירות אחד, עם מודולים מסודרים בפנים. בפרק הזה מפצלים בכל זאת, כדי ללמוד בידיים מה הפיצול עולה: קריאה שהייתה שורה אחת בזיכרון הופכת לקריאה ברשת, שיכולה להיכשל בארבע דרכים שונות. כשתפגשו מערכת אמיתית עם עשרות שירותים, תדעו מה כל אחד מהם משלם, ומתי זה שווה.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.2</span>המפה: שני שירותים, שני בסיסי נתונים</h2>
+
+<div class="diagram">
+  <div class="flow">
+    <div class="layer l4"><div class="name">clients</div><div class="what">דף הצ'אט, <code>ask.py</code>, ה-<span class="en">terminal</span></div></div>
+    <div class="hop">&rarr;<b>HTTP</b></div>
+    <div class="layer machine">
+      <div class="name">chat service (agent/)</div>
+      <div class="what">שיחות, הודעות, המודל. הלקוח היחיד של שירות ההערות</div>
+      <div class="inner"><div class="row">
+        <div class="layer l2"><div class="name">api</div><div class="what"><code>/chat</code>, <code>/ready</code></div></div>
+        <div class="layer l3"><div class="name">db</div><div class="what">conversations, messages</div></div>
+      </div></div>
+    </div>
+    <div class="hop">&rarr;<b>/v1, 2 s</b></div>
+    <div class="layer machine">
+      <div class="name">notes service (notes-service/)</div>
+      <div class="what">קוד, <span class="en">image</span> וגרסה משלו</div>
+      <div class="inner"><div class="row">
+        <div class="layer l2"><div class="name">notes</div><div class="what"><code>/v1/notes</code></div></div>
+        <div class="layer l3"><div class="name">notes-db</div><div class="what">notes</div></div>
+      </div></div>
+    </div>
+  </div>
+  <div class="caption">כל שירות קורא וכותב רק בבסיס הנתונים שלו. החץ האמצעי הוא החוזה ביניהם: נתיבים עם גרסה, מפתח, וזמן המתנה מוגבל.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.3</span>שלוש צורות למערכת</h2>
+
+<p><strong>ארכיטקטורה</strong> ביום-יום היא סט ההחלטות שקשה לשנות אחר כך: איך הקוד מחולק, מי מחזיק אילו נתונים, ומי מדבר עם מי. שלוש צורות נפוצות:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th><span class="en">monolith</span></th><th><span class="en">modular monolith</span></th><th><span class="en">microservices</span></th></tr>
+  <tr><td>מה זה</td><td>תהליך אחד, קוד אחד, בסיס נתונים אחד</td><td>תהליך אחד, אבל מודולים עם גבולות ברורים: כל מודול ניגש רק לטבלאות שלו ורק דרך הפונקציות הציבוריות של האחרים</td><td>כמה תהליכים, כל אחד עם קוד, נתונים ו-<span class="en">deploy</span> משלו, שמדברים ברשת</td></tr>
+  <tr><td><span class="en">deploy</span></td><td>אחד. פשוט, אבל הכול יחד</td><td>אחד</td><td>אחד לכל שירות: עצמאי, ופי כמה עבודה</td></tr>
+  <tr><td>נתונים</td><td><span class="en">JOIN</span> ו-<span class="en">transaction</span> על הכול</td><td>אותו דבר, אם מכבדים את הגבולות</td><td>אין <span class="en">JOIN</span> ואין <span class="en">transaction</span> בין שירותים</td></tr>
+  <tr><td>תקלות</td><td>קריאה לפונקציה לא "נופלת ברשת"</td><td>כמו <span class="en">monolith</span></td><td>כל קריאה יכולה להיות איטית, להיכשל, או להצליח בלי שתדעו</td></tr>
+  <tr><td><span class="en">debugging</span></td><td><span class="en">traceback</span> אחד</td><td><span class="en">traceback</span> אחד</td><td>לוגים בכמה מקומות; צריך מזהה בקשה משותף (פרק 13)</td></tr>
+  <tr><td>צוותים</td><td>כולם באותו קוד, באותו <span class="en">release</span></td><td>צוות לכל מודול, <span class="en">release</span> משותף</td><td>צוות לכל שירות, בקצב שלו</td></tr>
+  <tr><td>גדילה</td><td>מגדילים את הכול יחד</td><td>מגדילים את הכול יחד</td><td>מגדילים רק את מה שעמוס</td></tr>
+</table>
+</div>
+
+<p>הכלל המקובל: מתחילים ב-<span class="en">modular monolith</span>, ומפצלים שירות רק כשיש סיבה שאפשר לנקוב בה: צוות נפרד שצריך לפרוס בקצב שלו, חלק שצריך הרבה יותר משאבים מהשאר, או חלק שתקלה בו אסור שתפיל את כל השאר. "<span class="en">Microservices</span> זה מודרני" אינה סיבה. ויש תצפית ישנה, <strong>חוק קונוויי</strong> (<span class="en">Conway's law</span>): מבנה המערכת נוטה להעתיק את מבנה הצוותים שבונים אותה. לכן הגבול בין שירותים הוא קודם כול שאלה של מי אחראי על מה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.4</span>כל שירות מחזיק את הנתונים שלו</h2>
+
+<p>הדרך המהירה לפצל היא להשאיר בסיס נתונים אחד, ולתת לשירות ההערות טבלה בו. זה עובד ביום הראשון, ושובר את כל מה שהפיצול נועד לתת: שינוי בטבלה של הצ'אט (<span class="en">migration</span>, פרק 7) יכול לשבור את שירות ההערות שקורא ממנה; אי אפשר לדעת מי עוד תלוי בעמודה לפני שמוחקים אותה; ושני השירותים נופלים יחד כשבסיס הנתונים נופל. לכן הכלל: <strong>שירות מחזיק את הנתונים שלו</strong>, ואחרים מגיעים אליהם רק דרך ה-<span class="en">API</span> שלו.</p>
+
+<p>המחיר אמיתי, ותרגישו אותו בהמשך: שירות ההערות שומר <code>conversation_id</code> כטקסט, בלי <span class="en">foreign key</span>, ואינו יכול לבדוק שהשיחה קיימת. אין <span class="en">JOIN</span> בין הערות להודעות. ואין <span class="en">transaction</span> שמוחקת שיחה וגם את ההערות שלה: כשמוחקים שיחה בצ'אט, ההערות שלה נשארות. זו הבעיה של פרק 12.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.5</span>סינכרוני ואסינכרוני</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>סינכרוני (<span class="en">sync</span>): בקשה ותשובה</th><th>אסינכרוני (<span class="en">async</span>): הודעה</th></tr>
+  <tr><td>איך</td><td>הצ'אט שולח <code>POST /v1/notes</code> ומחכה לתשובה</td><td>הצ'אט כותב הודעה ל-<span class="en">queue</span> או ל-<span class="en">stream</span>, וממשיך; מישהו אחר יקרא אותה מתי שיוכל</td></tr>
+  <tr><td>המשתמש מחכה?</td><td>כן, לכל הדרך</td><td>לא</td></tr>
+  <tr><td>כשהצד השני נפל</td><td>הקריאה נכשלת עכשיו</td><td>ההודעה מחכה עד שהוא יחזור</td></tr>
+  <tr><td>מתאים ל</td><td>כשצריך את התשובה כדי לענות: "מה ההערות שלי?"</td><td>עבודה שלא צריך לחכות לה: סיכום שיחה, סטטיסטיקה, מחיקת הערות של שיחה שנמחקה</td></tr>
+</table>
+</div>
+
+<p>בפרק הזה הכול סינכרוני: <code>/notes</code> חייב לחכות לרשימה. בפרק 12 נבנה את הצד השני, עם Kafka.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.6</span>ארבע דרכים שבהן קריאה ברשת נכשלת</h2>
+
+<p>קריאה לפונקציה מחזירה תשובה או זורקת שגיאה. קריאה ברשת יכולה גם לא להחזיר כלום, או להחזיר שגיאה אחרי שהעבודה כבר נעשתה. ארבעת המקרים, וכל אחד תרגישו בדוגמה המודרכת:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה קרה</th><th>מה הלקוח רואה</th><th>האם ההערה נשמרה?</th><th>הכלי</th></tr>
+  <tr><td>השירות למטה</td><td>החיבור נכשל (<span class="en">refused</span>), או לא נענה</td><td>לא</td><td><span class="en">timeout</span>, <span class="en">retry</span>, <span class="en">circuit breaker</span>, <span class="en">degradation</span></td></tr>
+  <tr><td>השירות איטי</td><td>כלום, עד שנגמרת הסבלנות</td><td><strong>אולי</strong>: הוא עדיין עובד</td><td><span class="en">timeout</span>, ואז <span class="en">idempotency key</span></td></tr>
+  <tr><td>חצי-הצליח</td><td>שגיאה (500)</td><td><strong>כן</strong>, ואז משהו נכשל</td><td><span class="en">idempotency key</span></td></tr>
+  <tr><td>ענה, והתשובה אבדה</td><td><span class="en">timeout</span> או חיבור שנקטע</td><td><strong>כן</strong></td><td><span class="en">idempotency key</span></td></tr>
+</table>
+</div>
+
+<p>הכלים, בקצרה:</p>
+<ul>
+  <li><strong><span class="en">Timeout</span></strong>: כמה זמן מוכנים לחכות. בלעדיו, שירות תקוע מחזיק את הבקשה של המשתמש, ואת ה-<span class="en">thread</span> שמטפל בה, לנצח. ל-<code>httpx2</code> יש ברירת מחדל של 5 שניות, ל-<code>urllib</code> אין בכלל, ל-SDK של Anthropic 600 שניות (פרק 4). מחליטים בעצמכם, לפי כמה זמן המשתמש מוכן לחכות. ושימו לב: <span class="en">timeout</span> אומר "הפסקתי לחכות", לא "זה לא קרה".</li>
+  <li><strong><span class="en">Retry</span></strong>: לנסות שוב, אבל רק על תקלה שעשויה לעבור (חיבור, <span class="en">timeout</span>, 429, 5xx), אף פעם לא על 4xx: בקשה שגויה תישאר שגויה. בין ניסיונות ממתינים יותר ויותר (<strong><span class="en">exponential backoff</span></strong>: 0.2, 0.4, 0.8 שניות), ובוחרים חלק אקראי מההמתנה (<strong><span class="en">jitter</span></strong>), כדי שאלף לקוחות שנכשלו באותו רגע לא יחזרו באותו רגע ויפילו את השירות שוב.</li>
+  <li><strong><span class="en">Idempotency key</span></strong>: פעולה <span class="en">idempotent</span> היא כזו שאפשר לחזור עליה בלי שינוי בתוצאה. <code>GET</code>, <code>PUT</code> ו-<code>DELETE</code> כאלה מטבעם (פרק 5); <code>POST</code> לא: שתי בקשות, שתי הערות. הפתרון: הלקוח מייצר מפתח אחד לכל פעולה, ושולח אותו בכותרת <code>Idempotency-Key</code> בכל ניסיון שלה. השירות שומר את המפתח עם ההערה, ובקשה חוזרת עם אותו מפתח מקבלת את ההערה הקיימת.</li>
+  <li><strong><span class="en">Circuit breaker</span></strong> (מפסק): אחרי כמה כישלונות ברצף, מפסיקים לנסות לזמן מה ונכשלים מיד. כך שירות שנפל לא מעכב כל משתמש בכל פעם, ולא מקבל מבול של ניסיונות כשהוא מנסה לקום. אחרי ההמתנה מנסים קריאה אחת (<span class="en">half-open</span>); הצליחה, חוזרים לשגרה.</li>
+  <li><strong><span class="en">Graceful degradation</span></strong>: כשתלות לא-חיונית נכשלת, השירות ממשיך במה שהוא יכול, ואומר בכנות מה חסר. הצ'אט בלי הערות הוא עדיין צ'אט.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.7</span>חוזה בין שירותים, וגרסאות שלו</h2>
+
+<p>ה-<span class="en">API</span> של שירות ההערות הוא <strong>חוזה</strong> (<span class="en">contract</span>): הנתיבים, השדות, הקודים ומשמעותם. אחרי שיש לו לקוח, הוא לא שלכם לבד. שלושה כללים:</p>
+<ul>
+  <li><strong>גרסה בנתיב.</strong> כל הנתיבים מתחילים ב-<code>/v1</code>. בתוך <code>v1</code> מותר רק להוסיף: <span class="en">endpoint</span> חדש, שדה חדש בתשובה, שדה אופציונלי בבקשה. שינוי שובר (שינוי שם של <code>text</code>, מחיקת שדה, שינוי סוג) נכנס ל-<code>/v2</code>, שרץ לצד <code>/v1</code> עד שאף לקוח לא משתמש בישן. זה אותו <span class="en">expand/contract</span> של פרק 7, על <span class="en">API</span>.</li>
+  <li><strong>לקוח סובלני.</strong> הלקוח לוקח רק את השדות שהוא צריך ומתעלם מכל השאר, כך ששדה חדש לא שובר אותו.</li>
+  <li><strong>בדיקת חוזה.</strong> בדיקה בשירות שמקבעת את מה שהלקוחות סומכים עליו. שינוי שובר נכשל אצל מי שעשה אותו, לפני שהוא מגיע ללקוח (תרגיל 5).</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.8</span>דוגמה מודרכת: שירות ההערות</h2>
+
+<div class="step">
+  <h3><span class="step-num">1</span>פרויקט שני, באותו <span class="en">repository</span></h3>
+  <p>שני השירותים יגורו באותו <span class="en">repository</span>, בתיקיות נפרדות. לזה קוראים <strong><span class="en">monorepo</span></strong>: שינוי שנוגע בשניהם הוא <span class="en">pull request</span> אחד, וה-CI רואה את שניהם. החלופה, <span class="en">repository</span> לכל שירות, נותנת הפרדה חזקה יותר, ומחיר של תיאום בין <span class="en">repositories</span>. לשני צוותים קטנים <span class="en">monorepo</span> מספיק. בכל זאת, לשירות ההערות יהיו <code>pyproject.toml</code>, <code>uv.lock</code> ו-<code>.venv</code> משלו: התלויות והגרסה שלו הן שלו.</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects\my-agent
+git switch -c feature/notes-service
+mkdir notes-service
+cd notes-service
+uv init --bare --no-workspace
+uv python pin 3.13
+uv add fastapi uvicorn sqlalchemy "psycopg[binary]"
+uv add --dev pytest ruff mypy httpx2</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Initialized project `notes-service`
+Pinned `.python-version` to `3.13`
+Using CPython 3.13.13 interpreter at: ...
+Creating virtual environment at: .venv
+Resolved 19 packages in 72ms
+ + fastapi==0.164.0
+ ...</code></pre>
+</div>
+  <p>שני דגלים חשובים. בלי <code>--no-workspace</code>, <code>uv init</code> בתוך פרויקט קיים הופך את התיקייה החדשה לחלק ממנו (<span class="en">workspace</span>), עם <span class="en">lock file</span> משותף, ומשנה את <code>pyproject.toml</code> של הצ'אט. ובלי <code>uv python pin</code>, השירות בוחר לבד גרסת Python: על המחשב שבו נכתב הפרק הוא בחר 3.14, בעוד ה-<span class="en">image</span> יהיה 3.13. הבעיה מפרק 9, בשירות חדש.</p>
+  <p>הקוד, בחבילה <code>notes</code>: <code>config.py</code> (הגדרות, כמו בצ'אט: מפתח, <code>DATABASE_URL</code> עם ברירת מחדל <code>sqlite:///notes.db</code>, <code>APP_ENV</code>), <code>db.py</code> (טבלה אחת), ו-<code>api.py</code>. הטבלה:</p>
+<div class="codebox">
+  <div class="label"><span>notes-service\notes\db.py (the table)</span></div>
+<pre><code>class NoteRow(Base):
+    """One note, attached to one conversation of the chat service."""
+
+    __tablename__ = "notes"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    # The chat service's id, kept as plain text: there is no foreign key to another
+    # service's database. This service cannot check that the conversation exists.
+    conversation_id: Mapped[str] = mapped_column(String(64), index=True)
+    text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=now)
+    # The client's Idempotency-Key. unique: the database itself refuses a second note
+    # with the same key, even when two requests arrive at the same moment.
+    idempotency_key: Mapped[str | None] = mapped_column(String(100), unique=True)</code></pre>
+</div>
+  <p><code>make_engine</code> כאן קורא ל-<code>create_all</code>: טבלה אחת, בלי נתונים לשמור. השינוי הראשון בטבלה יביא Alembic, כמו בפרק 7. ה-<span class="en">API</span>, בגרסה 1: <code>POST /v1/notes</code> (201), <code>GET /v1/notes?conversation_id=...&amp;q=...</code>, <code>GET</code> ו-<code>DELETE /v1/notes/{id}</code>, ו-<code>/health</code> ו-<code>/ready</code> כמו בפרק 10. כל נתיב <code>/v1</code> דורש <code>X-API-Key</code>: רק הצ'אט רשאי. ה-<span class="en">endpoints</span> קטנים, עם שמות ברורים, קלט מוגבל ותיאור לכל שדה, בכוונה: בפרק 18 כל אחד מהם יהפוך לכלי של הסוכן. כבר עכשיו <code>POST</code> מקבל <code>Idempotency-Key</code>; נחזור לזה בצעד 6.</p>
+  <p>ועוד שתי הגדרות, ללמידה בלבד: <strong>הזרקת תקלות</strong> (<span class="en">fault injection</span>). <code>NOTES_DELAY_SECONDS</code> גורם לכל בקשת <code>/v1</code> לחכות לפני שהיא מתחילה (שירות איטי שעדיין עושה את העבודה), ו-<code>NOTES_FAIL_AFTER_SAVE=1</code> שומר את ההערה ואז עונה 500. ב-<span class="en">prod</span> השירות מסרב לעלות איתן.</p>
+<div class="codebox">
+  <div class="label"><span>notes-service\notes\api.py (in create_app)</span></div>
+<pre><code>    def slow_down() -&gt; None:
+        """Fault injection: a slow service. It still does the work, only late."""
+        time.sleep(settings.delay_seconds)
+
+    # Every /v1 endpoint: the key first, then the (usually zero) delay.
+    v1 = [Depends(key_checker(settings.api_key)), Depends(slow_down)]</code></pre>
+</div>
+  <p>שמונה בדיקות ב-<code>tests\test_api.py</code> (בצ'קפוינט), ואז, מתוך <code>notes-service</code>: <code>uv run pytest</code>, <code>ruff check</code>, <code>ruff format --check</code>, <code>mypy notes</code>. ואז <code>git add notes-service</code>, <code class="wrap">git commit -m "Add the notes service: its own project, database and tests"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>מריצים אותו לבד</h3>
+  <p>צרו מפתח (<code class="wrap">uv run python -c "import secrets; print(secrets.token_urlsafe(24))"</code>), והוסיפו ל-<code>.env</code> של הצ'אט שתי שורות: <code>NOTES_URL=http://127.0.0.1:8100</code> ו-<code>NOTES_API_KEY=</code> עם המפתח. ב-<span class="en">terminal</span> חדש, שנקרא לו <strong>חלון 1</strong>:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell, window 1: the notes service</span></div>
+<pre><code>cd ~\projects\my-agent\notes-service
+$env:NOTES_API_KEY = "&lt;the same key as in .env&gt;"
+uv run uvicorn notes.api:create_app --factory --port 8100</code></pre>
+</div>
+  <p>ב<strong>חלון 3</strong>, מתיקיית הפרויקט, בקשה ישירה. <code>Invoke-RestMethod</code> של PowerShell שולח JSON בלי בעיית המירכאות של <code>curl.exe</code> (פרק 4):</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell, window 3</span></div>
+<pre><code>$h = @{ "X-API-Key" = "&lt;the key&gt;" }
+Invoke-RestMethod http://127.0.0.1:8100/v1/notes -Method Post -Headers $h -ContentType "application/json" -Body '{"conversation_id": "test", "text": "buy milk"}'
+Invoke-RestMethod "http://127.0.0.1:8100/v1/notes?conversation_id=test"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>id                               conversation_id text     created_at
+--                               --------------- ----     ----------
+560b044abaf245bba8a8e0403253be0d test            buy milk 2026-11-18T18:08:59.237561
+Invoke-RestMethod : {"detail":"Missing or wrong X-API-Key header."}</code></pre>
+</div>
+  <p>בבקשה השנייה שכחנו את <code>-Headers $h</code>: 401. עם המפתח, אותה הערה חוזרת ברשימה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>הצ'אט קורא לשירות</h3>
+  <p>הצ'אט צריך לקוח HTTP. <code>httpx2</code> כבר מותקן (ה-SDK של Anthropic משתמש בו), אבל עכשיו הקוד שלנו משתמש בו ישירות, ולכן הוא תלות מוצהרת: <code>uv add httpx2</code> (וגם <code>uv remove --dev httpx2</code>, כי הוא כבר לא רק לבדיקות). ב-<code>Settings</code> שני שדות: <code>notes_url</code> (מ-<code>NOTES_URL</code>) ו-<code>notes_api_key</code> (מ-<code>read_secret("NOTES_API_KEY")</code>). והמודול שהוא המקום היחיד שיודע שההערות מדברות HTTP:</p>
+<div class="codebox">
+  <div class="label"><span>agent\notes.py (first version)</span></div>
+<pre><code>@dataclass(frozen=True)
+class Note:
+    id: str
+    text: str
+
+
+def to_note(data: dict[str, Any]) -&gt; Note:
+    """Take the fields we use from the service's JSON; ignore any field added later."""
+    return Note(id=data["id"], text=data["text"])
+
+
+class NotesClient:
+    """Calls the notes service's /v1 API."""
+
+    def __init__(
+        self, base_url: str, api_key: str, transport: httpx2.BaseTransport | None = None
+    ) -&gt; None:
+        # Tests pass a fake transport, so they never open a connection.
+        self.http = httpx2.Client(
+            base_url=base_url, headers={"X-API-Key": api_key}, transport=transport
+        )
+
+    def add(self, conversation_id: str, text: str) -&gt; Note:
+        response = self.http.post(
+            "/v1/notes", json={"conversation_id": conversation_id, "text": text}
+        )
+        response.raise_for_status()
+        return to_note(response.json())</code></pre>
+</div>
+  <p>באותו קובץ: <code>list</code> (אותו דבר עם <code>GET</code>), <code>make_notes(settings)</code> שמחזירה <code>None</code> כש-<code>NOTES_URL</code> ריק, ו-<code>note_command(notes, conversation_id, text)</code>, שמחזירה את התשובה ל-<code>/note</code> ול-<code>/notes</code>, או <code>None</code> להודעה רגילה. ב-<code>/chat</code> של <code>api.py</code>, לפני המודל:</p>
+<div class="codebox">
+  <div class="label"><span>agent\api.py (in chat)</span></div>
+<pre><code>        try:
+            turns = len(conversations.messages(conversation_id)) // 2  # 404 for an unknown id
+            # /note and /notes go to the notes service; anything else goes to the model.
+            reply = note_command(notes, conversation_id, request.message)
+            if reply is None:
+                reply = conversations.send(conversation_id, request.message)
+                turns += 1</code></pre>
+</div>
+  <p>וב-<code>chat_loop</code> של <code>cli.py</code> אותו <code>note_command</code>, אחרי <code>/history</code>. ב-<code>.env.example</code> שתי השורות החדשות, בהערה. ב<strong>חלון 2</strong>: <code>uv run uvicorn agent.api:create_app --factory</code>. בחלון 3:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell, window 3</span></div>
+<pre><code>uv run python scripts/ask.py "hello"
+$c = "&lt;the conversation id it printed&gt;"
+uv run python scripts/ask.py "/note buy milk" --conversation $c
+uv run python scripts/ask.py "/notes" --conversation $c</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>[mock reply, turn 1] You said: hello
+(conversation 80eed093207849aa95fd887bcee290be, turns: 1)
+Noted: buy milk
+...
+- buy milk
+- call Dana on Sunday</code></pre>
+</div>
+  <p>(שם נוספה בינתיים גם <code>/note call Dana on Sunday</code>.) <code>git add -A</code>, <code class="wrap">git commit -m "Call the notes service from the chat: /note and /notes"</code>. עובד. עכשיו שוברים.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>מרגישים: השירות למטה, השירות איטי</h3>
+  <p>בחלון 1, <kbd>Ctrl</kbd>+<kbd>C</kbd>. שירות ההערות למטה. בחלון 3:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell, window 3</span></div>
+<pre><code>uv run python scripts/ask.py "/note buy bread" --conversation $c
+uv run python scripts/ask.py "hello again" --conversation $c</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output, and the last line of window 2</span></div>
+<pre><code>The API answered 500: Internal Server Error
+[mock reply, turn 2] You said: hello again
+(conversation 68fea2e498a04043a5b1340ca31c904d, turns: 2)
+
+httpx2.ConnectError: [WinError 10061] No connection could be made because the target machine actively refused it</code></pre>
+</div>
+  <p>החדשות הטובות: הצ'אט הרגיל עובד, כי הוא לא תלוי בהערות. הרעות: <code>/note</code> מחזיר 500, שגיאה שלא טיפלנו בה. עכשיו שירות איטי. בחלון 1: <code>$env:NOTES_DELAY_SECONDS = "8"</code>, והפעילו שוב את השירות (חץ למעלה). בחלון 3:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell, window 3</span></div>
+<pre><code>$t = Get-Date
+uv run python scripts/ask.py "/note buy eggs" --conversation $c
+"{0:N1} s" -f ((Get-Date) - $t).TotalSeconds</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output, and the last line of window 2</span></div>
+<pre><code>The API answered 500: Internal Server Error
+5.6 s
+
+httpx2.ReadTimeout: timed out</code></pre>
+</div>
+  <p>אחרי 5 שניות, ברירת המחדל של <code>httpx2</code>, הצ'אט ויתר. אבל שירות ההערות לא ידע שוויתרו עליו. עצרו אותו, <code>Remove-Item Env:NOTES_DELAY_SECONDS</code>, הפעילו שוב, ו-<code>/notes</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>- buy milk
+- buy eggs</code></pre>
+</div>
+  <p>המשתמש קיבל שגיאה, וההערה נשמרה. זה הלקח החשוב בפרק: <strong><span class="en">timeout</span> לא מבטל את העבודה בצד השני</strong>. אחרי <span class="en">timeout</span> אתם לא יודעים מה קרה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span><span class="en">Timeout</span>, ניסיונות חוזרים, ותשובה בכבוד</h3>
+  <p>שלושה תיקונים ב-<code>agent\notes.py</code>: <span class="en">timeout</span> שאנחנו בוחרים (שתי שניות, <code>NOTES_TIMEOUT</code>, ב-<code>Settings</code> כ-<code>notes_timeout</code> עם <code>read_seconds</code> שבודקת שזה מספר חיובי); ניסיונות חוזרים עם <span class="en">backoff</span> ו-<span class="en">jitter</span>; ושגיאה אחת, <code>NotesUnavailable</code>, שהפקודות הופכות למשפט:</p>
+<div class="codebox">
+  <div class="label"><span>agent\notes.py (the new parts)</span></div>
+<pre><code><span class="cm"># Statuses that may pass if we ask again: overloaded, or failing for a moment.</span>
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+
+class NotesUnavailable(Exception):
+    """The notes service gave no answer we can use: down, too slow, or failing."""
+
+<span class="cm"># In NotesClient.__init__: timeout=2.0, retries=2, backoff=0.2, and httpx2.Client(..., timeout=timeout)</span>
+
+    def _request(self, method: str, path: str, **kwargs: Any) -&gt; Any:
+        """One call, tried up to 1 + retries times. The JSON of the answer."""
+        for attempt in range(self.retries + 1):
+            try:
+                response = self.http.request(method, path, **kwargs)
+            except httpx2.TransportError as error:  # refused, timed out, connection cut
+                problem = repr(error)
+            else:
+                if response.status_code not in RETRY_STATUSES:
+                    if response.is_error:  # 4xx: our request is wrong; again will not help
+                        raise NotesUnavailable(f"{method} {path}: {response.status_code}")
+                    return response.json()
+                problem = f"status {response.status_code}"
+            if attempt &lt; self.retries:
+                # Exponential backoff (0.2 s, 0.4 s, ...) with full jitter: a random part
+                # of it, so many clients that failed together do not return together.
+                delay = random.uniform(0, self.backoff * 2**attempt)
+                log.warning("notes: %s %s: %s; retry in %.2f s", method, path, problem, delay)
+                time.sleep(delay)
+        raise NotesUnavailable(f"{method} {path}: {problem}, {self.retries + 1} attempts")</code></pre>
+</div>
+  <p><code>add</code> ו-<code>list</code> עוברים דרך <code>_request</code>. ב-<code>note_command</code>, כל הגוף עטוף ב-<code>try</code>, ו-<code>except NotesUnavailable</code> רושם ללוג ומחזיר <code class="wrap">"Notes are unavailable right now (the chat still works). Try again later."</code>. זה ה-<span class="en">graceful degradation</span>. ועוד שינוי אחד, ב-<code>/ready</code> של הצ'אט: הוא <em>מדווח</em> על ההערות, ולא <em>תלוי</em> בהן:</p>
+<div class="codebox">
+  <div class="label"><span>agent\api.py (in ready)</span></div>
+<pre><code>        # Notes are reported, never required: without them the chat still works, so a notes
+        # outage must not take this copy out of service.
+        if notes is not None:
+            info["notes"] = "ok" if notes.ready() else "unreachable"</code></pre>
+</div>
+  <p>(<code>notes.ready()</code> הוא ניסיון אחד של <code>GET /ready</code>, עם שנייה אחת. לו <code>/ready</code> היה נכשל בגלל ההערות, ה-<span class="en">load balancer</span> של פרק 10 היה מוציא את כל העותקים של הצ'אט משירות, ותקלה בשירות קטן הייתה מפילה את הגדול: <strong>כשל מתגלגל</strong>, <span class="en">cascading failure</span>.) ב-<code>tests\test_notes.py</code> בדיקות עם <code>httpx2.MockTransport</code>, שמשחק את שירות ההערות בלי רשת: <span class="en">timeout</span> שמנסים שוב, 401 שלא, ושלוש תשובות 503 שנגמרות ב-<code>NotesUnavailable</code>, וגם בדיקה ש-<code>/chat</code> עונה כשההערות למטה. <span class="en">Commit</span>, הפעילו מחדש את חלון 2, ושירות איטי, הפעם 3 שניות (יותר מה-<span class="en">timeout</span>):</p>
+<div class="codebox output">
+  <div class="label"><span>/note buy milk, with NOTES_DELAY_SECONDS=3; then agent.log (shortened)</span></div>
+<pre><code>Notes are unavailable right now (the chat still works). Try again later.
+6.9 s
+
+WARNING agent.notes: notes: POST /v1/notes: ReadTimeout('timed out'); retry in 0.14 s
+WARNING agent.notes: notes: POST /v1/notes: ReadTimeout('timed out'); retry in 0.21 s
+ERROR agent.notes: notes unavailable</code></pre>
+</div>
+  <p>טוב יותר: תשובה ברורה, וזמן שנקבע מראש (שלוש פעמים 2 שניות, ועוד ההמתנות). עכשיו "חצי-הצליח": בחלון 1, <code>$env:NOTES_FAIL_AFTER_SAVE = "1"</code> (ובלי השהייה), הפעלה מחדש, <code>/note call Dana</code>, ואז בלי התקלה, <code>/notes</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>/notes after both experiments</span></div>
+<pre><code>- buy milk
+- buy milk
+- buy milk
+- call Dana
+- call Dana
+- call Dana</code></pre>
+</div>
+  <p>כל ניסיון חוזר יצר הערה. ה-<span class="en">retry</span> שתיקן את הבעיה הקודמת יצר בעיה חדשה: <strong>כפילויות</strong>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">6</span><span class="en">Idempotency key</span>: הערה אחת, גם אחרי שלושה ניסיונות</h3>
+  <p>בצד הלקוח, שתי שורות ב-<code>add</code>. המפתח נוצר פעם אחת לכל הערה, <em>מחוץ</em> ללולאת הניסיונות:</p>
+<div class="codebox">
+  <div class="label"><span>agent\notes.py</span></div>
+<pre><code>    def add(self, conversation_id: str, text: str) -&gt; Note:
+        body = {"conversation_id": conversation_id, "text": text}
+        # One key for this note, sent with every attempt: the service saves it only once.
+        headers = {"Idempotency-Key": uuid.uuid4().hex}
+        return to_note(self._request("POST", "/v1/notes", json=body, headers=headers))</code></pre>
+</div>
+  <p>ובצד השירות, מה שכבר כתוב ב-<code>POST</code> מצעד 1:</p>
+<div class="codebox">
+  <div class="label"><span>notes-service\notes\api.py (add_note)</span></div>
+<pre><code>        with sessions.begin() as session:
+            if idempotency_key and (row := replay(session, idempotency_key, note)):
+                response.status_code = 200  # not created now: an earlier attempt created it
+                return to_note(row)
+            row = NoteRow(id=uuid.uuid4().hex, idempotency_key=idempotency_key, **note.model_dump())
+            session.add(row)
+            # The INSERT. If two requests with one key race, the unique column refuses the
+            # second (an error, 500); the client retries it, and the retry gets the replay.
+            session.flush()
+            saved = to_note(row)</code></pre>
+</div>
+  <p><code>replay</code> מחפש הערה עם אותו מפתח. אם היא קיימת עם תוכן אחר, זה באג אצל הלקוח, והתשובה 409 (תרגיל 2). העמודה <code>unique</code> היא הערובה האמיתית: גם שתי בקשות באותו רגע לא ייצרו שתי הערות. בבדיקות: מפתח אחד בכל הניסיונות של <code>add</code>. <span class="en">Commit</span>, הפעלה מחדש של חלון 2, ושוב שני הניסויים, בשיחה חדשה:</p>
+<div class="codebox output">
+  <div class="label"><span>NOTES_FAIL_AFTER_SAVE=1: window 3, then window 1</span></div>
+<pre><code>Noted: call Dana
+
+INFO:     127.0.0.1:62281 - "POST /v1/notes HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62281 - "POST /v1/notes HTTP/1.1" 200 OK</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>NOTES_DELAY_SECONDS=3, then /notes without the delay</span></div>
+<pre><code>Notes are unavailable right now (the chat still works). Try again later.
+6.7 s
+...
+- call Dana
+- buy milk</code></pre>
+</div>
+  <p>בראשון, הניסיון השני קיבל את ההערה שהראשון שמר (200), והמשתמש קיבל "<span class="en">Noted</span>". בשני, כל הניסיונות עברו את ה-<span class="en">timeout</span>, אבל נשמרה הערה אחת. גבול אחד נשאר: מי שמקליד שוב <code>/note buy milk</code> אחרי "<span class="en">unavailable</span>" יוצר פעולה חדשה, עם מפתח חדש. מפתח שמגן גם על זה נוצר אצל הלקוח הראשון, בדף, פעם אחת ללחיצה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">7</span>שני שירותים ב-compose</h3>
+  <p>עצרו את חלונות 1 ו-2. ל-<code>notes-service</code> <code>Dockerfile</code> משלו, כמו של הצ'אט, עם פורט 8100 ו-<code>HEALTHCHECK</code> על <code>/ready</code>, ו-<code>.dockerignore</code> משלו. ב-<code>.dockerignore</code> של הצ'אט שורה חדשה, <code>notes-service/</code>: הקוד של שירות אחד לא נכנס ל-<span class="en">image</span> של אחר. ב-<code>compose.yaml</code>:</p>
+<div class="codebox">
+  <div class="label"><span>compose.yaml (the new parts)</span></div>
+<pre><code>  api:
+    ...
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent  # wins over .env
+      NOTES_URL: http://notes:8100  # a service's name is its address inside compose
+    ...
+    # No depends_on notes: the chat starts, and works, without it.
+
+  notes-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: notes
+      POSTGRES_PASSWORD: notes  # local only, like db above
+      POSTGRES_DB: notes
+    volumes:
+      - notesdata:/var/lib/postgresql/data
+    healthcheck: ...  # pg_isready -U notes -d notes, like db
+
+  notes:
+    build: ./notes-service
+    environment:
+      DATABASE_URL: postgresql+psycopg://notes:notes@notes-db:5432/notes
+      NOTES_API_KEY: ${NOTES_API_KEY:?set NOTES_API_KEY in .env}  # compose reads .env too
+      # Fault injection for chapter 11's experiments: off unless set in the terminal.
+      NOTES_DELAY_SECONDS: ${NOTES_DELAY_SECONDS:-0}
+      NOTES_FAIL_AFTER_SAVE: ${NOTES_FAIL_AFTER_SAVE:-0}
+    ports:
+      - "127.0.0.1:8100:8100"  # for you and your tools; the chat uses the network inside
+    depends_on:
+      notes-db:
+        condition: service_healthy</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose up --build -d --wait
+docker compose ps -a --format "table {{.Service}}\t{{.Status}}"
+docker compose exec db psql -U agent -c "\dt"
+docker compose exec notes-db psql -U notes -c "SELECT conversation_id, text FROM notes;"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (after one /note buy milk; shortened)</span></div>
+<pre><code>SERVICE    STATUS
+api        Up 12 seconds (healthy)
+db         Up 21 seconds (healthy)
+migrate    Exited (0) 12 seconds ago
+notes      Up 16 seconds (healthy)
+notes-db   Up 21 seconds (healthy)
+ public | alembic_version | table | agent
+ public | conversations   | table | agent
+ public | messages        | table | agent
+         conversation_id          |   text
+----------------------------------+----------
+ e475748044df4f52a21dd0371d9e47b3 | buy milk</code></pre>
+</div>
+  <p>שני בסיסי נתונים, ואף אחד מהם לא רואה את הטבלאות של השני. ניסויי התקלות עובדים גם כאן: <code>$env:NOTES_DELAY_SECONDS = "3"</code>, ו-<code>docker compose up -d notes</code> יוצר את <code>notes</code> מחדש עם ההגדרה (תרגילים 1 ו-3). <code>git add -A</code>, <span class="en">commit</span>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">8</span>CI, <span class="en">deploy</span>, וגרסה 0.11.0</h3>
+  <p>שני פרויקטים, ולכן ב-<code>ci.yml</code> <span class="en">job</span> שלישי, <code>notes</code>, עם אותן ארבע בדיקות בתיקייה שלו, וב-<span class="en">job</span> של ה-<span class="en">image</span> בנייה ובדיקת הפעלה גם ל-<code>my-agent-notes:ci</code>:</p>
+<div class="codebox">
+  <div class="label"><span>.github\workflows\ci.yml (the new job, shortened)</span></div>
+<pre><code>  notes:
+    name: Notes service
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: notes-service  # its own project: its own lock file and tools
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.11.14"
+          enable-cache: true
+          cache-dependency-glob: notes-service/uv.lock
+      - name: Install the locked packages
+        run: uv sync --locked
+      ...
+      - name: Type check
+        run: uv run mypy notes</code></pre>
+</div>
+  <p><code>ci_local.py</code> לא הכיר <code>working-directory</code>, אז מלמדים אותו: <code class="wrap">job.get("defaults", {}).get("run", {}).get("working-directory", ".")</code>, או ה-<code>working-directory</code> של הצעד, נשלח כ-<code>cwd=</code> ל-<code>subprocess.run</code> ומודפס לפני הפקודה. ב-<code>tests\test_python_version.py</code> הבדיקה רצה גם על <code>notes-service/Dockerfile</code> ובודקת שה-<code>.python-version</code> שלו זהה. ואז, כמו בפרק 10, עם <code>db</code> של compose למעלה:</p>
+<div class="codebox output">
+  <div class="label"><span>uv run --locked python scripts/ci_local.py (shortened)</span></div>
+<pre><code>============================= 98 passed in 29.14s =============================
+=== job notes: Notes service
+--- step 3: Install the locked packages
+    notes-service$ uv sync --locked
+...
+============================= 10 passed in 4.96s ==============================
+...
+0.11.0
+0.1.0
+All steps passed.</code></pre>
+</div>
+  <p>ב-<code>deploy\compose.yaml</code> נוספים <code>notes-db</code> ו-<code>notes</code> בדיוק כמו <code>db</code> ו-<code>api</code>: סיסמה מקובץ, <code>restart: unless-stopped</code>, <span class="en">volume</span> משלו, ו-<code>image: my-agent-notes:${NOTES_IMAGE_TAG}</code>. ל-<code>notes</code> אין <code>ports</code> בכלל: רק ה-<code>api</code> מגיע אליו, ברשת של הסביבה. ל-<code>api</code> נוספים <code>NOTES_URL: http://notes:8100</code> ו-<code>NOTES_API_KEY_FILE</code>; ל-<code>make_secrets.py</code> שני סודות, <code>notes_db_password</code> ו-<code>notes_api_key</code>; ו-<code>deploy.py</code> נכשל אם <code>/ready</code> לא אומר <code>"notes": "ok"</code>: הצ'אט היה עונה 200 גם בלי הערות, ולכן הבדיקה הזו לא תבוא מעצמה. גרסה כמו ב-<code>CONTRIBUTING.md</code>: <code>version = "0.11.0"</code>, <code>uv lock</code>, סעיף ב-<code>CHANGELOG.md</code>, ו-README (סעיף "<span class="en">The notes service</span>", משתנים, פקודות). לשירות ההערות גרסה משלו, 0.1.0, ב-<code>pyproject.toml</code> שלו, ו-README משלו.</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git add -A
+git commit -m "Wire the notes service into CI and deploy; version 0.11.0"
+git switch main
+git merge feature/notes-service
+git branch -d feature/notes-service
+git tag -a v0.11.0 -m "my-agent 0.11.0"
+docker build -t my-agent:0.11.0 .
+docker build -t my-agent-notes:0.1.0 notes-service
+uv run python scripts/make_secrets.py staging</code></pre>
+</div>
+  <p>ב-<code>deploy\staging.env</code>: <code>IMAGE_TAG=0.11.0</code> ושורה חדשה, <code>NOTES_IMAGE_TAG=0.1.0</code>. <code class="wrap">git commit -am "Deploy 0.11.0 and notes 0.1.0 to staging"</code>, ו-<code>uv run python scripts/deploy.py staging</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>kept     deploy\secrets\staging\db_password.txt
+kept     deploy\secrets\staging\agent_api_key.txt
+created  deploy\secrets\staging\notes_db_password.txt
+created  deploy\secrets\staging\notes_api_key.txt
+=== deploy my-agent:0.11.0 to staging
+...
+ Container my-agent-staging-notes-1 Healthy
+ Container my-agent-staging-api-1 Healthy
+--- 3. /ready reports the new version
+    {'status': 'ready', 'database': 'ok', 'version': '0.11.0', 'environment': 'staging', 'notes': 'ok'}
+--- 4. smoke test: one message, then delete the conversation
+    ok: [mock reply, turn 1] You said: smoke test
+staging runs my-agent:0.11.0.</code></pre>
+</div>
+  <p>אחרי בדיקה, אותו דבר ל-<span class="en">prod</span>. מעכשיו יש שני <span class="en">deploys</span>: שינוי של <code>NOTES_IMAGE_TAG</code> בלבד פורס רק את שירות ההערות, והצ'אט לא נוגע. זה היתרון שבשבילו פיצלנו. והמחיר: שני <span class="en">images</span>, שני בסיסי נתונים, ארבעה סודות, ושלושה <span class="en">jobs</span> ב-CI, בשביל תכונה של מאה שורות.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.9</span>תרגילים</h2>
+
+<p>תרגילים 1 עד 4 רצים על compose מצעד 7 (<code>docker compose up -d --wait</code>), עם <code>$c</code> של שיחה שיש בה הודעה. כל שינוי בקוד על ענף משלו, כרגיל, עם שורה תחת <span class="en">Unreleased</span> ב-<code>CHANGELOG.md</code>. פתרונות, כולל הפלטים, <a href="solutions/chapter-11.html">בדף נפרד</a>.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · השירות השני נופל</h3><span class="level">מודרך</span></div>
+  <ol>
+    <li><code>docker compose stop notes</code>.</li>
+    <li>מדדו את <code>/note buy bread</code>: <code>$t = Get-Date</code>, <code>ask.py</code>, ואז <code>"{0:N1} s" -f ((Get-Date) - $t).TotalSeconds</code>. שלחו גם <code>hello again</code>.</li>
+    <li><code class="wrap">curl.exe -s -w " %{http_code}`n" http://127.0.0.1:8000/ready</code>, ו-<code class="wrap">docker compose exec api grep -m 2 "WARNING agent.notes" agent.log</code>.</li>
+    <li><code>docker compose start notes</code>, ו-<code>/notes</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex1">כמה זמן לקח <code>/note</code>, ולמה לא היה מיידי, אם השירות פשוט לא שם? מה ענה <code>/ready</code>, ולמה זו התשובה הנכונה? נשמרה ההערה?</label>
+  <textarea class="answer" id="n-ex1" data-id="c11-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c11-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · אותו מפתח פעמיים</h3><span class="level">מודרך</span></div>
+  <p>ישר מול שירות ההערות, עם מפתח שאתם בוחרים:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$h = @{ "X-API-Key" = "&lt;NOTES_API_KEY from .env&gt;"; "Idempotency-Key" = "try-1" }
+$url = "http://127.0.0.1:8100/v1/notes"
+$body = '{"conversation_id": "test", "text": "buy milk"}'
+$r = Invoke-WebRequest $url -Method Post -Headers $h -ContentType "application/json" -Body $body -UseBasicParsing
+"$($r.StatusCode) $($r.Content)"</code></pre>
+</div>
+  <p>הריצו את שתי השורות האחרונות פעמיים. אחר כך שנו ב-<code>$body</code> את <code>buy milk</code> ל-<code>sell milk</code>, ושוב.</p>
+  <label class="answer-label" for="n-ex2">מה היו הקוד וה-<code>id</code> בכל פעם? למה השירות לא מחזיר פשוט את ההערה הקיימת גם במקרה השלישי?</label>
+  <textarea class="answer" id="n-ex2" data-id="c11-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c11-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · כמה זמן מחכה המשתמש</h3><span class="level mid">בינוני</span></div>
+  <p>לפני שמודדים, חשבו: עם <span class="en">timeout</span> של 2 שניות, שני <span class="en">retries</span> ו-<span class="en">backoff</span> של 0.2, מה הזמן הארוך ביותר ש-<code>/note</code> יכול לקחת? אחר כך: <code>$env:NOTES_DELAY_SECONDS = "3"</code>, <code>docker compose up -d --wait notes</code>, ושלוש פעמים <code class="wrap">Measure-Command { uv run python scripts/ask.py "/note try 1" --conversation $c } | ForEach-Object { "{0:N1} s" -f $_.TotalSeconds }</code> (עם <code>try 2</code>, <code>try 3</code>). הוסיפו ל-<code>.env</code> את <code>NOTES_TIMEOUT=0.5</code>, <code>docker compose up -d --wait api</code>, ושוב שלוש מדידות. ואז החזירו הכול: מחקו את השורה, <code>Remove-Item Env:NOTES_DELAY_SECONDS</code>, ושוב <code>up -d --wait notes api</code>. לבסוף, <code>/notes</code>.</p>
+  <label class="answer-label" for="n-ex3">החישוב שלכם, והמדידות. כמה הערות <code>try</code> נשמרו, ולמה? מה הסכנה ב-<span class="en">timeout</span> קצר מדי, ואיך הייתם בוחרים את המספר?</label>
+  <textarea class="answer" id="n-ex3" data-id="c11-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c11-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · מפסק</h3><span class="level mid">בינוני</span></div>
+  <p>בתרגיל 1 כל <code>/note</code> חיכה כמה שניות לשירות שלא קיים. כתבו ב-<code>agent\notes.py</code> מחלקה <code class="wrap">CircuitBreaker(threshold=3, cooldown=30.0, clock=time.monotonic)</code> עם <code>allow()</code>, <code>success()</code> ו-<code>failure()</code>: אחרי 3 קריאות שנכשלו ברצף היא פתוחה, ו-<code>allow()</code> מחזירה <code>False</code> עד שעברו 30 שניות. חברו אותה ל-<code>_request</code>: בהתחלה <code class="wrap">if not self.breaker.allow(): raise NotesUnavailable(...)</code>, <code>success()</code> כשהשירות ענה, <code>failure()</code> לפני ה-<code>raise</code> שבסוף. כתבו בדיקה עם שעון מזויף (<code>clock=lambda: now[0]</code>). אחר כך <code>docker compose up -d --build --wait api</code>, <code>stop notes</code>, ומדדו חמישה <code>/note</code> ברצף.</p>
+  <label class="answer-label" for="n-ex4">מה היו חמש המדידות? מה קרה ל-<code>/note</code> מיד אחרי <code>start notes</code>, ומה אחרי 30 שניות? למה המפסק טוב גם לשירות ההערות עצמו, ולא רק למשתמש?</label>
+  <textarea class="answer" id="n-ex4" data-id="c11-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c11-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · בדיקת חוזה</h3><span class="level mid">בינוני</span></div>
+  <p>ב-<code>notes-service\tests\test_contract.py</code> כתבו שתי בדיקות: ש-<code>/openapi.json</code> עדיין מכיל את <code>GET</code> ו-<code>POST</code> של <code>/v1/notes</code>, ואת <code>GET</code> ו-<code>DELETE</code> של <code>/v1/notes/{note_id}</code>; ושהערה שנוצרה מכילה לפחות <code>id</code>, <code>conversation_id</code>, <code>text</code> ו-<code>created_at</code> (<code>keys() &gt;=</code>, לא <code>==</code>: שדה חדש מותר). <span class="en">Commit</span>. עכשיו "שפרו" את השם: ב-<code>api.py</code>, <code>text: str</code> של <code>Note</code> הופך ל-<code>body: str</code> (וב-<code>to_note</code> בהתאם). הריצו <code>uv run pytest</code>, ואז <code>git restore notes/api.py</code>.</p>
+  <label class="answer-label" for="n-ex5">אילו בדיקות נכשלו? מה היה קורה לצ'אט אם השינוי היה נפרס? איך עושים את שינוי השם הזה בלי לשבור אף אחד?</label>
+  <textarea class="answer" id="n-ex5" data-id="c11-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c11-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · מפת המערכת</h3><span class="level open">פתוח</span></div>
+  <p>כתבו <code>docs\architecture.md</code> בשביל מי שמצטרף מחר: אילו שירותים יש, איזה קוד וגרסה לכל אחד, מי מחזיק אילו נתונים, מי קורא למי ועם אילו מגבלות זמן, ומה עובד ומה לא כשכל אחד מהם למטה. הוסיפו סעיף "<span class="en">Known gaps</span>": מה עדיין לא נכון במערכת. <span class="en">Commit</span> ו-<span class="en">push</span>.</p>
+  <label class="answer-label" for="n-ex6">מחקו שיחה שיש לה הערות (<code>DELETE /conversations/{id}</code>), ובדקו ב-<code>notes-db</code> מה נשאר. למה אי אפשר לתקן את זה ב-<span class="en">transaction</span> אחת? והאם, בסוף, הייתם מפצלים את ההערות בפרויקט הזה? נמקו.</label>
+  <textarea class="answer" id="n-ex6" data-id="c11-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c11-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.10</span>בדקו את עצמכם</h2>
+
+<p>סמנו רק מה שאתם מסוגלים להסביר בקול רם לאדם אחר, בלי להציץ בפרק.</p>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c11-chk1"><span>אני יודע/ת להשוות בין <span class="en">monolith</span>, <span class="en">modular monolith</span> ו-<span class="en">microservices</span>, ולתת סיבה טובה, וסיבה רעה, לפצל שירות.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c11-chk2"><span>אני יודע/ת למה לכל שירות בסיס נתונים משלו, ומה מפסידים בגלל זה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c11-chk3"><span>אני יודע/ת מתי קריאה סינכרונית מתאימה ומתי הודעה אסינכרונית.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c11-chk4"><span>אני יודע/ת למנות ארבע דרכים שבהן קריאה ברשת נכשלת, ולומר בכל אחת אם העבודה נעשתה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c11-chk5"><span>אני יודע/ת למה <span class="en">timeout</span> לא מבטל את העבודה בצד השני.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c11-chk6"><span>אני יודע/ת על מה מנסים שוב ועל מה לא, ולמה <span class="en">backoff</span> צריך <span class="en">jitter</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c11-chk7"><span>אני יודע/ת איך <span class="en">idempotency key</span> מונע כפילויות, למה הוא נוצר מחוץ ללולאת הניסיונות, ומה הוא לא מכסה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c11-chk8"><span>אני יודע/ת להסביר <span class="en">circuit breaker</span> ושלושת המצבים שלו.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c11-chk9"><span>אני יודע/ת למה <code>/ready</code> של הצ'אט לא נכשל כשההערות למטה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c11-chk10"><span>אני יודע/ת מה מותר לשנות בתוך <code>/v1</code>, ואיך עושים שינוי שובר.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.11</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td>אחרי <code>uv init</code>: <code>Adding `notes-service` as member of workspace</code>, ו-<code>pyproject.toml</code> של הצ'אט השתנה</td><td><code>uv init</code> בתוך פרויקט הופך אותו ל-<span class="en">workspace</span></td><td><code>git restore pyproject.toml uv.lock</code>, מחקו את התיקייה, ו-<code>uv init --bare --no-workspace</code></td></tr>
+  <tr><td><code class="wrap">Notes are not set up here (NOTES_URL is not set).</code></td><td>אין <code>NOTES_URL</code> ב-<code>.env</code>, או שהשרת עלה לפני שהוספתם</td><td>הוסיפו, והפעילו את השרת מחדש</td></tr>
+  <tr><td><code>/note</code> עונה <span class="en">unavailable</span>, והשירות למעלה; ב-<code>agent.log</code> <code>NotesUnavailable: POST /v1/notes: 401</code></td><td>המפתח של הצ'אט שונה מזה של שירות ההערות</td><td>אותו <code>NOTES_API_KEY</code> בשני המקומות</td></tr>
+  <tr><td><code>uvicorn</code> של ההערות: <code>ConfigError: NOTES_API_KEY is not set.</code></td><td>שירות ההערות לא קורא את <code>.env</code> של הצ'אט</td><td><code>$env:NOTES_API_KEY = "..."</code> בחלון שלו</td></tr>
+  <tr><td><code class="wrap">required variable NOTES_API_KEY is missing a value: set NOTES_API_KEY in .env</code></td><td><code>docker compose</code> בלי <code>NOTES_API_KEY</code> ב-<code>.env</code></td><td>הוסיפו אותו ל-<code>.env</code></td></tr>
+  <tr><td><code class="wrap">ports are not available: exposing port TCP 127.0.0.1:8100</code> ... <code>Only one usage of each socket address</code></td><td><code>uvicorn</code> של ההערות מצעד 2 עדיין רץ</td><td>עצרו את אחד מהם</td></tr>
+  <tr><td>אחרי שינוי ב-<code>agent\notes.py</code>, ה-compose מתנהג כמו קודם</td><td>ה-<span class="en">image</span> לא נבנה מחדש</td><td><code>docker compose up -d --build --wait api</code></td></tr>
+  <tr><td><code class="wrap">FAILED: the api cannot reach the notes service (unreachable)</code></td><td>ב-<span class="en">deploy</span>, <code>notes</code> לא עלה, או <code>NOTES_URL</code> שגוי</td><td><code>docker compose @staging logs notes --tail 20</code></td></tr>
+  <tr><td>הערות כפולות</td><td>ניסיונות חוזרים בלי <code>Idempotency-Key</code>, או אדם ששלח שוב</td><td>צעד 6; ולמשתמש, מפתח שנוצר בדף</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.12</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>architecture</dt><dd>ההחלטות שקשה לשנות אחר כך: חלוקת הקוד, מי מחזיק אילו נתונים, ומי מדבר עם מי.</dd>
+  <dt>monolith</dt><dd>מערכת שהיא תהליך אחד, קוד אחד ובסיס נתונים אחד.</dd>
+  <dt>modular monolith</dt><dd><span class="en">monolith</span> עם מודולים שגבולותיהם נשמרים: כל מודול ניגש רק לנתונים שלו.</dd>
+  <dt>microservices</dt><dd>מערכת של שירותים קטנים, כל אחד עם קוד, נתונים ו-<span class="en">deploy</span> משלו, שמדברים ברשת.</dd>
+  <dt>monorepo</dt><dd><span class="en">repository</span> אחד שמחזיק כמה פרויקטים או שירותים.</dd>
+  <dt>Conway's law</dt><dd>מבנה המערכת נוטה להעתיק את מבנה הצוותים שבונים אותה.</dd>
+  <dt>sync / async</dt><dd>קריאה שמחכה לתשובה / הודעה שנשלחת ומטופלת מאוחר יותר, בלי שהשולח מחכה.</dd>
+  <dt>timeout</dt><dd>הזמן המרבי שמחכים לתשובה. לא מבטל את העבודה בצד השני.</dd>
+  <dt>retry</dt><dd>ניסיון חוזר של קריאה שנכשלה בתקלה שעשויה לעבור.</dd>
+  <dt>exponential backoff</dt><dd>המתנה שגדלה פי שניים בין ניסיון לניסיון.</dd>
+  <dt>jitter</dt><dd>חלק אקראי בהמתנה, כדי שלקוחות רבים לא יחזרו באותו רגע.</dd>
+  <dt>idempotent</dt><dd>פעולה שאפשר לחזור עליה בלי לשנות את התוצאה.</dd>
+  <dt>idempotency key</dt><dd>מזהה שהלקוח שולח עם פעולה; השירות מבצע כל מפתח פעם אחת בלבד.</dd>
+  <dt>circuit breaker</dt><dd>מנגנון שמפסיק לקרוא לשירות שנכשל שוב ושוב, לזמן מה, ונכשל מיד במקום לחכות.</dd>
+  <dt>graceful degradation</dt><dd>המשך עבודה חלקית, עם הודעה כנה, כשתלות לא-חיונית נכשלת.</dd>
+  <dt>cascading failure</dt><dd>תקלה ברכיב אחד שמפילה את מי שתלוי בו, וממנו הלאה.</dd>
+  <dt>API contract</dt><dd>מה שירות מבטיח ללקוחותיו: נתיבים, שדות, קודים ומשמעותם.</dd>
+  <dt>fault injection</dt><dd>יצירת תקלה בכוונה, כדי לראות איך המערכת מתנהגת בה.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">11.13</span>מה הלאה</h2>
+
+<p>שני שירותים מדברים, ועומדים בתקלות של הרשת. אבל שימו לב לשני דברים שנשארו פתוחים. ראשית, יש עבודה שהמשתמש לא צריך לחכות לה בכלל: סיכום של שיחה, סטטיסטיקת שימוש. כל דבר כזה שנוסיף ל-<code>/chat</code> כקריאת HTTP יאט את התשובה ויכשל איתה. שנית, יש פעולות שחוצות את שני השירותים: מחיקת שיחה צריכה למחוק גם את ההערות שלה, ואין <span class="en">transaction</span> שעוטפת שני בסיסי נתונים. היום ההערות פשוט נשארות.</p>
+
+<p>הודעות שנשלחות ומטופלות בלי שאיש מחכה, ופעולה שמתפרסת על כמה שירותים עם פעולת תיקון לכל צעד: זה <strong>פרק 12: <span class="en">Messaging</span> ו-<span class="en">pipelines</span></strong>.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-11</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים, בלי <code>.git</code> ובלי סודות. עם <code>db</code> של compose למעלה, <code>uv run --locked python scripts/ci_local.py</code> מריץ את שלושת ה-<span class="en">jobs</span>: 98 בדיקות בצ'אט, 10 בשירות ההערות, ושני <span class="en">images</span> שמדפיסים <code>0.11.0</code> ו-<code>0.1.0</code>.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-11.html">פתרונות לפרק 11</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

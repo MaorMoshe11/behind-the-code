@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מאחורי הקוד · חוברת עבודה</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">חוברת עבודה</div>
+  <h1>מאחורי הקוד</h1>
+  <p class="lead">כל מה שמתכנתים עושים חוץ מלכתוב קוד: מהמחשב שלכם ועד מערכת שרצה בענן.</p>
+</header>
+
+<section class="goals">
+  <h3>למי החוברת מיועדת</h3>
+  <p>למי שכבר יודע לכתוב Python ומכיר מודלי שפה, אבל עוד לא עבד בצוות פיתוח. אם המילים <span class="en">pull request</span>, <span class="en">migration</span>, <span class="en">CI/CD</span> או <span class="en">microservice</span> נשמעות לכם מוכרות אך לא ברורות, החוברת נכתבה בשבילכם.</p>
+  <h3>איך היא בנויה</h3>
+  <p>לאורך כל החוברת בונים פרויקט אחד: סוכן צ'אט שמדבר עם Claude. הוא מתחיל כקובץ Python בודד, וכל פרק מוסיף לו שכבה אחת, בסדר שבו צוות אמיתי היה נתקל בצורך. בחלק האחרון הופכים אותו מצ'אט פשוט לסוכן אמיתי, ואז למערכת של כמה סוכנים. כך כל מושג מגיע כפתרון לבעיה שכבר הרגשתם.</p>
+  <p>כל פרק בנוי באותה צורה: הבעיה, המושג, דוגמה מודרכת, תרגילים, בדיקה עצמית ומילון מונחים. ההסברים בעברית. הקוד, הפקודות והמונחים המקצועיים באנגלית, כי כך תפגשו אותם בעבודה.</p>
+  <h3>איך עובדים איתה</h3>
+  <ul>
+    <li>עובדים לפי הסדר. כל פרק נשען על הפרויקט כפי שהשארתם אותו בפרק הקודם.</li>
+    <li>מקלידים את הפקודות בעצמכם, ולא מעתיקים. הידיים לומדות.</li>
+    <li>הסימונים והתשובות שלכם נשמרים בדפדפן הזה בלבד. אפשר גם להדפיס כל פרק ולעבוד עם עט.</li>
+    <li>בסוף כל פרק יש תיקיית <code>checkpoints</code> עם הפרויקט כפי שהוא אמור להיראות, להשוואה.</li>
+  </ul>
+</section>
+
+<h2>תוכן העניינים</h2>
+
+<div class="part-title">חלק א' · המחשב שלכם</div>
+<ul class="toc">
+  <li><span class="n">1</span><span class="t"><a href="chapter-01.html">סביבת העבודה</a><small><span class="en">terminal, virtual environments, dependencies, environment variables, debugger</span></small></span><span class="pill" data-progress-for="01">טרם התחלתם</span></li>
+  <li><span class="n">2</span><span class="t"><a href="chapter-02.html">Git ו-GitHub</a><small><span class="en">commits, branches, pull requests, code review</span></small></span><span class="pill" data-progress-for="02">טרם התחלתם</span></li>
+  <li><span class="n">3</span><span class="t"><a href="chapter-03.html">איכות קוד</a><small><span class="en">tests, linting, type hints, logging, error handling</span></small></span><span class="pill" data-progress-for="03">טרם התחלתם</span></li>
+</ul>
+
+<div class="part-title">חלק ב' · שירות</div>
+<ul class="toc">
+  <li><span class="n">4</span><span class="t"><a href="chapter-04.html">איך הרשת עובדת</a><small><span class="en">client/server, HTTP, JSON, DNS, ports</span></small></span><span class="pill" data-progress-for="04">טרם התחלתם</span></li>
+  <li><span class="n">5</span><span class="t"><a href="chapter-05.html">APIs</a><small><span class="en">REST, FastAPI, schemas, authentication, webhooks</span></small></span><span class="pill" data-progress-for="05">טרם התחלתם</span></li>
+  <li><span class="n">6</span><span class="t"><a href="chapter-06.html">בסיסי נתונים</a><small><span class="en">SQL, indexes, transactions, document stores, caching</span></small></span><span class="pill" data-progress-for="06">טרם התחלתם</span></li>
+  <li><span class="n">7</span><span class="t"><a href="chapter-07.html">Migrations</a><small><span class="en">schema changes, Alembic, backfills, rollback</span></small></span><span class="pill" data-progress-for="07">טרם התחלתם</span></li>
+</ul>
+
+<div class="part-title">חלק ג' · מהמחשב לעולם</div>
+<ul class="toc">
+  <li><span class="n">8</span><span class="t"><a href="chapter-08.html">Containers</a><small><span class="en">Docker, images, Dockerfile, docker-compose</span></small></span><span class="pill" data-progress-for="08">טרם התחלתם</span></li>
+  <li><span class="n">9</span><span class="t"><a href="chapter-09.html">CI/CD</a><small><span class="en">pipelines, GitHub Actions, releases</span></small></span><span class="pill" data-progress-for="09">טרם התחלתם</span></li>
+  <li><span class="n">10</span><span class="t"><a href="chapter-10.html">Deployment וענן</a><small><span class="en">environments, cloud basics, secrets, infrastructure as code</span></small></span><span class="pill" data-progress-for="10">טרם התחלתם</span></li>
+</ul>
+
+<div class="part-title">חלק ד' · מערכת</div>
+<ul class="toc">
+  <li><span class="n">11</span><span class="t"><a href="chapter-11.html">ארכיטקטורה</a><small><span class="en">monolith vs. microservices, sync vs. async, idempotency</span></small></span><span class="pill" data-progress-for="11">טרם התחלתם</span></li>
+  <li><span class="n">12</span><span class="t"><a href="chapter-12.html">Messaging ו-pipelines</a><small><span class="en">Kafka, queues, saga pattern, Airflow, batch vs. streaming</span></small></span><span class="pill" data-progress-for="12">טרם התחלתם</span></li>
+  <li><span class="n">13</span><span class="t"><a href="chapter-13.html">מערכת חיה</a><small><span class="en">logs, metrics, tracing, alerts, incidents</span></small></span><span class="pill" data-progress-for="13">טרם התחלתם</span></li>
+  <li><span class="n">14</span><span class="t"><a href="chapter-14.html">אבטחה</a><small><span class="en">secrets, least privilege, input validation, sensitive data</span></small></span><span class="pill" data-progress-for="14">טרם התחלתם</span></li>
+  <li><span class="n">15</span><span class="t"><a href="chapter-15.html">עבודה בצוות</a><small><span class="en">tickets, design docs, estimation, documentation</span></small></span><span class="pill" data-progress-for="15">טרם התחלתם</span></li>
+</ul>
+
+<div class="part-title">חלק ה' · סוכנים</div>
+<ul class="toc">
+  <li><span class="n">16</span><span class="t"><a href="chapter-16.html">מה זה AI agent</a><small><span class="en">LLM call vs. workflow vs. agent, the agent loop, when not to build one</span></small></span><span class="pill" data-progress-for="16">טרם התחלתם</span></li>
+  <li><span class="n">17</span><span class="t"><a href="chapter-17.html">לעבוד עם סוכנים ביום-יום</a><small><span class="en">coding agents, briefing, reviewing and verifying agent work</span></small></span><span class="pill" data-progress-for="17">טרם התחלתם</span></li>
+  <li><span class="n">18</span><span class="t"><a href="chapter-18.html">Tools ו-integrations</a><small><span class="en">tool use, tool design, structured outputs, MCP</span></small></span><span class="pill" data-progress-for="18">טרם התחלתם</span></li>
+  <li><span class="n">19</span><span class="t"><a href="chapter-19.html">Context ו-memory</a><small><span class="en">context window, prompt caching, compaction, retrieval, long-term memory</span></small></span><span class="pill" data-progress-for="19">טרם התחלתם</span></li>
+  <li><span class="n">20</span><span class="t"><a href="chapter-20.html">Multi-agent systems</a><small><span class="en">orchestrators, subagents, routing, parallel work, handoffs, frameworks</span></small></span><span class="pill" data-progress-for="20">טרם התחלתם</span></li>
+  <li><span class="n">21</span><span class="t"><a href="chapter-21.html">סוכנים בייצור</a><small><span class="en">evals, tracing, guardrails, human in the loop, prompt injection, cost</span></small></span><span class="pill" data-progress-for="21">טרם התחלתם</span></li>
+</ul>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 20 · Multi-agent systems | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="20">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 20 · Multi-agent systems</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 20 מתוך 21</div>
+  <h1><span class="en">Multi-agent systems</span></h1>
+  <p class="lead">מתי סוכן אחד כבר לא מספיק, מה עושה מתזמר (<span class="en">orchestrator</span>), איך מעבירים עבודה לסוכן אחר ומקבלים אותה בחזרה, ומתי כל זה פשוט לא שווה את המחיר.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>להסביר מה זו מערכת של כמה סוכנים בלי הייפ: מה מרוויחים ממנה, ומה משלמים עליה.</li>
+    <li>לזהות את התבניות (<span class="en">routing</span>, מתזמר ועובדים, עבודה במקביל, שרשרת העברות, סוקר) ולומר איזו מהן היא בעצם <span class="en">workflow</span>.</li>
+    <li>לבנות מתזמר ביד, ב-Python על ה-<span class="en">API</span> של Claude: האצלה (<span class="en">delegation</span>) כקריאה לכלי, סוכן-משנה עם הקשר, כלים והוראות משלו, ודוח מובנה שחוזר.</li>
+    <li>לכתוב תדריך (<span class="en">brief</span>) שסוכן אחר יכול לעבוד לפיו, ולבדוק את מה שחזר במקום לסמוך עליו.</li>
+    <li>להריץ סוכני-משנה במקביל, לשים תקציב לריצה כולה, ולעקוב אחריה בלוג ובמדדים.</li>
+    <li>להחליט, במספרים, בין קריאה אחת, <span class="en">workflow</span>, סוכן אחד וצוות סוכנים.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> חמש עד שש שעות. <strong>מה צריך:</strong> הפרויקט מסוף פרק 19 (גרסה 0.18.0), ושירות ההערות רץ בחלון נפרד, כמו בפרקים 16 עד 19. הכול במצב <span class="en">mock</span>, בלי מפתח ובלי עלות. <strong>כל מספרי הטוקנים והזמנים בפרק הם של ה-<span class="en">mock</span></strong>: טוקן לכל ארבעה תווים, וחצי שנייה לכל קריאה עם <code>CHAT_MOCK_DELAY=0.5</code>. הם נכונים להשוואה, לא כמחיר ולא כזמן אמיתי.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.1</span>הבעיה: סקירה אחת, הקשר אחד</h2>
+
+<p>בגרסה 0.18.0, בשיחה קודמת, דנה סיפרה שהמסיבה ב-3 במרץ, שעוד צריך לבחור עוגה ושלא ברור מי מביא מוזיקה, והסוכן זכר שהיא אלרגית לבוטנים ושהיא מעדיפה תשובות קצרות. בשיחה חדשה היא שמרה שש הערות, ארבע על המסיבה, ושאלה שאלה אחת שמשלבת שלוש עבודות: לקרוא את ההערות, לחפש בשיחות הקודמות, ולבדוק מה זכור. ה-<span class="en">mock</span> לא מחליט לבד לקרוא לשלושה כלים, אז התסריט אומר לו לעשות מה שמודל אמיתי היה עושה:</p>
+
+<div class="codebox output">
+  <div class="label"><span>uv run python -m agent (0.18.0, mock mode; shortened, the first message is one line)</span></div>
+<pre><code>you&gt; Go over my notes and earlier conversations about the party and tell me what is still open.
+     [mock:call list_notes {"search": "party"}] [mock:call search_conversations {"query": "party"}] [mock:call recall {}]
+agent&gt; [mock reply, turn 1] I looked it up. The tool said:
+- [6a924545] party: book the community hall by Friday, deposit 200
+...
+I looked it up. The tool said:
+Found in earlier conversations (newest first among equal matches):
+- 2026-11-19, "Keep in mind that I am allergic to peanuts.", user: Who brings
+the music to the party is still open.
+...
+I looked it up. The tool said:
+Saved memories of this user (...):
+- [5b3a19ba] I am allergic to peanuts (saved 2026-11-19)
+- [01670462] I prefer short answers (saved 2026-11-19)
+
+you&gt; What is the date today?
+agent&gt; [mock reply, turn 2] You said: What is the date today?</code></pre>
+</div>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>Get-Content agent.log | ConvertFrom-Json | Where-Object { $_.logger -eq "agent.loop" -or $_.message -eq "model replied" } | Format-Table message, cache_read, cache_write, output_tokens, context_tokens</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (0.18.0, the mock's numbers)</span></div>
+<pre><code>message                cache_read cache_write output_tokens context_tokens
+-------                ---------- ----------- ------------- --------------
+agent step 1: tool_use          0         616            71
+agent step 2: end_turn        616         479           358
+model replied                                               616
+agent step 1: end_turn       1095         376            22
+model replied                                               1471</code></pre>
+</div>
+
+<p>ארבעה דברים קורים כאן, והם יגדלו עם המשימה:</p>
+<ul>
+  <li><strong>הקשר אחד מתמלא בכל העבודות.</strong> בצעד 2 נוספו 479 טוקנים: בקשת הכלים וכל התוצאות של שלוש העבודות, כולל מה שלא רלוונטי לשאלה (שתשובות קצרות מועדפות, ותשובות של הסוכן מהשיחה הקודמת שחוזרות על אותו טקסט). המודל צריך לסנן את כולן בבת אחת, וכל מה שהוא קרא מתחרה בקשב שלו (פרק 19).</li>
+  <li><strong>זה נשאר.</strong> מאז פרק 19 כל צעד של כלי נשמר בהיסטוריה. השאלה הבאה, "<span class="en">What is the date today?</span>", שלחה 1,471 טוקנים במקום כ-870, וכך כל שאלה אחריה, עד שה-<span class="en">compaction</span> יסכם.</li>
+  <li><strong>הכול אחד אחרי השני.</strong> כאן שלוש הקריאות יצאו בצעד אחד. מודל אמיתי עובד לעתים קרובות כלי אחרי כלי, וכל צעד שולח שוב את כל מה שהיה (פרק 16). במשימה של עשרה מקורות, <code>CHAT_MAX_STEPS=5</code> נגמר לפני העבודה.</li>
+  <li><strong>טעות מוקדמת צובעת את ההמשך.</strong> חיפוש ראשון במילה הלא נכונה, ותוצאה שגויה יושבת בהקשר ומשפיעה על כל צעד אחריה. אין דרך "לשכוח" אותה באמצע הריצה.</li>
+</ul>
+<p>הפרק בונה את התשובה שאנשים מגיעים אליה: כמה סוכנים, לכל אחד הקשר משלו. והוא מודד, על הבעיה הזו בדיוק, מה זה עולה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.2</span>המפה: נתב, מתזמר, ומומחים</h2>
+
+<div class="diagram">
+  <div class="flow steps">
+    <div class="layer l2"><div class="name">router</div><div class="what">קריאה קטנה אחת: chat או team? רוב ההודעות: chat</div></div>
+    <div class="hop"><b>chat</b>&rarr;</div>
+    <div class="layer l3"><div class="name">the chat agent</div><div class="what">הלולאה של פרקים 16 עד 19, בלי שינוי</div></div>
+  </div>
+  <div class="flow steps">
+    <div class="hop"><b>team</b>&rarr;</div>
+    <div class="layer machine">
+      <div class="name">orchestrator: an agent loop, one tool for work: delegate</div>
+      <div class="what">מתכנן, כותב תדריך לכל מומחה, ומאחד את הדוחות לתשובה אחת</div>
+      <div class="inner"><div class="row">
+        <div class="layer l4"><div class="name">notes specialist</div><div class="what">לולאה חדשה. כלי: <code>list_notes</code>. הקשר: התדריך בלבד</div></div>
+        <div class="layer l4"><div class="name">memory specialist</div><div class="what">לולאה חדשה. כלים: <code>recall</code>, <code>search_conversations</code></div></div>
+      </div></div>
+    </div>
+    <div class="hop"><b>answer</b>&rarr;</div>
+    <div class="layer l3"><div class="name">conversation</div><div class="what">נשמרות השאלה והתשובה, כטקסט</div></div>
+  </div>
+  <div class="caption">תדריך יורד, דוח קצר עולה. שני המומחים עובדים בו-זמנית. תקציב אחד, <span class="en">request id</span> אחד ושם של סוכן בכל שורת לוג, לכל הריצה.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.3</span>מה זו מערכת של כמה סוכנים, בלי הייפ</h2>
+
+<p><strong>מערכת מרובת סוכנים</strong> (<span class="en">multi-agent system</span>) היא כמה לולאות סוכן של פרק 16, שלכל אחת <strong>הקשר, הוראות וכלים משלה</strong>, ודרך להעביר עבודה ביניהן. זה הכול. אין כאן "צוות שחושב יחד": יש כמה קריאות ל-<span class="en">API</span>, וקוד שלכם שמחליט מי מקבל מה. שלושה רווחים, וכל אחד מהם הוא בעיה מ-20.1:</p>
+<ul>
+  <li><strong>בידוד הקשר</strong> (<span class="en">context isolation</span>). מומחה שקורא עשרים הערות מחזיר חמש שורות. המתזמר רואה את החמש, לא את העשרים, ושיחת ההמשך לא סוחבת אותן.</li>
+  <li><strong>התמחות</strong>. לכל סוכן הוראות קצרות על דבר אחד, ורק הכלים שהוא צריך. פחות כלים זה פחות טוקנים בכל קריאה (פרק 18) ופחות מקום לטעות, וגם הרשאות מינימליות (פרק 14).</li>
+  <li><strong>מקביליות</strong>. עבודות שלא תלויות זו בזו רצות בבת אחת.</li>
+</ul>
+<p>והמחיר, שגם הוא אמיתי: <strong>טוקנים</strong>, כי לכל סוכן פרומפט מערכת, כלים ותדריך משלו, והמתזמר קורא שוב את מה שהמומחים כתבו; בפועל כמה מונים מסוכן אחד. <strong>זמן תיאום</strong>: הנתב, התכנון והאיחוד הם קריאות נוספות. <strong>דיבוג קשה יותר</strong>: הטעות יכולה להיות בתכנון, בתדריך, אצל המומחה או באיחוד. ו<strong>מידע שהולך לאיבוד בכל העברה</strong>: מומחה יודע רק מה שכתבו לו, והמתזמר יודע רק מה שהמומחה כתב בחזרה.</p>
+<div class="callout warn">
+  <span class="title">רוב המשימות לא צריכות את זה</span>
+  <p>אותו כלל מסעיף 16.8: הצורה הפשוטה ביותר שעובדת. רוב ההודעות בצ'אט הן קריאה אחת או סוכן אחד, וכך הן יישארו. צוות סוכנים מצדיק את עצמו כשיש הרבה עבודה עצמאית לחלק, יותר ממה שנכנס בנוחות בהקשר אחד. ב-20.13 תראו את המספרים של הפרויקט, והם לא מחמיאים לצוות.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.4</span>התבניות</h2>
+
+<div class="diagram">
+  <div class="flow steps">
+    <div class="layer l2"><div class="name">routing</div><div class="what" style="direction:ltr;text-align:left">message &rarr; classifier &rarr; one of A | B</div></div>
+    <div class="layer l3"><div class="name">orchestrator-workers</div><div class="what" style="direction:ltr;text-align:left">plan &rarr; delegate &rarr; workers &rarr; combine</div></div>
+    <div class="layer l4"><div class="name">fan-out, gather</div><div class="what" style="direction:ltr;text-align:left">A, B, C at once &rarr; wait for all</div></div>
+  </div>
+  <div class="flow steps">
+    <div class="layer l2"><div class="name">handoff chain</div><div class="what" style="direction:ltr;text-align:left">agent A &rarr; agent B &rarr; agent C, the conversation moves on</div></div>
+    <div class="layer l3"><div class="name">evaluator</div><div class="what" style="direction:ltr;text-align:left">writer &rarr; reviewer &rarr; ok, or back with notes</div></div>
+  </div>
+  <div class="caption">חמש צורות. רק בחלק מהן המודל מחליט מה הצעד הבא.</div>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>תבנית</th><th>מה היא</th><th>בפרויקט</th><th>במונחי פרק 16</th></tr>
+  <tr><td><strong><span class="en">Routing</span></strong></td><td>סיווג קטן שולח את ההודעה למסלול אחד</td><td><code>agent\router.py</code>: chat או team</td><td><span class="en">workflow</span>: הקוד פועל לפי הסיווג</td></tr>
+  <tr><td><strong>מתזמר ועובדים</strong></td><td>סוכן מתכנן, מאציל חלקים, ומאחד את התוצאות</td><td><code>agent\team.py</code></td><td><span class="en">agent</span>: המודל מחליט כמה חלקים, למי ומה לכתוב</td></tr>
+  <tr><td><strong><span class="en">Fan-out</span> ו-<span class="en">gather</span></strong></td><td>כמה עבודות עצמאיות בבת אחת, ומחכים לכולן</td><td>שני המומחים, ב-threads</td><td>כשהקוד קובע את החלקים: <span class="en">workflow</span> (קריאות במקביל, 16.3)</td></tr>
+  <tr><td><strong>שרשרת העברות</strong> (<span class="en">handoff</span>)</td><td>סוכן מעביר את השיחה עצמה לסוכן אחר, שממשיך מולכם</td><td>לא נבנה: "העבר לנציג חיובים" במוקד שירות</td><td><span class="en">agent</span>, אם המודל בוחר למי להעביר</td></tr>
+  <tr><td><strong>סוקר</strong> (<span class="en">evaluator</span>)</td><td>סוכן אחד כותב, אחר בודק ומחזיר הערות, עד שעובר</td><td>הבדיקה של <code>check()</code> (20.8) היא גרסה בקוד; סוקר מבוסס מודל: פרק 21</td><td><span class="en">workflow</span> של לולאה עם תנאי עצירה</td></tr>
+</table>
+</div>
+<p>שימו לב להבדל בין מתזמר לבין שרשרת העברות. במתזמר, השליטה חוזרת תמיד אליו: המומחה עונה לו, לא למשתמש. בהעברה, הסוכן הראשון יוצא מהתמונה. הפרויקט בונה מתזמר, כי הוא נשאר אחראי לתשובה, וזה מה שהופך אותו למקום שבו בודקים.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.5</span>המתזמר</h2>
+
+<p>ה<strong>מתזמר</strong> (<span class="en">orchestrator</span>) הוא סוכן שתפקידו לחלק עבודה, לא לעשות אותה. הוא מחליט ארבעה דברים: <strong>האם</strong> צריך מומחה בכלל (אולי אפשר לענות מיד), <strong>למי</strong> כל חלק, <strong>מה לכתוב</strong> בתדריך, ו<strong>מה לעשות</strong> עם מה שחזר: לאחד, לשאול שוב, או לומר למשתמש מה חסר.</p>
+<p>ומה הוא לא עושה בעצמו? את העבודה. אצלנו זה לא רק הוראה בפרומפט, זה מבנה: הכלי היחיד שלו לעבודה הוא <code>delegate</code>, ואין לו <code>list_notes</code> ולא <code>search_conversations</code>. מתזמר שגם קורא בעצמו ממלא את ההקשר שלו בדיוק במה שרצינו להרחיק ממנו. גם לא כותב: המומחים מקבלים כלי קריאה בלבד, ולכן שום דבר בריצה לא משנה נתונים.</p>
+
+<div class="callout">
+  <span class="title">פגשתם את המילה בפרק 12</span>
+  <p>ה-<span class="en">saga</span> של מחיקת שיחה (12.7) היא <span class="en">orchestration</span>: מתזמר אחד מריץ צעדים ששייכים לאחרים (בסיס הנתונים של הצ'אט, שירות ההערות), עוקב איפה הוא נמצא, ויודע מה לעשות כשצעד נכשל. אותו רעיון, עם שלושה הבדלים:</p>
+</div>
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>המתזמר של ה-<span class="en">saga</span> (פרק 12)</th><th>המתזמר של הסוכנים</th></tr>
+  <tr><td>מי קובע את הצעדים</td><td>הקוד, מראש: ארכוב, מחיקת הערות, מחיקה</td><td>המודל, בזמן ריצה: כמה מומחים, ובאיזה תדריך</td></tr>
+  <tr><td>צעד שנכשל</td><td>פעולות תיקון (<span class="en">compensation</span>) לצעדים שהצליחו, מהאחרון לראשון</td><td>אין מה לתקן: המומחים רק קוראים. הכישלון מדווח, והמתזמר מחליט: לנסות אחרת או לומר מה חסר</td></tr>
+  <tr><td>איפה המצב</td><td>בזיכרון של התהליך (פער ידוע, פרק 12)</td><td>גם בזיכרון: התקציב והדוחות. נפל התהליך, נפלה הריצה, ושום דבר לא נכתב בחצי</td></tr>
+</table>
+</div>
+<p>ההבדל השני הוא החשוב: ברגע שמומחה יקבל כלי כותב, השאלה של פרק 12 חוזרת במלואה. מה אם המומחה השני נכשל אחרי שהראשון כבר מחק? לכן, כל עוד אין אישור אנושי לכלים כותבים (פרק 21), הצוות קורא בלבד.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.6</span>סוכן-משנה הוא קריאה לכלי</h2>
+
+<p>הדרך הנקייה לבנות האצלה היא לא מנגנון חדש, אלא כלי. למתזמר יש כלי בשם <code>delegate</code>, שהקלט שלו הוא התדריך. כשהמודל קורא לו, ה-<span class="en">Toolbox</span> של פרק 18 מריץ את הקוד שלנו, והקוד הזה מתחיל לולאה חדשה, של אותו <code>run_agent</code> מפרק 16, למומחה. מה שחוזר הוא תוצאה של כלי, כמו כל תוצאה: טקסט קצר, ו-<code>is_error</code> כשמשהו השתבש.</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\team.py (Team._run_specialist, shortened)</span></div>
+<pre><code>        metered = Metered(self.workers[specialist.name], budget, specialist.name)
+        result = Result(specialist.name, "ok")
+        try:
+            <span class="cm"># Least privilege: never the writing tools, and only this specialist's names.</span>
+            offered = self.tools.toolbox(context, writes=False).tools.values()
+            toolbox = Toolbox([t for t in offered if t.name in specialist.tools], context)
+            ...
+            question: list[MessageParam] = [{"role": "user", "content": brief}]
+            <span class="hl">run = run_agent(metered, question, toolbox, self.max_steps, REPORT_SCHEMA)</span>
+            result.tool_calls = run.tool_calls
+            if run.stop == "max_steps":
+                result.status, result.note = "gave_up", f"It stopped after {run.steps} steps."
+            else:
+                try:
+                    report = Report.model_validate_json(run.reply)
+                    result.report, result.unchecked = check(report, run.messages)
+                except ValidationError:
+                    result.status, result.note = "no_report", f"Its answer: {run.reply[:200]}"
+        except BudgetExceeded as error:
+            result.status, result.note = "budget", f"Stopped: {error}."
+        except LLMError as error:
+            result.status, result.note = "error", f"The model call failed: {error}"</code></pre>
+</div>
+
+<p>ארבעה דברים הופכים את זה לסוכן-משנה ולא סתם עוד צעד:</p>
+<ul>
+  <li><strong>פרומפט מערכת משלו.</strong> לכל מומחה לקוח משלו (<code>self.workers</code>), כי <code>ClaudeClient</code> שולח את הפרומפט שקיבל כשנבנה. כך גם לכל אחד קידומת משלו במטמון של פרק 19.</li>
+  <li><strong>כלים משלו, מהרישום.</strong> <code>toolbox(context, writes=False)</code> של פרק 18, ומתוכו רק השמות של המומחה. גם עם <code>CHAT_WRITE_TOOLS=1</code>, מומחה לא יקבל <code>remember</code>. ה-<code>context</code> (השיחה והבעלים) הוא של השיחה, ונקבע בקוד, לא בידי המודל.</li>
+  <li><strong>הקשר ריק.</strong> ההודעה היחידה היא התדריך. בלי ההיסטוריה, בלי הסיכום, בלי מה שהמתזמר חשב.</li>
+  <li><strong>עומק אחד.</strong> אין למומחה כלי <code>delegate</code>, ולכן הוא לא יכול להתחיל מומחה נוסף. מגבלת עומק שנאכפת במבנה, לא במונה.</li>
+</ul>
+<p>ועל מודל: המתזמר רץ על <code>CHAT_MODEL</code>, והמומחים והנתב על <code>CHAT_WORKER_MODEL</code>, שהוא אותו מודל אם לא בחרתם אחרת. מקובל להריץ עובדים על מודל קטן וזול יותר, למשל <code>claude-sonnet-5-5</code> או <code>claude-haiku-5-5</code>, כי העבודה שלהם צרה. זו החלטה שמודדים, לא מניחים: מודל קטן שמפספס ממצא עולה יותר מהחיסכון. ולמטמון: מטמון שייך למודל, אז מודל אחר למומחה הוא קידומת אחרת בכל מקרה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.7</span>התדריך: מומחה יודע רק מה שאמרו לו</h2>
+
+<p>התדריך (<span class="en">brief</span>) הוא כל העולם של המומחה. הוא לא ראה את השיחה, לא יודע מי דנה ולא יודע שיש מסיבה. זו אותה מיומנות כמו תדריך לסוכן קוד בפרק 17 וכרטיס בפרק 15: מטרה, הקשר, אילוצים, צורת התשובה, ומתי זה "גמור". אצלנו הצורה כתובה בקוד, ולכן התדריך בנוי משלושה שדות שהמתזמר ממלא:</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\team.py</span></div>
+<pre><code>class DelegateInput(ToolInput):
+    specialist: Literal["notes", "memory"]
+    goal: str = Field(
+        min_length=1, max_length=500, description="What to find, in one or two sentences."
+    )
+    context: str = Field(
+        "",
+        max_length=1000,
+        description="What the specialist needs and cannot see: the user's words, names, "
+        "dates, what is already known.",
+    )
+    done_when: str = Field(
+        "", max_length=300, description="When the work is done: what the report must contain."
+    )
+
+    def brief(self) -> str:
+        """The specialist's whole world: the first and only message it gets."""
+        return (
+            f"Goal: {self.goal}\nContext: {self.context or '(none given)'}\n"
+            f"Done when: {self.done_when or '(not said)'}"
+        )</code></pre>
+</div>
+<p>האילוצים וצורת התשובה לא בתדריך: הם קבועים, ולכן בפרומפט המערכת של המומחה (קריאה בלבד, רק מה שהכלים החזירו, אסור לשאול שאלות) וב-<span class="en">schema</span> של הדוח. <code>context</code> ו-<code>done_when</code> לא חובה, בכוונה: <span class="en">schema</span> יכול לחייב שדה להופיע, לא לחייב שיהיה טוב. הנה שתי האצלות לאותו מומחה, שהמתזמר יכול היה לכתוב, ומה שחזר מכל אחת (דרך <code>[mock:call delegate ...]</code>, כדי שתוכלו לשלוט במה שנכתב):</p>
+
+<div class="codebox output">
+  <div class="label"><span>weak: {"specialist": "notes", "goal": "look at the notes"}</span></div>
+<pre><code>notes:
+- party: book the community hall by Friday, deposit 200 ([c5ef9519])
+- party: ask Omer whether he can bring the speakers ...
+- party: no peanuts anywhere, Dana is allergic ([13982c6a])
+- buy oat milk ([cfb6ccc2])
+- party: invitations by email to 25 people, RSVP by ...
+- call the dentist on Monday ([52e56088])</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>strong: goal, context and done_when filled in</span></div>
+<pre><code>Goal: Find the notes about the party.
+Context: The user wants to know what is still open
+  for the party on March 3.
+Done when: Every note about the party is listed with its ref.
+
+notes:
+- party: book the community hall by Friday, deposit 200 ([c5ef9519])
+- party: ask Omer whether he can bring the speakers ...
+- party: no peanuts anywhere, Dana is allergic ([13982c6a])
+- party: invitations by email to 25 people, RSVP by ...</code></pre>
+</div>
+<p>התדריך החלש לא שגוי, הוא ריק: "תסתכל בהערות" לא אומר על מה, אז חזרו כולן, כולל חלב שיבולת שועל ורופא שיניים, והמתזמר צריך לסנן את מה שהמומחה היה אמור לסנן. במומחה הזיכרון זה גרוע יותר: בתרגיל 2 תראו תדריך חלש שחוזר עם דוח שנראה תקין, על שאלה אחרת מזו שנשאלה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.8</span>מה שחוזר: קצר, מובנה, ונבדק</h2>
+
+<p>המומחה עונה ב-<span class="en">JSON</span> לפי <span class="en">schema</span>, עם <span class="en">structured outputs</span> מפרק 18. ההבדל מ-<code>/title</code>: כאן הסוכן גם קורא לכלים וגם צריך לסיים ב-<span class="en">JSON</span>. ה-<span class="en">API</span> מאפשר את שניהם באותה בקשה: <code>tools</code> ו-<code>output_config.format</code> יחד, והתשובה הסופית, אחרי הכלים, תואמת את ה-<span class="en">schema</span>. ב-<code>ClaudeClient</code>, ל-<code>create()</code> נוסף פרמטר אחד:</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\llm.py (ClaudeClient.create)</span></div>
+<pre><code>    def create(
+        self,
+        messages: list[MessageParam],
+        tools: list[ToolParam],
+        schema: dict[str, Any] | None = None,
+    ) -&gt; Message:
+        if schema is None:
+            return self._create(messages, tools)
+        <span class="cm"># Tools and a JSON answer in one request: the model may still call tools, and its</span>
+        <span class="cm"># final text must match the schema (structured outputs; a subagent's report).</span>
+        output: OutputConfigParam = {"format": {"type": "json_schema", "schema": schema}}
+        return self._create(messages, tools, output)</code></pre>
+</div>
+<p>ה-<span class="en">schema</span> הוא <code>Report</code>: <code>findings</code> (כל ממצא עם <code>fact</code> ו-<code>source</code>), <code>not_found</code> (מה חיפשתי ולא מצאתי) ו-<code>problems</code> (כלי שנכשל, תדריך לא ברור). "לא מצאתי" הוא מידע, לא כישלון: בלעדיו, דוח ריק נראה כמו "אין כלום".</p>
+<p><strong>לבדוק, לא לסמוך.</strong> מודל יכול לכתוב ממצא שאף כלי לא החזיר, בביטחון מלא. לכן <code>check()</code> משאיר ממצא רק אם ה-<code>source</code> שלו מופיע בתוצאות הכלים של אותה ריצה. השאר יוצא לרשימה נפרדת, "<span class="en">unchecked</span>", שהמתזמר מתבקש לא להציג כעובדה. זו בדיקה זולה וגסה (מקור קיים לא אומר שהעובדה נכונה), אבל היא תופסת את הסוג המסוכן ביותר: המצאה עם מראה של ציטוט. ואז קוד הצוות הופך את הכול לטקסט קצר, שהוא כל מה שהמתזמר קורא:</p>
+
+<div class="codebox output">
+  <div class="label"><span>what the orchestrator reads back from one delegation (from exercise 6)</span></div>
+<pre><code>notes specialist: ok (model calls: 2, tool calls: 1, tokens: 953, 1.0 s)
+found:
+- party: book the community hall by Friday, deposit 200 ([e61a2311])
+- party: ask Omer whether he can bring the speakers and a playlist ([8f4d4177])
+- party: no peanuts anywhere, Dana is allergic ([29daa776])
+- party: invitations by email to 25 people, RSVP by February 20 ([9f715462])</code></pre>
+</div>
+
+<p><strong>כשמומחה נכשל.</strong> השורה הראשונה אומרת איך הריצה הסתיימה, והקוד קובע אותה, לא המודל:</p>
+<div class="table-wrap">
+<table>
+  <tr><th>מצב</th><th>מתי</th><th>מה המתזמר מקבל</th></tr>
+  <tr><td><code>ok</code></td><td>דוח תקין</td><td>הממצאים, מה חסר, בעיות, ומה לא נבדק</td></tr>
+  <tr><td><code>gave_up</code></td><td>המומחה הגיע ל-<code>CHAT_MAX_STEPS</code></td><td>תוצאת שגיאה (<code>is_error</code>), בלי דוח</td></tr>
+  <tr><td><code>no_report</code></td><td>התשובה לא עברה את <code>Report</code></td><td>שגיאה, ו-200 התווים הראשונים של מה שנכתב</td></tr>
+  <tr><td><code>budget</code></td><td>התקציב של הריצה כולה נגמר באמצע</td><td>שגיאה; גם הקריאה הבאה של המתזמר תיעצר</td></tr>
+  <tr><td><code>error</code></td><td><code>LLMError</code>: רשת, מפתח, <span class="en">timeout</span> של ה-SDK</td><td>שגיאה, עם ההודעה</td></tr>
+  <tr><td><code>unavailable</code></td><td>לכלים שלו אין שירות בריצה הזו (בלי <code>NOTES_URL</code>)</td><td>שגיאה, בלי לשלם על קריאה למודל</td></tr>
+</table>
+</div>
+<p>כלי שנכשל בתוך מומחה (שירות ההערות למטה) הוא לא כישלון של המומחה: הלולאה של פרק 16 הופכת אותו לתוצאה, והמומחה מדווח עליו ב-<code>problems</code>. ו-<span class="en">timeout</span>? אי אפשר לעצור <span class="en">thread</span> מבחוץ ב-Python. לכן הזמן נבדק לפני כל קריאה למודל, כחלק מהתקציב (20.11), ובתוך קריאה, ה-<span class="en">timeout</span> של ה-SDK מגן.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.9</span>עבודה במקביל</h2>
+
+<p>כשהמתזמר מבקש שתי האצלות באותה תשובה, הן עצמאיות: אף אחת לא צריכה את התוצאה של השנייה. הלולאה של פרק 16 הריצה את הכלים של צעד אחד זה אחרי זה. עכשיו <code>Toolbox</code> יודע להריץ אותם במקביל, אם מותר:</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\tools.py (Toolbox.results)</span></div>
+<pre><code>    def results(self, calls: list[ToolUseBlock]) -&gt; list[ToolResultBlockParam]:
+        known = [self.tools.get(call.name) for call in calls]
+        if not self.parallel or len(calls) &lt; 2 or any(t is None or t.writes for t in known):
+            return [self.result(call) for call in calls]
+        with ThreadPoolExecutor(max_workers=len(calls)) as pool:
+            futures = [pool.submit(copy_context().run, self.result, call) for call in calls]
+            return [future.result() for future in futures]</code></pre>
+</div>
+<p><strong>למה <span class="en">threads</span> ולא <code>asyncio</code>?</strong> כל הקוד מפרק 3 סינכרוני: <code>anthropic.Anthropic</code>, הלקוח של שירות ההערות, SQLAlchemy. <code>asyncio</code> היה דורש לקוח אסינכרוני ושכתוב של הלולאה ושל הכלים. עבודה של סוכן מחכה לרשת, וב-<span class="en">I/O</span> כזה <span class="en">threads</span> עובדים היטב גם עם ה-<span class="en">GIL</span>. השינוי הקטן ביותר שעובד.</p>
+<p><strong>מה מותר במקביל.</strong> רק צעד שבו אף קריאה לא כותבת. שתי כתיבות בבת אחת יכולות להתערבב, והסדר ביניהן יכול לשנות את התוצאה (מחיקה והוספה של אותה הערה). ו-<code>copy_context().run</code>? <span class="en">thread</span> חדש מתחיל בלי ה-<span class="en">ContextVar</span>-ים של מי שיצר אותו. בלי ההעתקה, שורות הלוג של המומחים היו יוצאות בלי <span class="en">request id</span> של פרק 13. התוצאות חוזרות בסדר הבקשות, כי <code>futures</code> לפי הסדר, ולא לפי מי שסיים ראשון.</p>
+<p>כמה זה חוסך? אותה סקירה, עם <code>CHAT_MOCK_DELAY=0.5</code> (תרגיל 3):</p>
+<div class="table-wrap">
+<table>
+  <tr><th>מי עונה</th><th>קריאות למודל</th><th>זמן ההודעה (<code>llm_ms</code>)</th></tr>
+  <tr><td>סוכן אחד (<code>CHAT_TEAM=0</code>, כמו 0.18.0)</td><td>2</td><td>1,044</td></tr>
+  <tr><td>צוות, מומחה אחרי מומחה (<code>CHAT_TEAM_PARALLEL=0</code>)</td><td>6 ונתב</td><td>3,542</td></tr>
+  <tr><td>צוות, במקביל</td><td>6 ונתב</td><td>2,545</td></tr>
+</table>
+</div>
+<p>המקביליות חסכה בדיוק שתי קריאות של מומחה, שנייה אחת. והצוות המקבילי עדיין איטי פי שניים וחצי מסוכן אחד, כי על כל משימה הוא משלם נתב, תכנון ואיחוד. במשימה של עשרה מומחים התמונה מתהפכת; בשתיים, לא. ולמטמון: בקשות שיוצאות באותו רגע לא קוראות זו מהמטמון של זו, כי קידומת נכנסת למטמון רק אחרי שהתשובה הראשונה מתחילה לחזור.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.10</span>מה משותף, ולמה זה דורש זהירות</h2>
+
+<p>למומחים הקשר נפרד, אבל לא עולם נפרד. הם חולקים את שירות ההערות, את בסיס הנתונים שבו הזיכרון והשיחות (<code>MemoryStore</code> של פרק 19, של בעלים אחד), ואת התקציב של הריצה. כל עוד הם רק קוראים, השיתוף בטוח. התקציב הוא היחיד שנכתב, משני <span class="en">threads</span> בבת אחת, ולכן כל שינוי בו מתבצע תחת <code>threading.Lock</code>: בלי הנעילה, <code>self.steps += 1</code> משני <span class="en">threads</span> יכול לאבד ספירה, אותה בעיה של שני עדכונים לאותה שורה בפרק 6.</p>
+<p>מערכות רבות מוסיפות "לוח משותף" (<span class="en">shared scratchpad</span>): מקום שבו כל סוכן כותב מה מצא, וכולם קוראים. זה נוח, וזה בדיוק נתונים משותפים עם כמה כותבים: צריך בעלות (מי מוחק?), סדר (מה קורה כששניים כותבים בבת אחת?), ותוקף (מה עדיין נכון?). זיכרון ארוך-טווח של פרק 19 הוא לוח כזה, ולכן הכתיבה אליו נשארת אצל הצ'אט, מאחורי <code>CHAT_WRITE_TOOLS</code>, ולא אצל המומחים. וכל מה שמומחה קורא משם הוא טקסט לא מהימן, כמו כל תוצאה של כלי.</p>
+<p><strong>מה נשמר בשיחה.</strong> השאלה והתשובה הסופית, כ-<code>kind="text"</code>, כמו בכל תור. ההאצלות והדוחות לא נשמרים כ-<code>blocks</code>: הם בקשות לכלי <code>delegate</code>, שאין לצ'אט, והתשובה כבר מכילה את מה שחשוב. הריצה כולה בלוג. זה גם מה שמקטין את ההקשר של ההודעה הבאה: 873 טוקנים, במקום 1,471.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.11</span>גבולות ותצפית</h2>
+
+<p>לכל סוכן יש <code>CHAT_MAX_STEPS</code> משלו. זה לא מספיק: מתזמר של 5 צעדים שמאציל בכל צעד לשני מומחים של 5 צעדים הוא עד 55 קריאות. לכן לכל ריצה <strong>תקציב אחד</strong>, <code>Budget</code>, לכל הסוכנים יחד: קריאות למודל (<code>CHAT_TEAM_MAX_STEPS</code>, 20), טוקנים (<code>CHAT_TEAM_MAX_TOKENS</code>, 60,000) ו-120 שניות. <code>Metered</code> עוטף כל לקוח, בודק את התקציב לפני כל קריאה ומחייב אותו אחריה, ו-<code>BudgetExceeded</code> עוצר את מי שהגיע אליו. ריצה יכולה לעבור את הטוקנים בקריאה אחת לכל היותר.</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\team.py (Budget.before_call)</span></div>
+<pre><code>    def before_call(self) -&gt; None:
+        with self.lock:
+            if self.steps &gt;= self.max_steps:
+                raise BudgetExceeded(f"the run made its {self.max_steps} model calls")
+            if self.tokens &gt;= self.max_tokens:
+                raise BudgetExceeded(f"the run used its {self.max_tokens} tokens")
+            if time.monotonic() - self.started &gt; self.max_seconds:
+                raise BudgetExceeded(f"the run took more than {self.max_seconds:.0f} s")
+            self.steps += 1</code></pre>
+</div>
+
+<p><strong>תצפית.</strong> ריצה של צוות היא כמה לולאות בכמה <span class="en">threads</span>, ובלי סימון, הלוג שלה הוא ערבוב. שני סימונים, שניהם <span class="en">ContextVar</span> של פרק 13: <strong><span class="en">request id</span> אחד</strong> לכל הריצה (ב-<span class="en">API</span> של הבקשה; בטרמינל, חדש לכל ריצה של הצוות), ו<strong>שדה <code>agent</code></strong> שמראה הורה וילד: <code>orchestrator</code>, <code>orchestrator/notes</code>. במדדים, <code>agent_tokens_total{agent,kind}</code> סופר טוקנים לפי סוכן (גם <code>agent="chat"</code> לצ'אט הרגיל), ו-<code>team_runs_total</code>, <code>subagent_runs_total</code> ו-<code>routes_total</code> סופרים איך ריצות נגמרות ולאן הנתב שלח. אלה תוויות עם מעט ערכים קבועים, כפי שפרק 13 דורש.</p>
+
+<div class="diagram">
+  <div class="trace">
+    <div class="span"><span class="label">router</span><span class="bar" style="--start:0;--len:19.6"><i class="later"></i><b>0.5 s</b></span></div>
+    <div class="span"><span class="label">orchestrator 1</span><span class="bar" style="--start:19.6;--len:19.8"><i></i><b>0.5 s</b></span></div>
+    <div class="span"><span class="label">notes</span><span class="bar" style="--start:39.6;--len:40.3"><i class="other"></i><b>1.0 s</b></span></div>
+    <div class="span"><span class="label">memory</span><span class="bar" style="--start:39.7;--len:40.3"><i class="other"></i><b>1.0 s</b></span></div>
+    <div class="span"><span class="label">orchestrator 2</span><span class="bar" style="--start:80.1;--len:19.8"><i></i></span></div>
+  </div>
+  <div class="caption">הסקירה של 20.1, בצוות, משוחזרת מהזמנים בלוג (2.55 שניות, <code>CHAT_MOCK_DELAY=0.5</code>): כתום הנתב, כחול המתזמר, סגול המומחים, שעובדים באותו זמן.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.12</span><span class="en">Frameworks</span>: מה הם נותנים, ואיך בוחרים</h2>
+
+<p>כל מה שבניתם בפרקים 16 עד 20 קיים גם מוכן: לולאה, רישום כלים, הקשר וזיכרון, האצלה והעברה בין סוכנים, תקציבים, ומעקב (<span class="en">tracing</span>) אחרי ריצות. <span class="en">Framework</span> טוב חוסך את הקוד הזה, ובעיקר נותן כלי מעקב שמציג ריצה של צוות כעץ. כמה שמות מוכרים, כדוגמה בלבד, והתחום משתנה מהר, אז בדקו מה עדכני לפני שבוחרים:</p>
+<ul>
+  <li><strong><span class="en">Claude Agent SDK</span></strong>: הלולאה של Claude Code כספרייה, עם כלים מובנים לקבצים ולפקודות, וסוכני-משנה.</li>
+  <li><strong><span class="en">OpenAI Agents SDK</span></strong>: סוכנים, כלים והעברות (<span class="en">handoffs</span>) בין סוכנים, עם מעקב מובנה.</li>
+  <li><strong>LangGraph</strong>: תהליך כגרף של צעדים ומצב, שאפשר לשמור ולהמשיך ממנו.</li>
+  <li><strong>CrewAI</strong> ו-<strong>AutoGen</strong>: צוותים של סוכנים עם תפקידים, ושיחה ביניהם.</li>
+</ul>
+<p>יש גם פלטפורמות מנוהלות, שבהן הספק מריץ את הלולאה ואת הכלים אצלו, למשל <span class="en">Managed Agents</span> של Anthropic, וגם שירותי סוכנים של ספקי הענן הגדולים. <strong>איך מחליטים:</strong> קוד משלכם כשהמערכת קטנה, כשאתם צריכים לראות ולבדוק כל צעד, וכשהמגבלות (הרשאות, תקציב, מה נשמר) הן הליבה. <span class="en">Framework</span> כשהוא נותן משהו שהייתם בונים בכל מקרה (מעקב, שמירת מצב והמשך אחרי נפילה, התממשקות לכלים רבים), והצוות מוכן לחיות עם ההחלטות שלו ועם קצב השינויים שלו. ומה שלמדתם כאן נשאר נכון בכל אחד מהם: בכל <span class="en">framework</span> יש לולאה, כלים, הקשר לכל סוכן, תדריך ודוח. עכשיו אתם יודעים לקרוא כל אחד מהם.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.13</span>מתי זה שווה: ההמשך של הטבלה מפרק 16</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>צורה</th><th>מתי</th><th>בפרויקט</th></tr>
+  <tr><td>קריאה אחת</td><td>הקלט ידוע, תשובה אחת</td><td>סיכום לדוח הלילי, <code>/title</code></td></tr>
+  <tr><td><span class="en">Workflow</span></td><td>הצעדים ידועים מראש</td><td>הנתב; ה-<span class="en">compaction</span></td></tr>
+  <tr><td>סוכן אחד</td><td>רק המודל יודע מה צריך, וההקשר מספיק</td><td>כל הודעה בצ'אט, כולל סקירה קטנה</td></tr>
+  <tr><td>צוות</td><td>הרבה עבודה עצמאית, יותר ממה שנכנס בנוחות בהקשר אחד, ושווה פי שניים ויותר בטוקנים</td><td>סקירה של עשרות מקורות; לא הסקירה של 20.1</td></tr>
+</table>
+</div>
+<p>ועל הבעיה של 20.1, המספרים (<span class="en">mock</span>, השיחה של הדוגמה המודרכת):</p>
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>קריאות</th><th>טוקנים</th><th>זמן</th><th>הקשר ההודעה הבאה</th></tr>
+  <tr><td>סוכן אחד</td><td>2</td><td>2,140</td><td>1.0 שניות</td><td>1,471</td></tr>
+  <tr><td>צוות, במקביל</td><td>6 ונתב</td><td>4,479 ועוד כ-100 לנתב</td><td>2.5 שניות</td><td>873</td></tr>
+  <tr><td>הודעה רגילה, הצוות דלוק</td><td>1 ונתב</td><td>כ-100 נוספים</td><td>1.0 שניות במקום 0.5</td><td>ללא שינוי</td></tr>
+</table>
+</div>
+<p>פי שניים בטוקנים, פי שניים וחצי בזמן, ונתב על כל הודעה, בשביל הקשר קטן יותר בהמשך השיחה. בפרויקט הזה זה לא משתלם, ולכן <code>CHAT_TEAM</code> כבוי כברירת מחדל, וה-<span class="en">ADR</span> של תרגיל 7 רושם מתי לחזור לשאלה. שימו לב גם למה שהטבלה לא מראה: איכות. ייתכן שהצוות עונה טוב יותר על סקירה גדולה, וייתכן שגרוע. את זה לא מודדים ב-<span class="en">mock</span>, וזה הנושא של פרק 21.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.14</span>דוגמה מודרכת: צוות של שלושה</h2>
+
+<p>מתחילים מ-<code>main</code> נקי בגרסה 0.18.0, שירות ההערות רץ בחלון שני (פורט 8100).</p>
+
+<div class="step">
+  <h3><span class="step-num">1</span>ענף, לוגים ומדדים</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git switch -c feature/team</code></pre>
+</div>
+  <p>ב-<code>agent\logs.py</code>, <span class="en">ContextVar</span> שני ליד <code>request_id</code>: <code>agent</code>, ו-<code>JsonFormatter</code> מוסיף אותו לשורה כשהוא קיים. ב-<code>agent\metrics.py</code> ארבעת המדדים של 20.11. ב-<code>agent\config.py</code>: <code>CHAT_TEAM</code>, <code>CHAT_WORKER_MODEL</code>, <code>CHAT_TEAM_MAX_STEPS</code>, <code>CHAT_TEAM_MAX_TOKENS</code>, <code>CHAT_TEAM_PARALLEL</code> ו-<code>CHAT_MOCK_DELAY</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>הלולאה: <span class="en">schema</span>, מקביליות, טוקנים לפי סוכן</h3>
+  <p><code>Toolbox.results</code> מ-20.9 ב-<code>agent\tools.py</code>, ו-<code>Toolbox</code> מקבל <code>parallel=False</code> כברירת מחדל: הצ'אט לא משתנה. ב-<code>agent\loop.py</code>, <code>run_agent</code> מקבל <code>schema</code> ומעביר אותו ל-<code>create</code>, קורא ל-<code>toolbox.results(calls)</code>, וסופר טוקנים ב-<code>agent_tokens_total</code> לפי <code>logs.agent</code>. ב-<code>agent\llm.py</code>, <code>create()</code> מ-20.8 בשני הלקוחות ובפרוטוקול <code>AgentClient</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>ה-<span class="en">mock</span> משחק צוות</h3>
+  <p>בלי זה אי אפשר לבדוק כלום בלי מפתח. שלושה תפקידים, כולם באותו מנגנון תסריט של פרקים 16 עד 19, וכולם מתועדים ב-README:</p>
+<div class="table-wrap">
+<table>
+  <tr><th>מי</th><th>מה ה-<span class="en">mock</span> עושה</th></tr>
+  <tr><td>נתב (<code>reply_json</code> עם <code>route</code>)</td><td><code>team</code> כשבהודעה <code>go over</code>, <code>go through</code>, <code>review</code>, <code>all my</code> או <code>everything</code>; אחרת <code>chat</code></td></tr>
+  <tr><td>מתזמר (<code>delegate</code> הוצע)</td><td><code>delegate</code> לכל מומחה שההודעה מזכירה (<code>notes</code>; <code>conversations</code>, <code>talked</code>, <code>decided</code>, <code>memory</code>), לשניהם כשהיא לא מזכירה אף אחד, בתשובה אחת. הנושא: המילה הראשונה אחרי <code>about</code></td></tr>
+  <tr><td>מומחה (<code>create</code> עם <span class="en">schema</span>)</td><td>קורא לכל כלי שלו פעם אחת על הנושא של התדריך, ומדווח את שורות התוצאה שמזכירות אותו. <code>[mock:loop]</code> משאיר אותו בלולאה, <code>[mock:invent]</code> מוסיף ממצא שאף כלי לא החזיר</td></tr>
+</table>
+</div>
+  <p>ו-<code>MockClient(system_prompt, delay)</code> ממתין <code>delay</code> שניות בכל קריאה, כדי שזמן יהיה משהו שאפשר למדוד.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>הנתב והצוות</h3>
+  <p>שני קבצים חדשים. <code>agent\router.py</code>: <code>Route</code> (<code>route: Literal["chat", "team"]</code>, <code>reason</code>), ו-<code>Router.route()</code> שמחזיר <code>"chat"</code> גם כשהקריאה נכשלה או שהתשובה לא תקינה: המסלול הזול הוא ברירת המחדל. <code>agent\team.py</code>: המומחים והפרומפטים, <code>DelegateInput</code>, <code>Report</code>, <code>check()</code>, <code>Budget</code>, <code>Metered</code>, <code>Team</code> ו-<code>make_team(settings)</code>, שמחזיר <code>None</code> כש-<code>CHAT_TEAM</code> כבוי. ב-<code>agent\conversations.py</code>, שינוי אחד ב-<code>send()</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\conversations.py (send)</span></div>
+<pre><code>        if self.team is not None and self.team.wants(text):
+            <span class="cm"># The team's work stays in the log; the conversation keeps the question and</span>
+            <span class="cm"># the answer, as text (the delegations belong to the orchestrator's tools).</span>
+            reply = self.team.answer(context.messages, toolbox.context)
+            steps: list[MessageParam] = []
+        else:
+            reply, steps = self.answer(context.messages, toolbox)</code></pre>
+</div>
+  <p>המתזמר מקבל את ההקשר של השיחה (הסיכום והתורות), אבל רק את ההודעות שהן טקסט: צעדי הכלים של הצ'אט שייכים לכלים אחרים. ב-<code>cli.py</code> וב-<code>api.py</code>: <code>team=make_team(settings)</code>, ו-<code>MockClient(delay=settings.mock_delay)</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>הצוות עובד</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$env:CHAT_TEAM = "1"
+$env:CHAT_MOCK_DELAY = "0.5"
+uv run python -m agent</code></pre>
+</div>
+  <p>שומרים את שש ההערות של 20.1 עם <code>/note</code>, ושואלים את אותה שאלה, הפעם בלי שום תסריט:</p>
+<div class="codebox output">
+  <div class="label"><span>the chat (0.19.0, mock mode; shortened)</span></div>
+<pre><code>you&gt; Go over my notes and earlier conversations about the party and tell me what is still open.
+agent&gt; [mock reply, turn 1] What the specialists found:
+notes:
+- party: book the community hall by Friday, deposit 200 ([a6982aaf])
+- party: ask Omer whether he can bring the speakers and a playlist ([cc69dc9e])
+- party: no peanuts anywhere, Dana is allergic ([ef351a41])
+- party: invitations by email to 25 people, RSVP by February 20 ([41ed7725])
+memory:
+- user: Who brings the music to the party is still open. (2026-11-19, "Keep in mind that I am allergic to peanuts.")
+- user: We still have to choose a cake for the party. (2026-11-19, "Keep in ...")
+...
+
+you&gt; What is the date today?
+agent&gt; [mock reply, turn 2] You said: What is the date today?</code></pre>
+</div>
+  <p>החלב, רופא השיניים והעדפת התשובות הקצרות נקראו, ונשארו אצל המומחים. ההודעה השנייה עברה בנתב והגיעה לצ'אט הרגיל.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">6</span>לקרוא את הריצה</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>Get-Content agent.log | ConvertFrom-Json | Where-Object agent | Format-Table @{n="time";e={$_.time.Substring(17,6)}}, agent, message, input_tokens, cache_write, output_tokens -AutoSize</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (the mock's numbers; shortened)</span></div>
+<pre><code>time   agent               message                       input_tokens cache_write output_tokens
+----   -----               -------                       ------------ ----------- -------------
+44.394 orchestrator        agent step 1: tool_use                 428           0           199
+44.400 orchestrator/notes  subagent started
+44.404 orchestrator/memory subagent started
+44.904 orchestrator/notes  agent step 1: tool_use                 351           0            25
+44.906 orchestrator/memory agent step 1: tool_use                 498           0            47
+44.914 orchestrator/notes  tool list_notes: ok
+45.418 orchestrator/notes  agent step 2: end_turn                 486           0           113
+45.419 orchestrator/memory agent step 2: end_turn                   0         859           224
+45.421 orchestrator        tool delegate: ok
+45.421 orchestrator        tool delegate: ok
+45.922 orchestrator        agent step 2: end_turn                   0         979           270
+45.923 orchestrator        team run finished: done</code></pre>
+</div>
+  <p>שני המומחים התחילו באותן מילישניות וסיימו יחד, וכל שורה אומרת של מי היא. לכל סוכן קידומת משלו במטמון של פרק 19, ורק בקשה של 512 טוקנים ומעלה נכתבת: הצעד הראשון של המתזמר (428) ושל המומחים קטנים מדי, ולכן <code>input_tokens</code>; הצעדים השניים, עם התוצאות, כבר נכתבים. השורה האחרונה מסכמת: <code>model_calls</code> 6, <code>tokens</code> 4,479, ו-<code>tokens_by_agent</code>: 1,876 למתזמר, 975 להערות, 1,628 לזיכרון.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">7</span>בדיקות, תיעוד, גרסה</h3>
+  <p><code>tests\test_team.py</code>: הנתב (ונתב שנכשל), האצלה ואיחוד ומה נשמר, הודעה רגילה שלא מגיעה לצוות, כלים של מומחה, מקביל מול סדרתי, ממצא שלא נבדק, מומחה בלולאה, תקציב, עומק, <span class="en">request id</span> ושם סוכן בכל שורה, והבקשה של <code>ClaudeClient</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest tests\test_team.py -v (shortened)</span></div>
+<pre><code>tests/test_team.py::test_the_router_sends_only_big_reviews_to_the_team PASSED [  6%]
+tests/test_team.py::test_parallel_subagents_take_about_the_time_of_one PASSED [ 40%]
+tests/test_team.py::test_a_finding_no_tool_returned_is_kept_apart_as_unchecked PASSED [ 46%]
+tests/test_team.py::test_a_subagent_cannot_delegate PASSED               [ 73%]
+tests/test_team.py::test_one_request_id_and_an_agent_path_in_every_line_of_the_run PASSED [ 80%]
+tests/test_team.py::test_the_real_client_asks_for_a_json_report_with_the_tools PASSED [100%]
+============================= 15 passed in 45.73s =============================</code></pre>
+</div>
+  <p>כל הבדיקות הקיימות עוברות בלי שינוי: <code>CHAT_TEAM</code> כבוי, ובלעדיו אין נתב ואין צוות. אחר כך מה ש"גמור" אומר מפרק 15: README (סעיף "<span class="en">A team of agents</span>", טבלת ה-<span class="en">mock</span>, משתנים), <code>docs\architecture.md</code>, <code>docs\security.md</code>, <code>.env.example</code>, <code>CHANGELOG.md</code>, גרסה 0.19.0 ב-<code>pyproject.toml</code> וב-<code>deploy\*.env</code>, <code>uv lock</code>, <code>uv run --locked python scripts/ci_local.py --job checks</code>, <span class="en">merge</span> ותג <code>v0.19.0</code>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.15</span>תרגילים</h2>
+
+<p>שירות ההערות רץ, הכול במצב <span class="en">mock</span>, <code>$env:CHAT_TEAM = "1"</code>, ושינויי קוד על ענף. פתרונות <a href="solutions/chapter-20.html">בדף נפרד</a>.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · לקרוא ריצה של צוות</h3><span class="level">מודרך</span></div>
+  <p>אחרי הסקירה של צעד 5, הקבצו את שורות הריצה ב-<code>agent.log</code> פעם לפי <code>request_id</code> ופעם לפי <code>agent</code> (<code>Group-Object</code>), והציגו את שורות "<span class="en">subagent finished</span>" עם <code>status</code>, <code>steps</code> ו-<code>tokens</code>. מצאו גם את השורה של הנתב.</p>
+  <label class="answer-label" for="n-ex1">כמה מזהים היו בריצה, ולמה? מה חסר בשורה של הנתב, ומה הייתם משנים?</label>
+  <textarea class="answer" id="n-ex1" data-id="c20-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c20-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · תדריך חלש למומחה הזיכרון</h3><span class="level">מודרך</span></div>
+  <p>שלחו <code class="wrap">Go over it. [mock:call delegate {"specialist": "memory", "goal": "Check the earlier conversations."}]</code>, ואחר כך את אותה האצלה עם <code>goal</code> שאומר על מה לחפש, <code>context</code> ו-<code>done_when</code> (כמו ב-20.7). השוו את שני הדוחות.</p>
+  <label class="answer-label" for="n-ex2">מה המומחה עשה עם התדריך החלש, ולמה הדוח נראה תקין? מה הייתם מוסיפים לפרומפט שלו כדי שיודה במה שלא עשה?</label>
+  <textarea class="answer" id="n-ex2" data-id="c20-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c20-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · במקביל, ואחד אחרי השני</h3><span class="level mid">בינוני</span></div>
+  <p>עם <code>CHAT_MOCK_DELAY=0.5</code>, הריצו את הסקירה פעם עם <code>CHAT_TEAM_PARALLEL=1</code>, פעם עם <code>0</code>, ופעם עם <code>CHAT_TEAM=0</code> ותסריט שלושת הכלים של 20.1, בשיחות חדשות, והשוו את <code>llm_ms</code> בשורות "<span class="en">model replied</span>". אחר כך קראו את התנאי ב-<code>Toolbox.results</code>.</p>
+  <label class="answer-label" for="n-ex3">כמה חסכה המקביליות, ולמה בדיוק כמה שחסכה? מה היה עלול לקרות אילו הסרתם את התנאי t.writes ומומחה היה מקבל add_note?</label>
+  <textarea class="answer" id="n-ex3" data-id="c20-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c20-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · ממצא שאף כלי לא החזיר</h3><span class="level mid">בינוני</span></div>
+  <p>שלחו את הסקירה עם <code>[mock:invent]</code> בסוף. אחר כך, ב-<code>check()</code>, החליפו את השורה של <code>kept</code> ב-<code>kept = list(report.findings)</code>, הריצו <code>uv run pytest tests\test_team.py</code>, קראו את הכישלון, והחזירו עם <code>git restore agent/team.py</code>.</p>
+  <label class="answer-label" for="n-ex4">מה היה מגיע למשתמש בלי הבדיקה? איזה סוג של המצאה הבדיקה הזו לא תתפוס?</label>
+  <textarea class="answer" id="n-ex4" data-id="c20-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c20-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · כשמשהו נכשל</h3><span class="level mid">בינוני</span></div>
+  <p>שלושה ניסויים, כל אחד בשיחה חדשה: (א) <code>$env:CHAT_TEAM_MAX_STEPS = "3"</code> והסקירה; (ב) עצרו את שירות ההערות והריצו את הסקירה; (ג) <code class="wrap">Go over my notes about the party. [mock:loop]</code>, עם ברירות המחדל. אחרי כל אחד, קראו את שורות "<span class="en">subagent finished</span>" ו-"<span class="en">team run finished</span>".</p>
+  <label class="answer-label" for="n-ex5">מה המשתמש קיבל בכל ניסוי? בניסוי ג, מי עצר את הריצה, ומה היה קורה בלי התקציב של הריצה כולה?</label>
+  <textarea class="answer" id="n-ex5" data-id="c20-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c20-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · כלי, לא מומחה</h3><span class="level mid">בינוני</span></div>
+  <p>"<span class="en">Go over my notes about the party. What day is it?</span>" צריך גם את השעון. מומחה שלישי בשביל <code>current_time</code> הוא לולאה, פרומפט וטוקנים בשביל שורה אחת. תנו את <code>current_time</code> למתזמר עצמו: <code>OWN_TOOLS</code> ב-<code>agent\team.py</code>, וכלים מהרישום לפי השמות האלה לצד <code>delegate</code>. כתבו בדיקה, והוסיפו שורה ל-<code>CHANGELOG.md</code>.</p>
+  <label class="answer-label" for="n-ex6">מה הכלל שלכם: מתי עבודה הולכת למומחה ומתי לכלי של המתזמר? ומה זה עושה לטענה "המתזמר לא עושה עבודה"?</label>
+  <textarea class="answer" id="n-ex6" data-id="c20-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c20-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 7 · האם להדליק את הצוות?</h3><span class="level open">פתוח</span></div>
+  <p>אספו את המספרים: טוקנים, קריאות וזמן של סוכן אחד מול צוות על הסקירה, המחיר של הנתב בהודעה רגילה, וגודל ההקשר של ההודעה הבאה. תמחרו לפי <code>claude-opus-5-5</code> (4 דולר למיליון טוקני קלט, 20 לפלט, 5 לכתיבה למטמון, 0.20 לקריאה), ופעם עם מומחים ונתב על <code>claude-haiku-5-5</code> (0.10 ו-0.50). החליטו אם <code>CHAT_TEAM</code> נדלק ב-<span class="en">deploy</span>, וכתבו <code>docs\adr\0005-...md</code> לפי התבנית של פרק 15.</p>
+  <label class="answer-label" for="n-ex7">מה החלטתם, ואיזה מספר הכריע? מה חסר לכם כדי להחליט אחרת?</label>
+  <textarea class="answer" id="n-ex7" data-id="c20-n7"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c20-ex7"><span>סיימתי את תרגיל 7</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.16</span>בדקו את עצמכם</h2>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c20-chk1"><span>אני יודע/ת להגדיר מערכת של כמה סוכנים במשפט אחד, ולמנות שלושה רווחים וארבעה מחירים.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c20-chk2"><span>אני יודע/ת להבחין בין <span class="en">routing</span>, מתזמר ועובדים, <span class="en">fan-out</span>, שרשרת העברות וסוקר, ולומר איזה מהם <span class="en">workflow</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c20-chk3"><span>אני יודע/ת מה המתזמר מחליט, מה הוא לא עושה בעצמו, ומה דומה ושונה מהמתזמר של ה-<span class="en">saga</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c20-chk4"><span>אני יודע/ת לבנות סוכן-משנה ככלי: פרומפט, כלים והקשר משלו, ודוח קצר בחזרה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c20-chk5"><span>אני יודע/ת לכתוב תדריך שמומחה יכול לעבוד לפיו, ולזהות תדריך חלש.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c20-chk6"><span>אני יודע/ת למה בודקים את מה שמומחה החזיר, ומה עושים כשהוא נכשל, נתקע או חורג.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c20-chk7"><span>אני יודע/ת מה אפשר להריץ במקביל ומה לא, ולמה <span class="en">thread</span> צריך את ה-<span class="en">ContextVar</span>-ים של מי שיצר אותו.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c20-chk8"><span>אני יודע/ת לשים תקציב לריצה כולה ולעקוב אחריה בלוג ובמדדים, לפי סוכן.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c20-chk9"><span>אני יודע/ת להחליט במספרים בין קריאה אחת, <span class="en">workflow</span>, סוכן אחד וצוות.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.17</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td>"<span class="en">Go over ...</span>" נענה ב-<code>You said: ...</code>, ואין שורות <code>agent</code> בלוג</td><td><code>CHAT_TEAM</code> לא <code>1</code> בחלון הזה (או ב-<code>.env</code>)</td><td><code>$env:CHAT_TEAM = "1"</code>, וחלון חדש של הצ'אט</td></tr>
+  <tr><td><code>WARNING</code> "<span class="en">the router failed; the chat answers</span>" על כל הודעה</td><td>הנתב לא קיבל <span class="en">JSON</span> תקין; למשל מול שרת ה-<span class="en">echo</span> של פרק 4, שעונה בטקסט</td><td>זה המסלול הבטוח, בכוונה. מול מודל אמיתי: בדקו את <code>CHAT_WORKER_MODEL</code> ואת השגיאה בשורה</td></tr>
+  <tr><td><code>notes specialist: unavailable</code></td><td>אין <code>NOTES_URL</code>, ולכן אין למומחה כלים</td><td>הגדירו את <code>NOTES_URL</code> והפעילו את שירות ההערות</td></tr>
+  <tr><td><code>I stopped before finishing: the run made its 20 model calls.</code></td><td>לולאה (מומחה שלא מסיים, מתזמר שמאציל שוב ושוב) או משימה גדולה מדי</td><td>קראו את "<span class="en">team run finished</span>" ו-<code>tokens_by_agent</code>; העלו את <code>CHAT_TEAM_MAX_STEPS</code> רק אחרי שהבנתם מי צרך</td></tr>
+  <tr><td>שורות של מומחים בלי <code>request_id</code></td><td><span class="en">thread</span> שנוצר בלי <code>copy_context()</code></td><td>להריץ כל משימה ב-<span class="en">thread</span> עם <code>copy_context().run</code></td></tr>
+  <tr><td>בדיקה שסופרת שורות לוג עוברת לבד ונכשלת עם שאר הבדיקות</td><td><code>root.level = ...</code> ישירות לא מנקה את המטמון של ה-<span class="en">loggers</span></td><td><code>root.setLevel(logging.INFO)</code>, והחזרה אחרי הבדיקה</td></tr>
+  <tr><td>מודל אמיתי: 400 על <code>output_config</code> בבקשה של מומחה</td><td>מודל שלא תומך ב-<span class="en">structured outputs</span>, או <span class="en">schema</span> עם מה שלא נתמך</td><td><code>CHAT_WORKER_MODEL</code> מהרשימה הנוכחית, ו-<code>anthropic.transform_schema</code> כמו ב-<code>REPORT_SCHEMA</code></td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.18</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>multi-agent system</dt><dd>כמה לולאות סוכן, לכל אחת הקשר, הוראות וכלים משלה, ודרך להעביר עבודה ביניהן.</dd>
+  <dt>orchestrator</dt><dd>סוכן שמתכנן, מאציל חלקים לסוכנים אחרים ומאחד את מה שחזר; לא עושה את העבודה בעצמו.</dd>
+  <dt>subagent</dt><dd>סוכן שמישהו אחר התחיל, עם הקשר ריק, תדריך, כלים מצומצמים, ותשובה שחוזרת אליו.</dd>
+  <dt>delegation</dt><dd>מסירת חלק מעבודה לסוכן אחר; אצלנו, קריאה לכלי <code>delegate</code>.</dd>
+  <dt>brief</dt><dd>ההודעה שסוכן-משנה מקבל: מטרה, הקשר, ומתי זה גמור. כל מה שהוא יודע.</dd>
+  <dt>routing</dt><dd>סיווג קטן שבוחר מסלול אחד להודעה.</dd>
+  <dt>fan-out / gather</dt><dd>הרצה של כמה עבודות עצמאיות בבת אחת, והמתנה לכולן.</dd>
+  <dt>handoff</dt><dd>העברה של השיחה עצמה לסוכן אחר, שממשיך במקום הראשון.</dd>
+  <dt>evaluator</dt><dd>סוכן או קוד שבודק תוצאה של אחר ומחזיר הערות.</dd>
+  <dt>context isolation</dt><dd>כל סוכן רואה רק את מה ששייך לעבודה שלו; מה שקרא לא עובר הלאה.</dd>
+  <dt>run budget</dt><dd>גבול אחד לקריאות, לטוקנים ולזמן של ריצה, לכל הסוכנים יחד.</dd>
+  <dt>agent framework</dt><dd>ספרייה שנותנת לולאה, כלים, האצלה, מצב ומעקב מוכנים.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">20.19</span>מה הלאה</h2>
+
+<p>יש לכם עכשיו סוכן אחד, צוות, ונתב שבוחר ביניהם, וכולם עובדים על הדוגמאות שלכם. אבל "עובד על הדוגמאות שלי" זה לא "עובד". איך יודעים שהסוכן עונה נכון על מאה שאלות שלא ראיתם, ושהשינוי של אתמול לא קלקל? מה קורה כשהוא קורא הערה שמישהו כתב כדי להטעות אותו, ויש לו כלי שכותב? מי מאשר פעולה מסוכנת לפני שהיא קורית? ובכמה זה עולה בחודש? אלה השאלות של <strong>פרק 21: סוכנים בייצור</strong>, הפרק האחרון.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-20</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים: גרסה 0.19.0, <code>agent\router.py</code>, <code>agent\team.py</code>, <code>tests\test_team.py</code>, ומהתרגילים <code>current_time</code> אצל המתזמר ו-<code>docs\adr\0005-keep-the-team-off-by-default.md</code>. שירות ההערות לא השתנה.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-20.html">פתרונות לפרק 20</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

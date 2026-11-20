@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 19 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-19.html">→ חזרה לפרק 19</a>
+    <span>פתרונות לפרק 19</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 19 · <span class="en">Context</span> ו-<span class="en">memory</span></h1>
+  <p class="lead">כל הפלטים כאן אמיתיים, מריצה במצב <span class="en">mock</span>. מספרי הטוקנים והמטמון הם של ה-<span class="en">mock</span> (תו לכל ארבעה, ומטמון שמדמה את של ה-<span class="en">API</span>): נכונים להשוואה, לא כמחיר. המחירים הם של <code>claude-opus-5-5</code>: 4 דולר למיליון טוקני קלט, 5 לכתיבה למטמון, 0.20 לקריאה ממנו.</p>
+</header>
+
+<h2><span class="sec">1</span>מטמון שעובד, ומטמון שבור</h2>
+<div class="codebox output">
+  <div class="label"><span>three messages, then the same with the time in the system prompt (Format-Table message, input_tokens, cache_read, cache_write)</span></div>
+<pre><code>message                input_tokens cache_read cache_write
+-------                ------------ ---------- -----------
+agent step 1: end_turn            0          0         564
+agent step 1: end_turn            0        564          30
+agent step 1: end_turn            0        594          31
+agent step 1: end_turn            0          0         570
+agent step 1: end_turn            0          0         600
+agent step 1: end_turn            0          0         631</code></pre>
+</div>
+<p>בשלוש השורות הראשונות, הלולאה הבריאה: כתיבה אחת, ואחריה קריאה של כל מה שהיה וכתיבה של 30 טוקנים. עם השעה בפרומפט, <code>cache_read</code> הוא 0 תמיד, וכל קריאה כותבת את כל הבקשה מחדש. זה <em>יקר יותר</em> מבלי מטמון בכלל: כל טוקן משולם כתיבה, פי 1.25.</p>
+<p>בשיחה של 50 תורות של כאלף טוקנים (חשבון, לא מדידה): נשלחים בסך הכול כ-1.275 מיליון טוקני קלט. בלי מטמון: כ-5.10 דולר. עם מטמון שבור: כ-6.40 דולר, כולם כתיבה. עם מטמון עובד: כ-50 אלף טוקנים נכתבים (0.25 דולר) והשאר נקרא (כ-0.25 דולר): כחצי דולר. ולא היה שום סימן חוץ מהמספרים. את השעה מעבירים בסוף: בהודעה של המשתמש, בהודעת <code>system</code> שמוסיפים בסוף ה-<code>messages</code>, או בכלי (<code>current_time</code> מפרק 18), שהמודל קורא רק כשצריך.</p>
+
+<h2><span class="sec">2</span><span class="en">Compaction</span> מתחת למיקרוסקופ</h2>
+<div class="codebox output">
+  <div class="label"><span>CHAT_CONTEXT_TOKENS=700, after the fourth and the fifth message (shortened)</span></div>
+<pre><code>you&gt; /context
+The next call, estimated (budget 700 tokens):
+  system       27
+  tools       527
+  summary      43
+  history      86  turns: 2 sent, 1 left out
+  question      0
+  total       683  of 700
+Saved in the database: 4 turns.
+
+you&gt; Should I send invitations by email?
+agent&gt; [mock reply, turn 2] You said: Should I send invitations by email?
+
+you&gt; /context
+  summary      53
+  history      90  turns: 2 sent, 1 left out
+  total       697  of 700
+Saved in the database: 5 turns.</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>uv run python -m sqlite3 agent.db "SELECT id, upto_message_id, content FROM summaries"; and SELECT COUNT(*) FROM messages</span></div>
+<pre><code>(1, 2, '[mock summary] The user said: My name is Dana and I am allergic to peanuts.')
+(2, 4, '[mock summary] The user said: My name is Dana and I am allergic to peanuts. | I am planning a party for my sister.')
+(10,)</code></pre>
+</div>
+<p><strong>על מה הלך התקציב:</strong> 527 מתוך 700 הם הגדרות של כלים. בתקציב כזה כמעט כל הודעה מסכמת, ולכן קריאה נוספת למודל והחטאה של המטמון: הצעד הראשון לחיסכון הוא פחות כלים, לא סיכום חכם יותר (או <span class="en">tool search</span>, שבו הגדרות נטענות רק כשצריך). <strong>"left out" בלי אובדן:</strong> <code>/context</code> מראה את ההקשר <em>כפי שהוא עכשיו</em>, לפני ההודעה הבאה. כששולחים הודעה, <code>send()</code> רואה שתור לא נכנס ומסכם קודם, כך שהמודל לא מקבל הקשר חסר. <strong>מה הסיכום לא שמר:</strong> את התשובות (הסיכום המתוסרט שומר רק את מה שהמשתמש אמר), את צעדי הכלים, ואת הניסוח המדויק. וכל הסיכומים נשארים: כל אחד כולל את הקודם, ו-10 ההודעות כולן בבסיס הנתונים.</p>
+
+<h2><span class="sec">3</span>לשבור את כלל התורות השלמים</h2>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest tests\test_context.py, with one message per "turn" (shortened)</span></div>
+<pre><code>E       assert (4, 2) == (2, 1)
+E       AssertionError: assert [{'role': 'as...ent': 'milk'}] == []
+E         Left contains 3 more items, first extra item: {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': 'toolu_1', 'name': 'list_notes', 'input': {}}]}
+E       AssertionError: assert 2 == 1
+E        +  where 2 = count(Engine(sqlite://), 'SELECT COUNT(*) FROM summaries')
+E       AssertionError: assert 'three' == 'two'
+FAILED tests/test_context.py::test_the_newest_turns_that_fit_are_kept_and_the_budget_adds_up
+FAILED tests/test_context.py::test_a_tool_request_is_never_sent_without_its_result
+FAILED tests/test_context.py::test_compaction_summarises_old_turns_and_keeps_them_stored
+FAILED tests/test_context.py::test_without_compaction_old_turns_are_simply_left_out
+4 failed, 4 passed in 4.74s</code></pre>
+</div>
+<p><code>test_a_tool_request_is_never_sent_without_its_result</code> מראה הקשר שמתחיל בהודעת <code>assistant</code> עם <code>tool_use</code>, בלי השאלה שלפניה. כאן התוצאה עוד הייתה אחריה; עם תקציב אחר, החיתוך היה נופל בין הבקשה לתוצאה, וה-<span class="en">API</span> דוחה בקשה כזו ב-400: לכל <code>tool_use</code> חייב להגיע <code>tool_result</code> בהודעה הבאה. הקשר שמתחיל בתשובה גם מבלבל את המודל: הוא רואה תשובה לשאלה שלא שמע. שלוש הבדיקות האחרות נכשלו בספירה: "תורות" שהם הודעות בודדות הופכים את <code>max_turns=2</code> לשתי הודעות, כלומר לתור אחד. ההקשר מתחיל ב-<code>three</code> במקום ב-<code>two</code>, ארבע "תורות" נשלחות במקום שתיים, ו-<span class="en">compaction</span> רץ פעמיים במקום פעם. ספירה שגויה היא באג שקט: הכול עובד, רק אחרת ממה שהמשתמש הגדיר.</p>
+
+<h2><span class="sec">4</span>לשכוח לפי בקשה</h2>
+<div class="codebox">
+  <div class="label"><span>agent\memory_tools.py (added)</span></div>
+<pre><code>class ForgetInput(ToolInput):
+    memory: str = Field(
+        pattern=r"^[0-9a-f]{8}$",
+        description="The memory's ref: the 8 characters in brackets that recall shows.",
+    )
+
+
+def forget_memory(context: ToolContext, args: ForgetInput) -&gt; str:
+    <span class="cm"># Only this owner's memories are searched: a ref of someone else's is "not found".</span>
+    fact = context.memory_store().forget(args.memory)
+    if fact is None:
+        raise ToolError(f"No memory [{args.memory}]. Call recall to see the memories and refs.")
+    return f"Forgotten: [{ref(fact)}] {fact.text}"</code></pre>
+</div>
+<p>ורישום ב-<code>memory_tools()</code> עם <code>writes=True, needs="memory"</code>; ב-<code>llm.py</code>, <code>UNREMEMBER = re.compile(r"\bforget memory \[?([0-9a-f]{8})\]?", re.IGNORECASE)</code> ותנאי ב-<code>wanted_calls</code>. הבדיקה, ב-<code>tests\test_memory.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_memory.py</span></div>
+<pre><code>def test_the_model_can_forget_only_this_clients_memories():
+    conversations = Conversations(MockClient(), 10, make_engine("sqlite://"), write_tools=True)
+    dana_fact, _ = conversations.memory("dana").remember("likes tea")
+    omer = conversations.start("omer")
+    refused = conversations.send(omer, f"Forget memory {dana_fact.id[:8]}.")
+    assert f"No memory [{dana_fact.id[:8]}]" in refused
+    dana = conversations.start("dana")
+    done = conversations.send(dana, f"Forget memory {dana_fact.id[:8]}.")
+    assert "Forgotten:" in done
+    assert conversations.memory("dana").recall() == []</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>the chat, with CHAT_WRITE_TOOLS=1 (a new conversation after "Keep in mind that I drink my coffee black.")</span></div>
+<pre><code>you&gt; Forget memory fd354e28.
+agent&gt; [mock reply, turn 1] I looked it up. The tool said:
+Forgotten: [fd354e28] I drink my coffee black
+
+you&gt; Forget memory fd354e28.
+agent&gt; [mock reply, turn 2] I tried, but the tool failed: No memory [fd354e28].
+Call recall to see the memories and refs.
+
+you&gt; /memories
+Nothing is remembered yet.</code></pre>
+</div>
+<p>הבעלות נאכפת ב-<code>MemoryStore</code>: הוא נבנה עם הבעלים של השיחה (<code>Conversations.toolbox</code>), ו-<code>forget</code> מחפש רק בין העובדות שלו. המודל לא בוחר בעלים, כמו שלא בחר שיחה בפרק 18. "לא נמצא" ולא "אסור", מאותה סיבה כמו ה-404 של פרק 14: תשובה שונה הייתה מגלה לעומר שה-<span class="en">ref</span> קיים אצל מישהו. ב-<code>CHANGELOG.md</code> השינוי תחת <span class="en">Unreleased</span>, ושורה בטבלאות של README.</p>
+
+<h2><span class="sec">5</span>הגבולות של חיפוש מילים</h2>
+<div class="codebox output">
+  <div class="label"><span>before the change (shortened)</span></div>
+<pre><code>you&gt; Did we talk about cakes?
+No earlier conversation mentions 'cakes'. Try other or fewer words.
+you&gt; Did we talk about dessert?
+No earlier conversation mentions 'dessert'. Try other or fewer words.
+you&gt; Did we talk about the PARTY?
+- 2026-11-19, "My name is Dana and I am allergic to peanuts.", user: I am planning a party for my sister.
+you&gt; Did we talk about guests and invitations?
+- ..., user: Should I send invitations by email?
+- ..., user: How many guests fit in a small living room?</code></pre>
+</div>
+<p>"<span class="en">PARTY</span>" נמצא (אותיות קטנות בשני הצדדים), "<span class="en">the</span>" נזרק כמילה נפוצה, ושתי מילים מצאו שתי הודעות שונות. "<span class="en">cakes</span>" לא מצא "<span class="en">cake</span>", ו-"<span class="en">dessert</span>" לא מצא כלום. השיפור, ב-<code>agent\memory.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\memory.py</span></div>
+<pre><code>def stem(word: str) -&gt; str:
+    """A plural without its s, so that "cakes" also finds "cake" (a search for "cake" finds
+    "cakes" already: it is contained in it). Crude, English only, and enough here."""
+    if len(word) &gt;= 4 and word.endswith("s") and not word.endswith("ss"):
+        return word[:-1]
+    return word</code></pre>
+</div>
+<p>ו-<code>keywords()</code> מפעיל אותו על כל מילה; הבדיקה: <code>keywords("cakes, guests and a glass") == ["cake", "guest", "glass"]</code>. אחרי השינוי:</p>
+<div class="codebox output">
+  <div class="label"><span>after the change (shortened)</span></div>
+<pre><code>you&gt; Did we talk about cakes?
+Found in earlier conversations (newest first among equal matches):
+- 2026-11-19, "Did we talk about cakes?", assistant: [mock reply, turn 1] I
+looked it up. The tool said: No earlier conversation mentions 'cakes'. Try
+other or fewer words.
+- 2026-11-19, "Did we talk about cakes?", user: Did we talk about cakes?
+- 2026-11-19, "My name is Dana and I am allergic to peanuts.", assistant: [mock
+reply, turn 3] You said: Which cake should I bake?
+- 2026-11-19, "My name is Dana and I am allergic to peanuts.", user: Which cake
+should I bake?</code></pre>
+</div>
+<p><strong>מה לא ציפינו לו:</strong> שתי התוצאות הראשונות הן השיחה הקודמת של התרגיל עצמו: השאלה, והתשובה "<span class="en">No earlier conversation mentions</span>". החיפוש מוצא גם את החיפושים של הסוכן, והן תופסות מקום של תוצאות אמיתיות. אפשרויות: לסנן תשובות של <code>assistant</code>, או לשמור תוצאות חיפוש כ-<code>blocks</code> בלבד (הן כבר כאלה; מה שנמצא הוא התשובה הסופית, שמצטטת אותן). <strong>מה <span class="en">embeddings</span> היו מוצאים:</strong> "<span class="en">dessert</span>" ליד "<span class="en">cake</span>", ניסוח אחר, ושאלה בעברית על שיחה באנגלית. המחיר: מודל <span class="en">embeddings</span> (קריאה לכל הודעה שנשמרת ולכל חיפוש), אחסון וקטורים (ב-Postgres, למשל עם הרחבה כמו <code>pgvector</code>), ותוצאות שקשה להסביר למה הן נמצאו. ובשמות ומספרים מדויקים הם חלשים יותר ממילים.</p>
+
+<h2><span class="sec">6</span>מדיניות הקשר, במספרים</h2>
+<p>הסקריפט מחליף את <code>usage</code> של <code>MockClient</code> במחלקה יורשת שרושמת כל קריאה (גם הסיכומים עוברים שם), מריץ 30 שאלות של כ-40 מילים, ומתמחר את הקלט:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$env:PYTHONPATH = "."
+uv run python ..\measure.py
+Remove-Item Env:PYTHONPATH</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>max_turns=100 compact=1  calls=30  prompt tokens= 59655  read from cache= 55672  cost with caching=$0.0306  without=$0.2386
+max_turns=10  compact=1  calls=33  prompt tokens= 40762  read from cache= 30448  cost with caching=$0.0572  without=$0.1630
+max_turns=10  compact=0  calls=30  prompt tokens= 39650  read from cache=  8856  cost with caching=$0.1553  without=$0.1586
+max_turns=4   compact=1  calls=39  prompt tokens= 36524  read from cache= 18527  cost with caching=$0.0924  without=$0.1461</code></pre>
+</div>
+<p>ההחלטה בפרויקט, ב-<code>docs\adr\0004-summarise-rather-than-slide-the-context.md</code>: <span class="en">compaction</span> נשאר דלוק, ו-<code>CHAT_MAX_TURNS</code> נשאר 10. המספר שהכריע: חלון שזז (שורה 3) קורא מהמטמון 8,856 טוקנים מתוך 39,650, ועולה פי שלושה מ-<span class="en">compaction</span>, אף שהוא שולח <em>פחות</em> טוקנים. מטמון לא מוזיל טוקנים; הוא מוזיל טוקנים שחוזרים באותו מקום. שתי הפתעות: בלי קיצוץ בכלל (שורה 1) זה הכי זול בשיחה של 30 שאלות, כי הכול נקרא מהמטמון; אבל ההקשר גדל בלי גבול, ואיתו הזמן והפיזור. ו-4 תורות עולה יותר מ-10: יותר סיכומים, יותר החטאות. ה-<span class="en">ADR</span> מתעד גם את ה-<span class="en">compaction</span> של הספק כחלופה, ומתי לחזור אליה.</p>
+
+<h2><span class="sec">·</span>ההיסטוריה ב-git</h2>
+<p>ענף <code>feature/context-memory</code>, ממוזג ב-<span class="en">fast-forward</span>: "<span class="en">Context within a token budget: whole turns stored, compaction, prompt caching, memory and search</span>"; "<span class="en">Document context, caching, compaction and memory; version 0.18.0</span>"; "<span class="en">Compaction keeps only the recent turns that fit; a summary of a summary reads better in the mock</span>". אחריו התג <code>v0.18.0</code>. התרגילים: <code>feature/forget-memory</code> (4) ו-<code>feature/search-plurals</code> (5), תחת <span class="en">Unreleased</span>, ואז ב-<code>main</code> ה-<span class="en">ADR</span> של תרגיל 6. תרגילים 1 ו-3 לא משאירים שינוי (<code>git restore</code>). הקומיט הראשון גדול; בעבודה אמיתית עדיף לפצל אותו לפי הסעיפים של הדוגמה המודרכת, כשכל חלק עובר בדיקות.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-19.html">→ חזרה לפרק 19</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

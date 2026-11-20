@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 6 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-06.html">→ חזרה לפרק 6</a>
+    <span>פתרונות לפרק 6</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 6 · בסיסי נתונים</h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. הפלטים כאן הם מה שהתקבל באמת כשהתרגילים נעשו. המזהים, הזמנים והמדידות אצלכם יהיו אחרים. הקוד המלא נמצא ב-<code>checkpoints\chapter-06</code>.</p>
+</header>
+
+<h2><span class="sec">1</span>ארבע שאלות ב-<span class="en">SQL</span></h2>
+<div class="codebox">
+  <div class="label"><span>sqlite&gt; (uv run python -m sqlite3 lab.db)</span></div>
+<pre><code>SELECT content FROM messages WHERE conversation_id = 'c1' ORDER BY id DESC;
+SELECT role, COUNT(*) FROM messages GROUP BY role;
+INSERT INTO conversations (id, created_at) VALUES ('c3', '2026-11-18 13:00');
+SELECT c.id FROM conversations AS c LEFT JOIN messages AS m ON m.conversation_id = c.id WHERE m.id IS NULL;
+PRAGMA foreign_keys = ON;
+DELETE FROM conversations WHERE id = 'c2';
+BEGIN;
+DELETE FROM messages WHERE conversation_id = 'c2';
+DELETE FROM conversations WHERE id = 'c2';
+COMMIT;
+SELECT id FROM conversations;</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>('A language for asking questions about tables.',)
+('what is SQL?',)
+('Hi! How can I help?',)
+('hello',)
+('assistant', 2)
+('user', 3)
+('c3',)
+IntegrityError (SQLITE_CONSTRAINT_FOREIGNKEY): FOREIGN KEY constraint failed
+('c1',)
+('c3',)</code></pre>
+</div>
+<p><code>JOIN</code> רגיל מחזיר רק שיחות שיש להן הודעה. <code>LEFT JOIN</code> שומר כל שורה של הטבלה השמאלית, וכשאין התאמה, העמודות של <code>m</code> הן <code>NULL</code>. לכן <code>WHERE m.id IS NULL</code> משאיר בדיוק את השיחות הריקות. (ב-<span class="en">SQL</span> בודקים <code>IS NULL</code>, לא <code>= NULL</code>: <code>NULL</code> לא שווה לשום דבר, גם לא לעצמו.)</p>
+<p><strong>משימה 4:</strong> הניסיון הראשון נכשל, כי להודעה של <code>c2</code> יש <span class="en">foreign key</span> שמצביע על השיחה. מחיקה שלה הייתה משאירה הודעה יתומה, ובסיס הנתונים סירב. ה-<code>PRAGMA</code> נחוץ שוב, כי זה <span class="en">shell</span> חדש, כלומר חיבור חדש. הסדר הנכון: קודם ההודעות, אחר כך השיחה, ב-<span class="en">transaction</span> אחת, כדי שאף אחד לא יראה שיחה בלי הודעות באמצע. זה בדיוק מה ש-<code>Conversations.delete</code> עושה.</p>
+
+<h2><span class="sec">2</span>מה באמת נשמר</h2>
+<div class="codebox output">
+  <div class="label"><span>the chat, with CHAT_MAX_TURNS=2 (shortened)</span></div>
+<pre><code>you&gt; one
+agent&gt; [mock reply, turn 1] You said: one
+you&gt; two
+agent&gt; [mock reply, turn 2] You said: two
+you&gt; three
+agent&gt; [mock reply, turn 3] You said: three
+you&gt; four
+agent&gt; [mock reply, turn 3] You said: four
+you&gt; five
+agent&gt; [mock reply, turn 3] You said: five</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>sqlite&gt; (uv run python -m sqlite3 agent.db)</span></div>
+<pre><code>SELECT c.id, c.created_at, COUNT(m.id)
+  FROM conversations AS c LEFT JOIN messages AS m ON m.conversation_id = c.id
+  GROUP BY c.id ORDER BY c.created_at;</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>('71a31357f4ad482c90ac3d0db0495921', '2026-11-18 12:51:35.238681', 6)
+('1c23146ec49948978d62e2dbd3c889c9', '2026-11-18 12:53:19.553403', 10)</code></pre>
+</div>
+<p>השיחה החדשה שמרה 10 הודעות: חמש שאלות וחמש תשובות. אבל מהשאלה השלישית, ה-<span class="en">mock</span> אומר <code>turn 3</code>: הוא קיבל חמש הודעות, שני תורות קודמים והשאלה החדשה. הקיצוץ מפרק 3 פועל על מה שנשלח למודל, ובסיס הנתונים שומר הכול. <code>COUNT(m.id)</code> ולא <code>COUNT(*)</code>, כדי ששיחה ריקה תקבל 0 ולא 1 (השורה שה-<code>LEFT JOIN</code> משאיר לה).</p>
+<p><strong>הבדלים ב-<code>CREATE TABLE</code></strong> (כל שלושה מאלה מספיקים):</p>
+<ul>
+  <li>SQLAlchemy כתב <code>VARCHAR(32)</code> ו-<code>VARCHAR(16)</code> במקום <code>TEXT</code>, מ-<code>String(32)</code>. SQLite לא אוכף את האורך, Postgres כן.</li>
+  <li>יש עמודה <code>created_at DATETIME NOT NULL</code> גם בהודעות.</li>
+  <li>ה-<span class="en">primary key</span> וה-<span class="en">foreign key</span> כתובים כשורות נפרדות בסוף (<code>PRIMARY KEY (id)</code>, <code>FOREIGN KEY(...) REFERENCES ...</code>), ולא ליד העמודה. המשמעות זהה.</li>
+  <li>ה-<span class="en">index</span> לא מופיע בטבלה: הוא פקודה נפרדת, <code>CREATE INDEX ix_messages_conversation_id</code>, שרואים ב-<code>SELECT name, sql FROM sqlite_master WHERE type = 'index';</code>.</li>
+</ul>
+
+<h2><span class="sec">3</span>כמה שווה <span class="en">index</span></h2>
+<div class="codebox">
+  <div class="label"><span>scripts\index_lab.py</span></div>
+<pre><code>"""How much does an index help? Times one query before and after CREATE INDEX.
+
+Run it with: uv run python scripts/index_lab.py
+Everything happens in an in-memory SQLite database, so no file is left behind.
+"""
+
+import sqlite3
+import time
+
+CONVERSATIONS = 10_000
+MESSAGES_PER_CONVERSATION = 50
+QUERY = "SELECT content FROM messages WHERE conversation_id = ? ORDER BY id"
+
+
+def fill(db: sqlite3.Connection) -&gt; None:
+    """Create the messages table and fill it with fake messages."""
+    db.execute(
+        "CREATE TABLE messages (id INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL,"
+        " role TEXT NOT NULL, content TEXT NOT NULL)"
+    )
+    rows = (
+        (f"c{c}", "user" if m % 2 == 0 else "assistant", f"message {m} of conversation {c}")
+        for c in range(CONVERSATIONS)
+        for m in range(MESSAGES_PER_CONVERSATION)
+    )
+    # The ? placeholders: the values travel separately from the SQL text.
+    db.executemany("INSERT INTO messages (conversation_id, role, content) VALUES (?, ?, ?)", rows)
+    db.commit()
+
+
+def time_queries(db: sqlite3.Connection, label: str, repeats: int = 200) -&gt; None:
+    """Run the query for `repeats` different conversations and print the average time."""
+    plan = db.execute("EXPLAIN QUERY PLAN " + QUERY, ("c1",)).fetchall()
+    start = time.perf_counter()
+    for i in range(repeats):
+        db.execute(QUERY, (f"c{i * 37 % CONVERSATIONS}",)).fetchall()
+    average_ms = (time.perf_counter() - start) / repeats * 1000
+    print(f"{label}: {average_ms:.3f} ms per query  plan: {plan[0][3]}")
+
+
+def main() -&gt; None:
+    db = sqlite3.connect(":memory:")
+    fill(db)
+    count = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+    print(f"{count:,} messages in {CONVERSATIONS:,} conversations")
+    time_queries(db, "without index")
+    start = time.perf_counter()
+    db.execute("CREATE INDEX ix_messages_conversation_id ON messages (conversation_id)")
+    print(f"CREATE INDEX took {(time.perf_counter() - start) * 1000:.0f} ms")
+    time_queries(db, "with index   ")
+    db.close()
+
+
+if __name__ == "__main__":
+    main()</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>uv run python scripts\index_lab.py</span></div>
+<pre><code>500,000 messages in 10,000 conversations
+without index: 31.122 ms per query  plan: SCAN messages
+CREATE INDEX took 350 ms
+with index   : 0.072 ms per query  plan: SEARCH messages USING INDEX ix_messages_conversation_id (conversation_id=?)</code></pre>
+</div>
+<p>פי 400 בערך (בהרצה שנייה: 22.2 מול 0.028, פי 800). המספרים משתנים בין הרצות ובין מחשבים, היחס לא. 31 מילישניות נשמעות מעט, אבל זו כל תשובה של הסוכן, וזה גדל עם הטבלה: עם 5 מיליון הודעות, פי עשרה. עם <span class="en">index</span>, הזמן כמעט לא תלוי בגודל הטבלה. <strong>המחיר:</strong> בניית ה-<span class="en">index</span> לקחה כשליש שנייה, הוא תופס מקום בקובץ, וכל <code>INSERT</code> מעכשיו מעדכן גם אותו. במסלול ממוצע של הסוכן יש הרבה יותר קריאות מכתיבות, ולכן זו עסקה טובה.</p>
+<p>ה-<span class="en">generator</span> <code>rows</code> חוסך לבנות רשימה של חצי מיליון <span class="en">tuples</span> בזיכרון, ו-<code>executemany</code> עם <code>commit</code> אחד בסוף שולח הכול ב-<span class="en">transaction</span> אחת. בקובץ אמיתי, <code>commit</code> אחרי כל שורה היה איטי בהרבה, כי כל <code>COMMIT</code> מחכה שהדיסק יאשר את הכתיבה (זה ה-<span class="en">durability</span> מסעיף 6.6).</p>
+
+<h2><span class="sec">4</span><code>--continue</code></h2>
+<div class="codebox">
+  <div class="label"><span>agent\conversations.py (the addition)</span></div>
+<pre><code>    def latest(self) -&gt; str | None:
+        """The id of the newest conversation, or None when there is none."""
+        with self.sessions() as session:
+            newest_first = select(ConversationRow.id).order_by(ConversationRow.created_at.desc())
+            return session.scalar(newest_first.limit(1))</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>agent\cli.py (the changes)</span></div>
+<pre><code>import argparse
+...
+def chat_loop(client: ChatClient, settings: Settings, resume: bool = False) -&gt; None:
+    """Run the conversation until the user quits. `resume` continues the newest one."""
+    print("Type a message and press Enter. Commands: /reset, /history, exit.\n")
+    engine = make_engine(settings.database_url)
+    conversations = Conversations(client, settings.max_turns, engine)
+    # The terminal holds one conversation: the newest one, or a new one.
+    last_id = conversations.latest() if resume else None
+    if last_id is None:
+        conversation_id = conversations.start()
+    else:
+        conversation_id = last_id
+        turns = len(conversations.messages(conversation_id)) // 2
+        print(f"Continuing the last conversation ({turns} turns).\n")
+...
+def main() -&gt; None:
+    parser = argparse.ArgumentParser(prog="python -m agent", description="Chat in the terminal.")
+    parser.add_argument(
+        "--continue", dest="resume", action="store_true", help="continue the last conversation"
+    )
+    args = parser.parse_args()
+    ...
+    chat_loop(client, settings, resume=args.resume)</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>tests\test_cli.py (the addition; plus "from dataclasses import replace" at the top)</span></div>
+<pre><code>def test_continue_picks_up_the_last_conversation(monkeypatch, capsys, tmp_path):
+    settings = replace(SETTINGS, database_url=f"sqlite:///{tmp_path / 'test.db'}")
+    type_lines(monkeypatch, "one", "two", "exit")
+    chat_loop(MockClient(), settings)
+    type_lines(monkeypatch, "three", "exit")
+    chat_loop(MockClient(), settings, resume=True)
+    output = capsys.readouterr().out
+    assert "Continuing the last conversation (2 turns)." in output
+    assert "[mock reply, turn 3] You said: three" in output</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>uv run python -m agent --help</span></div>
+<pre><code>usage: python -m agent [-h] [--continue]
+
+Chat in the terminal.
+
+options:
+  -h, --help  show this help message and exit
+  --continue  continue the last conversation</code></pre>
+</div>
+<p><code>argparse</code> נותן <code>--help</code> בחינם, ומסרב לדגל לא מוכר עם הודעה ברורה. <code>replace</code> בונה עותק של ה-<code>dataclass</code> הקפוא עם שדה אחד שונה, כך ש-<code>SETTINGS</code> של שאר הבדיקות לא משתנה. <code>latest</code> מחזירה מזהה ולא <code>ConversationRow</code>: אובייקט של SQLAlchemy שיוצא מה-<span class="en">session</span> שלו כבר לא מחובר לבסיס הנתונים, והליבה מחזירה החוצה רק ערכים פשוטים.</p>
+<p><strong>למה <code>tmp_path</code>:</strong> ברירת המחדל של <code>Settings</code> היא <code>sqlite://</code>, בסיס נתונים בזיכרון. כל קריאה ל-<code>chat_loop</code> בונה <span class="en">engine</span> חדש, ולכן בסיס נתונים חדש וריק: הקריאה השנייה לא הייתה מוצאת שום שיחה, ו-<code>latest()</code> הייתה מחזירה <code>None</code>. כדי שהמידע יעבור בין שתי ההרצות, הוא צריך לחיות מחוץ להן, בקובץ. זה בדיוק ההבדל בין הסוכן של פרק 5 לזה של פרק 6, בקטן.</p>
+
+<h2><span class="sec">5</span>בדיקות ל-<span class="en">transactions</span></h2>
+<div class="codebox">
+  <div class="label"><span>tests\test_conversations.py (the additions)</span></div>
+<pre><code>import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from agent.conversations import ConversationNotFound, Conversations
+from agent.db import MessageRow, make_engine
+from agent.llm import LLMError, MockClient
+...
+
+class BrokenClient:
+    def reply(self, messages):
+        raise LLMError("Could not reach the API. Check your internet connection.")
+
+
+def count_messages(engine):
+    """Ask the database directly, with SQL, instead of trusting the code under test."""
+    with engine.connect() as connection:
+        return connection.execute(text("SELECT COUNT(*) FROM messages")).scalar_one()
+
+
+def test_a_failed_reply_saves_nothing():
+    engine = make_engine("sqlite://")
+    conversations = Conversations(BrokenClient(), 10, engine)
+    conversation_id = conversations.start()
+    with pytest.raises(LLMError):
+        conversations.send(conversation_id, "hello")
+    assert count_messages(engine) == 0
+
+
+def test_delete_removes_the_messages_too():
+    engine = make_engine("sqlite://")
+    conversations = Conversations(MockClient(), 10, engine)
+    keep = conversations.start()
+    conversations.send(keep, "keep me")
+    gone = conversations.start()
+    conversations.send(gone, "delete me")
+    conversations.delete(gone)
+    assert count_messages(engine) == 2
+    with pytest.raises(ConversationNotFound):
+        conversations.messages(gone)
+
+
+def test_the_database_refuses_a_message_without_a_conversation():
+    engine = make_engine("sqlite://")
+    with pytest.raises(IntegrityError), Session(engine) as session, session.begin():
+        session.add(MessageRow(conversation_id="nope", role="user", content="orphan"))</code></pre>
+</div>
+<p>אם קראתם ללולאה בבדיקה מצעד 6 <code>for text in ...</code>, ייבוא <code>text</code> מ-SQLAlchemy מתנגש בה, ו-<code>ruff</code> מדווח <code>F402 Import `text` from line 4 shadowed by loop variable</code>. לכן הלולאה בפרק נקראת <code>message</code>. הבדיקה השלישית עוברת רק בזכות <code>turn_on_foreign_keys</code>: מחקו את השורה <code>event.listen(...)</code> מ-<code>make_engine</code>, וההודעה היתומה נכנסת בשקט, כמו ב-<span class="en">shell</span> בסעיף 6.4: pytest מדווח <code>Failed: DID NOT RAISE IntegrityError</code>.</p>
+<p><strong>השבירה:</strong> ב-<code>send</code>, הודעת המשתמש נשמרה ב-<code>with self.sessions.begin()</code> משלה לפני <code>self.client.reply(prompt)</code>, וה-<span class="en">transaction</span> השנייה שמרה רק את התשובה.</p>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest (shortened)</span></div>
+<pre><code>______________________ test_a_failed_reply_saves_nothing ______________________
+    def test_a_failed_reply_saves_nothing():
+E       assert 1 == 0
+E        +  where 1 = count_messages(Engine(sqlite://))
+FAILED tests/test_conversations.py::test_a_failed_reply_saves_nothing - asser...
+1 failed, 64 passed in 13.18s</code></pre>
+</div>
+<p>רק בדיקה אחת מתוך 65 תפסה את זה, וכל השאר, כולל בדיקות ה-<span class="en">API</span>, עברו. <strong>אצל משתמש אמיתי:</strong> בכל פעם ש-Claude לא עונה (רשת, <code>529</code>), נשארת בשיחה שאלה בלי תשובה. המשתמש שולח שוב, ומעכשיו ההיסטוריה מכילה שתי הודעות <code>user</code> ברצף, שיחה שלא הייתה, ומונה התורות (<code>len // 2</code>) כבר לא נכון. ובאגים כאלה לא מתגלים בבדיקה ידנית, כי אצלכם הרשת עובדת.</p>
+
+<h2><span class="sec">6</span>לבחור מאגר</h2>
+<p>אין תשובה יחידה. כך היינו עונים:</p>
+<div class="table-wrap">
+<table>
+  <tr><th>תרחיש</th><th>בחירה</th><th>למה, ומה המחיר</th></tr>
+  <tr><td>גרף יומי על 300 מיליון הודעות</td><td>מתחילים בשאלה על Postgres עם <span class="en">index</span> על התאריך. כשהיא לוקחת דקות: מאגר אנליטי (ClickHouse), שמקבל עותק של ההודעות</td><td>סיכומים על עמודות מעטות מתוך המון שורות הם בדיוק מה שמאגר <span class="en">columnar</span> טוב בו. המחיר: עוד מערכת, ותהליך שמעתיק אליה נתונים בלי לאבד ובלי לשכפל (פרק 12). המקור נשאר Postgres</td></tr>
+  <tr><td>תוצאות כלים ב-<span class="en">JSON</span> משתנה</td><td>עמודת <span class="en">JSON</span> (ב-Postgres: <code>JSONB</code>) בטבלה של ההודעות, או טבלה <code>tool_calls</code> עם <span class="en">foreign key</span> להודעה</td><td>הנתונים קשורים להודעה ונקראים איתה. מאגר מסמכים נפרד היה מפרק את מה שצריך להיות יחד, ומוותר על ה-<span class="en">transaction</span> שכותבת את שניהם</td></tr>
+  <tr><td>אותה שאלה אלף פעם ביום</td><td><span class="en">Cache</span> (Redis): מפתח מהשאלה המנורמלת, ערך התשובה, <span class="en">TTL</span> של שעות</td><td>קריאות חוזרות, ומותר לאבד את העותק: אם הוא נמחק, שואלים את Claude שוב. המחיר: תשובה ישנה עד שה-<span class="en">TTL</span> פג, והחלטה מה נחשב "אותה שאלה". (ה-<span class="en">prompt caching</span> של Anthropic, בפרק 19, הוא דבר אחר: הוא מוזיל חזרה על אותו <span class="en">context</span>, לא מדלג על הקריאה)</td></tr>
+  <tr><td>60 בקשות בדקה לכל מפתח</td><td>Redis: מונה לכל מפתח ודקה (<code>INCR</code>, ו-<span class="en">TTL</span> של דקה)</td><td>כתיבות רבות וקטנות, שאיבוד שלהן לא מזיק. כשיש שרת אחד, אפשר גם מונה בזיכרון. כשיש כמה, צריך מקום משותף, ובסיס נתונים רלציוני היה עמוס סתם</td></tr>
+</table>
+</div>
+<p>שימו לב שבשני התרחישים הראשונים התשובה מתחילה ב"עוד לא". ההחלטה להוסיף מאגר צריכה מדידה, כמו בתרגיל 3, ולא תחושה.</p>
+<p>ה-<span class="en">README</span> המעודכן ו-<code>.env.example</code> (עם <code># DATABASE_URL=sqlite:///agent.db</code> והסבר) נמצאים ב-<code>checkpoints\chapter-06</code>. ההיסטוריה בסוף הפרק, אחרי <code>git merge</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>git log --oneline</span></div>
+<pre><code>d7eea80 Document the database and DATABASE_URL
+5ad31d3 Test the transactions: a failed reply and a delete
+3687444 Add --continue to resume the last conversation in the terminal
+ace867c Add scripts/index_lab.py to measure an index
+f911751 Test that conversations survive a restart
+708f063 Store conversations in the database
+6796341 Add SQLAlchemy and the database tables
+14c04af Ignore local database files
+...</code></pre>
+</div>
+<p>בסוף, מתיקייה נקייה: <code>uv run pytest</code> מדווח <code>65 passed</code> ולא משאיר קובץ <code>.db</code>, ו-<code>ruff check</code>, <code>ruff format --check</code> ו-<code>mypy agent scripts</code> נקיים.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-06.html">→ חזרה לפרק 6</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

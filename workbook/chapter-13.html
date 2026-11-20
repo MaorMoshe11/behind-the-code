@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 13 · מערכת חיה | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="13">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 13 · מערכת חיה</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 13 מתוך 21</div>
+  <h1>מערכת חיה</h1>
+  <p class="lead">איך יודעים מה קורה בתוך מערכת שרצה עכשיו, אצל משתמשים אמיתיים, בכמה שירותים, ואיך מוצאים מה קרה לבקשה אחת כשמישהו כותב "זה נתקע ואז קיבלתי שגיאה".</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>לכתוב לוגים מובנים (JSON), לבחור רמה לכל שורה, ולדעת מה אסור לכתוב בלוג לעולם.</li>
+    <li>ליצור מזהה בקשה בכניסה למערכת ולהעביר אותו דרך HTTP ו-Kafka, כך שכל השורות של בקשה אחת נמצאות בחיפוש אחד.</li>
+    <li>להבדיל בין <span class="en">counter</span>, <span class="en">gauge</span> ו-<span class="en">histogram</span>, להסביר את ארבעת האותות הזהובים, ולמה ממוצע משקר ו-<span class="en">percentile</span> לא.</li>
+    <li>לחשוף <code>/metrics</code>, לתת ל-Prometheus לאסוף אותו, ולכתוב התראה על סימפטום, עם <span class="en">runbook</span>.</li>
+    <li>להסביר <span class="en">tracing</span>, <span class="en">SLO</span> ו-<span class="en">error budget</span>, ולטפל בתקלה: קודם לעצור את הנזק, אחר כך להבין, ובסוף <span class="en">postmortem</span> בלי האשמות.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> חמש עד שש שעות. <strong>מה צריך:</strong> הפרויקט מסוף פרק 12, Docker Desktop עם כ-3 GB זיכרון פנוי. הכול במצב <span class="en">mock</span>. בפעם הראשונה Docker יוריד את ה-<span class="en">image</span> של Prometheus (כ-120 MB).</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.1</span>הבעיה: "זה נתקע, ואז קיבלתי שגיאה"</h2>
+
+<p>שלושה אנשים משתמשים בסוכן בו-זמנית. אחת מהם, דנה, כותבת לכם: "ניסיתי להוסיף הערה, זה נתקע כמה שניות ואמר שההערות לא זמינות. אחר כך ניסיתי למחוק את השיחה, וקיבלתי שגיאה". המערכת היא זו מסוף פרק 12, ושירות ההערות היה איטי באותן דקות. אתם פותחים את מה שיש. קודם הפלט של ה-<code>api</code>:</p>
+
+<div class="codebox output">
+  <div class="label"><span>docker compose logs api --no-log-prefix (shortened)</span></div>
+<pre><code>INFO:     127.0.0.1:48694 - "GET /ready HTTP/1.1" 200 OK
+INFO:     172.19.0.1:36804 - "POST /chat HTTP/1.1" 200 OK
+INFO:     172.19.0.1:36830 - "POST /chat HTTP/1.1" 200 OK
+INFO:     172.19.0.1:38216 - "POST /chat HTTP/1.1" 200 OK
+INFO:     127.0.0.1:42310 - "GET /ready HTTP/1.1" 200 OK
+INFO:     172.19.0.1:36814 - "POST /chat HTTP/1.1" 200 OK
+...
+INFO:     172.19.0.1:38286 - "DELETE /conversations/3976483976314b1eb2e766c162ca20bc HTTP/1.1" 503 Service Unavailable</code></pre>
+</div>
+
+<p>כל ה-<code>/chat</code> הצליחו (200), גם ההערה ה"תקועה": השגיאה שלה היא טקסט בתוך תשובה תקינה. אין משך זמן, ואין שום דבר שמחבר שורה לאדם. הלוג של הקוד עצמו, <code>agent.log</code>, נמצא בתוך ה-<span class="en">container</span>:</p>
+
+<div class="codebox output">
+  <div class="label"><span>docker compose exec api grep -E "WARNING|ERROR" agent.log (shortened)</span></div>
+<pre><code>2026-11-18 20:09:30,896 WARNING agent.notes: notes: POST /v1/notes: ReadTimeout('timed out'); retry in 0.12 s
+2026-11-18 20:09:31,133 WARNING agent.notes: notes: POST /v1/notes: ReadTimeout('timed out'); retry in 0.14 s
+2026-11-18 20:09:31,465 WARNING agent.notes: notes: GET /v1/notes: ReadTimeout('timed out'); retry in 0.04 s
+2026-11-18 20:09:33,018 WARNING agent.notes: notes: POST /v1/notes: ReadTimeout('timed out'); retry in 0.02 s
+2026-11-18 20:09:33,279 WARNING agent.notes: notes: POST /v1/notes: ReadTimeout('timed out'); retry in 0.06 s
+2026-11-18 20:09:35,041 ERROR agent.notes: notes unavailable
+2026-11-18 20:09:35,340 ERROR agent.notes: notes unavailable
+2026-11-18 20:09:36,107 WARNING agent.saga: saga delete: step 'delete its notes' failed; compensating
+2026-11-18 20:09:36,114 WARNING agent.saga: saga delete: compensated 'archive the conversation'</code></pre>
+</div>
+
+<p>שתי בקשות <code>POST /v1/notes</code> נכשלו באותן שניות. איזו מהן של דנה? אין דרך לדעת. אחרי כל <code>ERROR</code> יש <span class="en">traceback</span> של עשר שורות, שמתערבב עם השורות של הבקשה השנייה. ושירות ההערות? הוא מדפיס רק את מה ש-<code>uvicorn</code> מדפיס:</p>
+
+<div class="codebox output">
+  <div class="label"><span>docker compose logs notes --no-log-prefix | Select-String -NotMatch "/ready"</span></div>
+<pre><code>fault injection: delay 2.5s, fail after save False
+INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8100 (Press CTRL+C to quit)</code></pre>
+</div>
+
+<p>אף שורה על <code>/v1/notes</code>. <code>uvicorn</code> לא רושם בקשה שהלקוח כבר ניתק ממנה (פרק 11), כך שמבחינת הלוג של שירות ההערות, הבקשות לא קרו. וב-<code>notes-db</code> שתי ההערות דווקא <em>שמורות</em>, כולל זו שדנה שמעה עליה שאינה זמינה. יש לכם ארבעה מקומות שבהם הסתכלתם, ארבעה פורמטים, שעונים בלי אזור זמן, ואין חוט אחד שעובר דרך כולם. הפרק הזה בונה את החוט, ואת הכלים שמסביבו.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.2</span>המפה: שלוש שאלות</h2>
+
+<div class="diagram">
+  <div class="flow">
+    <div class="layer l2"><div class="name">api (the edge)</div><div class="what">יוצר <code>request_id</code>, מחזיר אותו בתשובה, כותב אותו בכל שורה</div></div>
+    <div class="hop">&rarr;<b>X-Request-ID</b></div>
+    <div class="layer l3"><div class="name">notes</div><div class="what">מקבל את המזהה בכותרת, וכותב אותו בשורות שלו</div></div>
+    <div class="hop">&rarr;<b>Kafka header</b></div>
+    <div class="layer l4"><div class="name">worker</div><div class="what">קורא את המזהה מהאירוע, וכותב אותו בשורות שלו</div></div>
+  </div>
+  <div class="flow steps">
+    <div class="layer"><div class="name">logs</div><div class="what">מה קרה? שורה לכל אירוע, עם פרטים. בשביל בקשה אחת</div></div>
+    <div class="layer"><div class="name">metrics</div><div class="what">כמה ובאיזו תדירות? מספרים מצטברים. בשביל התמונה הכללית וההתראות</div></div>
+    <div class="layer"><div class="name">traces</div><div class="what">לאן הלך הזמן? עץ של קטעים עם זמני התחלה וסיום</div></div>
+  </div>
+  <div class="caption">למעלה: החוט שעובר דרך כל השירותים. למטה: שלוש השאלות של <span class="en">observability</span>, וכל אחת עם הכלי שלה.</div>
+</div>
+
+<p><strong>נראוּת</strong> (<span class="en">observability</span>) היא היכולת לענות על שאלות על מערכת חיה מבחוץ, בלי להוסיף קוד ובלי להפעיל אותה מחדש. <span class="en">Debugger</span> (פרק 1) עוצר תוכנית אחת במחשב שלכם; כאן אסור לעצור, והתוכנית היא כמה שירותים במחשבים אחרים. כל מה שיש לכם הוא מה שהם כתבו ומדדו בזמן אמת, ולכן צריך להחליט מראש מה לכתוב.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.3</span>לוגים מובנים</h2>
+
+<p>שורת לוג כמו <code>WARNING agent.notes: notes: POST /v1/notes: ReadTimeout</code> נכתבה בשביל אדם שקורא אותה. אבל במערכת חיה יש מיליוני שורות, ומי שקורא אותן קודם הוא תוכנה: מסננת, סופרת, מקבצת. לכן כותבים <strong>לוג מובנה</strong> (<span class="en">structured log</span>): כל שורה היא אובייקט JSON אחד, עם שדות קבועים. כך תיראה אותה שורה בסוף הפרק:</p>
+
+<div class="codebox output">
+  <div class="label"><span>one log line</span></div>
+<pre><code>{"time": "2026-11-18T20:24:28.506+00:00", "level": "INFO", "service": "chat-api", "logger": "agent.api", "message": "POST /chat 200", "request_id": "27fb019afb374b7d8196810ba44dcc88", "status": 200, "duration_ms": 45}</code></pre>
+</div>
+
+<p>שעה ב-UTC עם אלפיות שנייה, שם השירות, ושדות שאפשר לסנן לפיהם: "כל השורות עם <code>status</code> 500", "כל השורות של בקשה אחת". <span class="en">Traceback</span> נכנס לשדה <code>error</code> באותה שורה, ולא מתפזר על פני עשר שורות.</p>
+
+<h3>רמות, ומתי כל אחת</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>רמה</th><th>מתי</th><th>דוגמה אצלנו</th></tr>
+  <tr><td><code>DEBUG</code></td><td>פרטים לחקירה; כבוי ב-<span class="en">prod</span></td><td>בקשות <code>/ready</code> של ה-<span class="en">healthcheck</span>, כל 5 שניות</td></tr>
+  <tr><td><code>INFO</code></td><td>דברים רגילים שכדאי לדעת שקרו</td><td>בקשה נענתה; אירוע טופל; צעד ב-<span class="en">saga</span></td></tr>
+  <tr><td><code>WARNING</code></td><td>משהו לא תקין, והמערכת התמודדה</td><td>ניסיון חוזר מול שירות ההערות; <span class="en">saga</span> שתוקנה</td></tr>
+  <tr><td><code>ERROR</code></td><td>משהו נכשל, ומישהו הושפע</td><td>תשובה 502 מהמודל; אירוע שאבד; הודעה ב-DLQ</td></tr>
+</table>
+</div>
+<p>הכלל: אם כל שורה היא <code>ERROR</code>, אף אחת אינה. ומה שקורה כל חמש שניות ולא אומר דבר חדש (<span class="en">healthcheck</span>) יורד ל-<code>DEBUG</code>, אחרת הוא מטביע את השאר, כמו ב-13.1.</p>
+
+<h3>מה לא כותבים בלוג, לעולם</h3>
+<p>לוגים מועתקים, נשמרים חודשים, ונקראים בידי הרבה אנשים וכלים. לכן לא נכנסים אליהם: סודות (מפתחות, סיסמאות, כותרת <code>X-API-Key</code>, <span class="en">tokens</span>), ומה שהמשתמשים כתבו (הודעות, הערות), שהוא מידע אישי. מותר: מזהים, ספירות, אורכים, משכי זמן. "<code>deleted 2 notes</code>" ולא "<code>deleted 'buy milk'</code>". פרק 14 מעמיק בזה; בתרגיל 5 תכתבו בדיקה שתופסת הפרה.</p>
+
+<h3>לאן הלוגים הולכים</h3>
+<p>שירות כותב ל-<span class="en">standard output</span>, ותו לא. לא לקובץ: קובץ בתוך <span class="en">container</span> נעלם איתו (פרק 8), וגדל עד שהדיסק מתמלא. את הפלט אוסף מי שמריץ את השירות: Docker שומר אותו (<code>docker compose logs</code>), ובענן ה-<span class="en">platform</span> שולח אותו ל<strong>מאגר לוגים</strong> (<span class="en">log aggregator</span>): Grafana Loki, Elasticsearch, CloudWatch Logs, Google Cloud Logging. שם הלוגים של כל השירותים יושבים יחד, ומחפשים בהם בשאילתה: <code>{service="notes"} | json | request_id="27fb..."</code>. אצלנו, במחשב אחד, <code>docker compose logs</code> ו-<code>Select-String</code> מספיקים. הקובץ <code>agent.log</code> נשאר רק לצ'אט ב-<span class="en">terminal</span>, שבו הפלט שייך לשיחה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.4</span>מזהה בקשה שעובר בין שירותים</h2>
+
+<p><strong>מזהה בקשה</strong> (<span class="en">request id</span>, וכשהוא עובר בין שירותים גם <span class="en">correlation id</span>) נוצר פעם אחת, בנקודה שבה הבקשה נכנסת למערכת (<span class="en">edge</span>), ונכתב בכל שורת לוג שנכתבת בשבילה, בכל שירות. שלושה מקומות להעביר אותו:</p>
+<ul>
+  <li><strong>בתוך תהליך אחד:</strong> משתנה של Python שמחזיק "המזהה של הבקשה הנוכחית". משתנה גלובלי רגיל לא יעבוד, כי <code>uvicorn</code> מטפל בכמה בקשות במקביל. <code>contextvars.ContextVar</code> נותן לכל בקשה ערך משלה, ו-FastAPI מעביר אותו גם לפונקציות שרצות ב-<span class="en">thread</span> אחר.</li>
+  <li><strong>ב-HTTP:</strong> כותרת <code>X-Request-ID</code>. שירות ההערות לוקח אותה במקום ליצור חדש. ה-<code>api</code> מחזיר אותה גם ללקוח, כדי שמשתמש שקיבל שגיאה יוכל לצטט אותה.</li>
+  <li><strong>ב-Kafka:</strong> להודעה יש <span class="en">headers</span>, בדיוק כמו ל-HTTP: מטא-דאטה שאינו חלק מהאירוע עצמו. ה-<span class="en">worker</span> קורא <code>request_id</code> מה-<span class="en">header</span> ושם אותו ב-<code>ContextVar</code> שלו.</li>
+</ul>
+<p>מזהה שמגיע מבחוץ מתקבל רק אם הוא נראה כמו מזהה (אותיות, ספרות, <code>.-_</code>, עד 64 תווים). אחרת לקוח יכול לכתוב ללוגים שלכם כל דבר, כולל שורה חדשה שנראית כמו שורת לוג אמיתית.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.5</span>דוגמה מודרכת, חלק א': לוגים עם חוט</h2>
+
+<div class="step">
+  <h3><span class="step-num">1</span>שורת JSON, ומזהה לבקשה</h3>
+  <p><code>git switch -c feature/observability</code>. קובץ חדש, <code>agent\logs.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\logs.py (shortened)</span></div>
+<pre><code><span class="cm"># The id of the request being handled right now, or None outside a request.</span>
+request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
+SAFE_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def new_request_id(incoming: str | None = None) -&gt; str:
+    """Keep a well-formed id that a caller sent (X-Request-ID); otherwise make a new one."""
+    if incoming and SAFE_ID.fullmatch(incoming):
+        return incoming
+    return uuid.uuid4().hex
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -&gt; str:
+        line = {
+            "time": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds"),
+            "level": record.levelname, "service": self.service,
+            "logger": record.name, "message": record.getMessage(),
+        }
+        current = request_id.get()
+        if current:
+            line["request_id"] = current
+        <span class="cm"># Fields given with extra={...}: duration_ms, status, conversation_id, ...</span>
+        line.update({k: v for k, v in vars(record).items() if k not in STANDARD})
+        if record.exc_info:
+            line["error"] = self.formatException(record.exc_info)  <span class="cm"># one line, not ten</span>
+        return json.dumps(line, ensure_ascii=False, default=str)</code></pre>
+</div>
+  <p>ובאותו קובץ, הפונקציה שמחברת את ה-<span class="en">formatter</span>. היא מחליפה את <code>setup_logging</code> שהייתה ב-<code>cli.py</code> מפרק 3:</p>
+<div class="codebox">
+  <div class="label"><span>agent\logs.py (shortened)</span></div>
+<pre><code>def setup_logging(level: str, service: str, filename: str | None = None) -&gt; None:
+    handler: logging.Handler
+    if filename:
+        handler = logging.FileHandler(filename, encoding="utf-8")
+    else:
+        handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JsonFormatter(service))
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(level)
+    <span class="cm"># uvicorn has handlers of its own, in plain text. Send its lines through ours instead.</span>
+    for name in ("uvicorn", "uvicorn.error"):
+        logging.getLogger(name).handlers = []
+        logging.getLogger(name).propagate = True
+    <span class="cm"># Our middleware writes a better access line (with the request id and the duration).</span>
+    logging.getLogger("uvicorn.access").disabled = True</code></pre>
+</div>
+  <p><code>uvicorn</code> מגדיר את הלוגים שלו לפני שהוא קורא ל-<code>create_app</code>, ולכן הקריאה לפונקציה בתוך <code>create_app</code> מספיקה כדי להשתלט עליהם. <code>cli.py</code> קורא לה עם <code>filename="agent.log"</code>, ה-<code>api</code> בלי.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span><span class="en">Middleware</span>: הכניסה למערכת</h3>
+  <p><strong><span class="en">Middleware</span></strong> הוא קוד שעוטף כל בקשה, לפני ה-<span class="en">endpoint</span> ואחריו. ב-<code>create_app</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\api.py (shortened)</span></div>
+<pre><code>    @app.middleware("http")
+    async def observe(request: Request, call_next: ...) -&gt; Response:
+        """Every request: an id, one access log line, and its metrics."""
+        token = logs.request_id.set(logs.new_request_id(request.headers.get("X-Request-ID")))
+        start = time.perf_counter()
+        status = 500  <span class="cm"># what the client gets if the endpoint raises</span>
+        try:
+            response = await call_next(request)
+            status = response.status_code
+            response.headers["X-Request-ID"] = logs.request_id.get() or ""
+            return response
+        finally:
+            seconds = time.perf_counter() - start
+            route = getattr(request.scope.get("route"), "path", "unmatched")
+            metrics.observe_request(request.method, route, status, seconds)  <span class="cm"># part b</span>
+            log.log(logging.DEBUG if route in quiet else logging.INFO,
+                    "%s %s %s", request.method, request.url.path, status,
+                    extra={"status": status, "duration_ms": round(seconds * 1000)})
+            logs.request_id.reset(token)</code></pre>
+</div>
+  <p>ב-<code>conversations.py</code>, השורה <code>"sending %d messages"</code> מתחלפת ב-<code>"model replied"</code> עם <code>extra={"messages": ..., "llm_ms": ...}</code>: כמה זמן לקח המודל. <code>scripts\ask.py</code> מדפיס את המזהה מכותרת התשובה, וגם בשגיאה; דף הצ'אט מציג אותו ליד כל שגיאה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>להעביר את החוט הלאה</h3>
+  <p>ב-<code>NotesClient._request</code>, לפני הניסיונות: <code>headers["X-Request-ID"] = request_id.get()</code>. ב-<code>KafkaEvents.publish</code>: <code>headers={"request_id": current}</code>. וב-<span class="en">worker</span>, לכל הודעה:</p>
+<div class="codebox">
+  <div class="label"><span>worker\__main__.py (shortened)</span></div>
+<pre><code>        <span class="cm"># The request that caused this event, from its header: our lines carry its id too.</span>
+        token = logs.request_id.set(header(message, "request_id"))
+        try:
+            event = parse(message.value())
+            ...
+        finally:
+            logs.request_id.reset(token)</code></pre>
+</div>
+  <p>שירות ההערות מקבל עותק של <code>logs.py</code> (כמו <code>read_secret</code> בפרק 11: שני שירותים חולקים חוזה, לא ספרייה), אותו <span class="en">middleware</span>, ושורה לכל הערה שנשמרה, שוחזרה או נמחקה: <code>"deleted %d notes"</code>, עם מזהה השיחה ובלי טקסט. גרסה <code>0.3.0</code>. עוד פרט: <code>librdkafka</code>, ספריית ה-C שמתחת ל-<code>confluent-kafka</code>, כותבת הודעות משלה ישר ל-<span class="en">stderr</span> (<code>%4|1795033373.919|GETPID|rdkafka#producer-1| ...</code>). <code>"logger": logging.getLogger("kafka")</code> בהגדרות של ה-<span class="en">producer</span> וה-<span class="en">consumer</span> מעביר אותן דרך Python, ומשם ל-JSON.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>הולכים בעקבות בקשה</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose up --build -d --wait
+uv run python scripts/ask.py "planning a trip to Haifa"
+$c = "&lt;the conversation id it printed&gt;"
+uv run python scripts/ask.py "/note book the hotel" --conversation $c</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>[mock reply, turn 1] You said: planning a trip to Haifa
+(conversation 753e95ed465a4183a432fc1bd78a68d2, turns: 1, request 20ee330caf364c2a85b36b8342953a21)
+Noted: book the hotel
+(conversation 753e95ed465a4183a432fc1bd78a68d2, turns: 1, request 27fb019afb374b7d8196810ba44dcc88)</code></pre>
+</div>
+  <p>עכשיו חיפוש אחד בשלושה שירותים. כל שורה היא JSON, ולכן PowerShell יודע להפוך אותה לאובייקט (<code>ConvertFrom-Json</code>), למיין לפי זמן, ולהציג כטבלה:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$id = "27fb019afb374b7d8196810ba44dcc88"
+docker compose logs api notes worker --no-log-prefix | Select-String $id | ForEach-Object { $_.Line | ConvertFrom-Json } | Sort-Object time | Format-Table time, service, message, duration_ms -AutoSize</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>time                          service  message                                     duration_ms
+----                          -------  -------                                     -----------
+2026-11-18T20:24:28.502+00:00 notes    note 3db11d38e7b5407caf75dd5108c44376 saved
+2026-11-18T20:24:28.503+00:00 notes    POST /v1/notes 201                          25
+2026-11-18T20:24:28.506+00:00 chat-api POST /chat 200                              45</code></pre>
+</div>
+  <p>שלוש שורות, שני שירותים, בקשה אחת: מתוך 45 מילישניות של <code>/chat</code>, 25 היו בשירות ההערות. הודעה רגילה (לא <code>/note</code>) מגיעה גם ל-<span class="en">worker</span>, דרך Kafka:</p>
+<div class="codebox output">
+  <div class="label"><span>Select-String on the id of a plain message (shortened)</span></div>
+<pre><code>{"time": "2026-11-18T20:24:32.272+00:00", "level": "INFO", "service": "chat-api", "logger": "agent.conversations", "message": "model replied", "request_id": "936d180749f64564bcb95df90fdd93a6", "messages": 5, "llm_ms": 0}
+{"time": "2026-11-18T20:24:32.280+00:00", "level": "INFO", "service": "chat-api", "logger": "agent.api", "message": "POST /chat 200", "request_id": "936d180749f64564bcb95df90fdd93a6", "status": 200, "duration_ms": 17}
+{"time": "2026-11-18T20:24:32.309+00:00", "level": "INFO", "service": "chat-worker", "logger": "worker", "message": "partition 2 offset 2: message.created 753e95ed465a4183a432fc1bd78a68d2", "request_id": "936d180749f64564bcb95df90fdd93a6"}</code></pre>
+</div>
+  <p>ה-<span class="en">worker</span> טיפל באירוע 29 מילישניות אחרי שה-<code>api</code> ענה, בתהליך אחר, ובכל זאת השורה שלו נושאת את המזהה. <code>tests\test_observability.py</code> בודק את זה בלי Docker. <span class="en">Fixture</span> מחבר <code>JsonFormatter</code> ל-<code>StringIO</code> וקורא את השורות בחזרה כ-JSON:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_observability.py (one of six)</span></div>
+<pre><code>def test_the_log_lines_of_a_request_share_its_id(client, log_lines):
+    response = client.post("/chat", json={"message": "hello"}, headers=AUTH)
+    request_id = response.headers["X-Request-ID"]
+    mine = [line for line in log_lines() if line.get("request_id") == request_id]
+    <span class="cm"># The model's line and the access line, both with the id and as JSON.</span>
+    assert [line["message"] for line in mine] == ["model replied", "POST /chat 200"]
+    assert mine[-1]["status"] == 200
+    assert "duration_ms" in mine[-1]</code></pre>
+</div>
+  <p>ועוד: מזהה בכל תשובה, מזהה מבחוץ שנשמר או מוחלף (<code>"two words\nand a newline"</code> מוחלף), והכותרת שיוצאת לשירות ההערות. <span class="en">Commit</span>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.6</span>מדדים</h2>
+
+<p>לוגים עונים על "מה קרה לבקשה הזו". הם לא עונים טוב על "כמה בקשות נכשלו בשעה האחרונה", כי בשביל זה צריך לקרוא ולספור מיליוני שורות. <strong>מדד</strong> (<span class="en">metric</span>) הוא מספר שהשירות סופר בזיכרון כל הזמן, וזול לשמור ולשאול עליו. שלושה סוגים:</p>
+<div class="table-wrap">
+<table>
+  <tr><th>סוג</th><th>מה הוא</th><th>אצלנו</th></tr>
+  <tr><td><span class="en">Counter</span></td><td>רק עולה. מה שמעניין הוא הקצב שלו</td><td><code>http_requests_total</code>, <code>llm_tokens_total</code></td></tr>
+  <tr><td><span class="en">Gauge</span></td><td>עולה ויורד: מצב ברגע הזה</td><td><code>notes_circuit_open</code>, <code>worker_consumer_lag</code></td></tr>
+  <tr><td><span class="en">Histogram</span></td><td>סופר תצפיות לפי טווחים (<span class="en">buckets</span>): כמה מתחת ל-0.1 שנייה, כמה מתחת ל-0.25, ...</td><td><code>http_request_duration_seconds</code></td></tr>
+</table>
+</div>
+
+<h3>ארבעת האותות הזהובים</h3>
+<p>במקום למדוד הכול, מתחילים מארבעה, שנקראים <span class="en">golden signals</span>: <strong><span class="en">latency</span></strong> (כמה זמן לוקחת תשובה), <strong><span class="en">traffic</span></strong> (כמה בקשות), <strong><span class="en">errors</span></strong> (כמה נכשלות), ו-<strong><span class="en">saturation</span></strong> (כמה קרוב משאב לגבול שלו: זיכרון, חיבורים, תור שמתארך). אצלנו הרוויה היא בעיקר ה-<span class="en">lag</span> של ה-<span class="en">worker</span>. מעליהם, מה שמיוחד למערכת: זמן ו-<span class="en">tokens</span> של המודל (כסף), כישלונות מול שירות ההערות ומצב ה-<span class="en">circuit breaker</span>, אירועים שאבדו (ה-<span class="en">dual write</span> מפרק 12, עכשיו נספר), ו-<span class="en">sagas</span> לפי איך שהסתיימו.</p>
+
+<h3>למה ממוצע משקר</h3>
+<p>תשעים ושמונה בקשות של 0.1 שנייה ושתי בקשות של 7 שניות: הממוצע הוא 0.24 שנייה. נשמע מצוין, ושניים מכל מאה חיכו 7 שניות. <strong><span class="en">Percentile</span></strong> אומר את האמת: p50 (החציון) הוא מה שחצי מהבקשות לא עברו, p99 הוא מה ש-99 מכל מאה לא עברו. כאן p50 הוא 0.1 ו-p99 הוא 7. משתמש פעיל שולח עשרות בקשות ביום, ולכן כמעט כל אחד פוגש את ה-p99 מדי יום. היסטוגרמה מאפשרת לחשב <span class="en">percentiles</span> אחר כך, מכל השירותים יחד; ממוצעים אי אפשר לחבר כך.</p>
+
+<h3><span class="en">Labels</span>, ומה לא לשים בהם</h3>
+<p>מדד מתפצל לפי <span class="en">labels</span>: <code>http_requests_total{route="/chat", status="200"}</code>. כל צירוף של ערכים הוא סדרה נפרדת שנשמרת לאורך זמן. לכן ב-<span class="en">label</span> שמים רק ערכים מעטים וידועים: <code>/conversations/{conversation_id}</code>, ולא <code>/conversations/3976...</code>. מזהה שיחה ב-<span class="en">label</span> יוצר סדרה חדשה לכל שיחה, עד שמאגר המדדים קורס. לזה קוראים <span class="en">cardinality</span>, והוא התקלה הנפוצה ביותר עם מדדים. מזהים שייכים ללוגים.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.7</span>דוגמה מודרכת, חלק ב': <code>/metrics</code> ו-Prometheus</h2>
+
+<div class="step">
+  <h3><span class="step-num">1</span>המדדים</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv add prometheus-client</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Resolved 50 packages in 1.27s
+Installed 1 package in 85ms
+ + prometheus-client==0.26.0</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>agent\metrics.py (shortened)</span></div>
+<pre><code>BUCKETS = (0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0)
+
+REQUESTS = Counter("http_requests", "HTTP requests answered.", ["method", "route", "status"])
+REQUEST_SECONDS = Histogram("http_request_duration_seconds", "Time to answer an HTTP request.",
+                            ["method", "route"], buckets=BUCKETS)
+LLM_SECONDS = Histogram("llm_request_duration_seconds", "Time the model took to reply.", buckets=BUCKETS)
+LLM_TOKENS = Counter("llm_tokens", "Tokens sent to and received from the model.", ["kind"])
+LLM_ERRORS = Counter("llm_errors", "Model calls that failed, by reason.", ["reason"])
+NOTES_CALLS = Counter("notes_calls", "Calls to the notes service: ok, failed, or rejected by the breaker.", ["outcome"])
+NOTES_CIRCUIT_OPEN = Gauge("notes_circuit_open", "1 while the circuit breaker in front of the notes service is open.")
+EVENTS = Counter("chat_events", "Events, by what happened to them.", ["outcome"])
+SAGAS = Counter("sagas", "Sagas run, by how they ended.", ["saga", "outcome"])</code></pre>
+</div>
+  <p>ה-<span class="en">buckets</span> נבחרו סביב מה שחשוב כאן: צ'אט ב-<span class="en">mock</span> עונה בהרבה פחות משנייה, לקוח ההערות מוותר אחרי כ-7, ומודל אמיתי יכול לקחת 10 ויותר. ה-<span class="en">middleware</span> מצעד 2 כבר קורא ל-<code>observe_request</code>. <code>ClaudeClient</code> סופר <span class="en">tokens</span> מ-<code>response.usage</code>, ורושם בשורת הלוג גם את <code>response._request_id</code>, המזהה של Anthropic לאותה קריאה (מה שהתמיכה שלהם תבקש). הוא גם מפצל את השגיאות, כפי שהציע פרק 3 ("שגיאת חיבור" אחת כיסתה גם שרת שלא עונה בזמן). הסדר חשוב: מחלקה ספציפית לפני מחלקת האב שלה, אחרת היא לא תגיע לעולם:</p>
+<div class="codebox">
+  <div class="label"><span>agent\llm.py (shortened)</span></div>
+<pre><code>        except anthropic.AuthenticationError as error:
+            LLM_ERRORS.labels("auth").inc()
+            raise LLMError("The API rejected your key. Check ANTHROPIC_API_KEY.", fatal=True) from error
+        except anthropic.RateLimitError as error:  <span class="cm"># a kind of APIStatusError (429): first</span>
+            LLM_ERRORS.labels("rate_limited").inc()
+            raise LLMError("Too many requests to the API. Wait a minute and try again.") from error
+        except anthropic.APIStatusError as error:
+            LLM_ERRORS.labels("status").inc()
+            raise LLMError(f"The API returned an error ({error.status_code}).") from error
+        except anthropic.APITimeoutError as error:  <span class="cm"># a kind of APIConnectionError: first</span>
+            LLM_ERRORS.labels("timeout").inc()
+            raise LLMError("The API did not answer in time. Try again.") from error
+        except anthropic.APIConnectionError as error:
+            LLM_ERRORS.labels("connection").inc()
+            raise LLMError("Could not reach the API. Check your internet connection.") from error</code></pre>
+</div>
+  <p>גרף של <code>llm_errors_total</code> לפי <code>reason</code> מבדיל עכשיו בין "המפתח שלנו שגוי" (תקן עכשיו), "הספק עמוס" (חכה), ו"הרשת שלנו למטה" (בדוק אצלנו). גם <code>MockClient</code> מדווח <span class="en">tokens</span>, בערך תו לכל ארבעה, כדי שהמדדים יעבדו בלי מפתח. ולבסוף ה-<span class="en">endpoint</span>, בלי מפתח <span class="en">API</span>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\api.py</span></div>
+<pre><code>    @app.get("/metrics", include_in_schema=False)
+    def metrics_page() -&gt; Response:
+        """Every metric of this process, in the Prometheus text format."""
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)</code></pre>
+</div>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>מסתכלים</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose up --build -d --wait
+1..20 | ForEach-Object { uv run python scripts/ask.py "message $_" | Out-Null }
+curl.exe -s http://127.0.0.1:8000/metrics | Select-String 'route="/chat"|^llm_|^notes_|^chat_events'</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>http_requests_total{method="POST",route="/chat",status="200"} 20.0
+http_request_duration_seconds_bucket{le="0.05",method="POST",route="/chat"} 19.0
+http_request_duration_seconds_bucket{le="0.1",method="POST",route="/chat"} 20.0
+...
+http_request_duration_seconds_bucket{le="+Inf",method="POST",route="/chat"} 20.0
+http_request_duration_seconds_count{method="POST",route="/chat"} 20.0
+http_request_duration_seconds_sum{method="POST",route="/chat"} 0.558868712047115
+llm_request_duration_seconds_count 20.0
+llm_request_duration_seconds_sum 0.000986702973023057
+llm_tokens_total{kind="input"} 60.0
+llm_tokens_total{kind="output"} 220.0
+notes_circuit_open 0.0
+chat_events_total{outcome="queued"} 20.0
+chat_events_total{outcome="delivered"} 19.0</code></pre>
+</div>
+  <p>זה פורמט הטקסט של Prometheus: שם, <span class="en">labels</span>, ערך. ההיסטוגרמה היא כמה מונים: <code>_bucket{le="0.05"}</code> הוא "כמה בקשות לקחו עד 0.05 שנייה" (<code>le</code>: <span class="en">less or equal</span>), ועוד <code>_count</code> ו-<code>_sum</code>. הממוצע הוא <code>_sum</code> חלקי <code>_count</code>. <code>delivered</code> קטן ב-1 מ-<code>queued</code>: האישור על האירוע האחרון יגיע עם הקריאה הבאה ל-<code>poll</code>. ה-<span class="en">worker</span> אינו שרת HTTP, ולכן <code>start_http_server(9100)</code> של <code>prometheus-client</code> מריץ לו שרת קטן ב-<span class="en">thread</span> משלו, עם <code>worker_events_total</code>, <code>worker_dead_letters_total</code>, <code>worker_event_age_seconds</code> ו-<code>worker_consumer_lag</code>, שה-<span class="en">worker</span> מחשב כל 10 שניות: סוף ה-<span class="en">partition</span> פחות ה-<span class="en">offset</span> שאושר (פרק 12):</p>
+<div class="codebox">
+  <div class="label"><span>worker\__main__.py (shortened)</span></div>
+<pre><code>def measure_lag(consumer: Consumer) -&gt; None:
+    """Lag per partition: the newest offset in the topic minus the group's committed one."""
+    for committed in consumer.committed(consumer.assignment(), timeout=5):
+        low, high = consumer.get_watermark_offsets(
+            TopicPartition(committed.topic, committed.partition), timeout=5)
+        done = committed.offset if committed.offset &gt;= 0 else low  <span class="cm"># nothing committed yet</span>
+        LAG.labels(str(committed.partition)).set(high - done)</code></pre>
+</div>
+  <p>בתעשייה מודדים <span class="en">lag</span> בדרך כלל מבחוץ, בשירות נפרד שקורא מ-Kafka את ה-<span class="en">offsets</span> של כל הקבוצות (<span class="en">exporter</span>): <span class="en">worker</span> שנפל לא יכול לדווח שהוא מפגר.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>Prometheus</h3>
+  <p>מספר אחד ב-<code>/metrics</code> הוא תמונת מצב. <strong>Prometheus</strong> הופך אותו להיסטוריה: כל כמה שניות הוא מושך (<span class="en">scrape</span>) את <code>/metrics</code> מכל יעד, שומר כל ערך עם הזמן שלו, ונותן לשאול עליהם בשפה בשם <strong>PromQL</strong>. ב-<code>monitoring\prometheus.yml</code> שני יעדים, <code>api:8000</code> ו-<code>worker:9100</code>, ו-<code>monitoring\alerts.yml</code> (סעיף 13.9). ב-<code>compose.yaml</code>:</p>
+<div class="codebox">
+  <div class="label"><span>compose.yaml (the new service)</span></div>
+<pre><code>  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: [monitoring]  <span class="cm"># started only on request</span>
+    volumes:
+      - ./monitoring:/etc/prometheus:ro  <span class="cm"># prometheus.yml and alerts.yml, read-only</span>
+    ports:
+      - "127.0.0.1:9090:9090"</code></pre>
+</div>
+  <p><span class="en">Profile</span> הוא שירות ש-compose מתעלם ממנו אלא אם ביקשו אותו בשמו: לא כל מי שמריץ את הפרויקט רוצה עוד <span class="en">container</span>.</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose --profile monitoring up -d --wait
+$q = 'sum by (route, status) (increase(http_requests_total[5m]))'
+(Invoke-RestMethod http://127.0.0.1:9090/api/v1/query -Body @{ query = $q }).data.result | ForEach-Object { "{0} {1}: {2}" -f $_.metric.route, $_.metric.status, $_.value[1] }
+(Invoke-RestMethod http://127.0.0.1:9090/api/v1/query -Body @{ query = 'max(worker_consumer_lag)' }).data.result.value[1]</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>/metrics 200: 11.079356613380348
+/ready 200: 9.971420952042314
+/chat 200: 22.98632968791678
+0</code></pre>
+</div>
+  <p>כמה בקשות בחמש הדקות האחרונות, לפי <span class="en">route</span> וסטטוס: ה-20 ועוד שתיים מקודם, Prometheus עצמו שקורא <code>/metrics</code> כל 5 שניות, וה-<span class="en">healthcheck</span> של Docker. המספרים לא שלמים כי <code>increase</code> מחשב מתוך דגימות ומשלים את הקצוות. השאילתה השנייה: ה-<span class="en">worker</span> לא מפגר.</p>
+  <p>בדפדפן, <code>http://127.0.0.1:9090</code> נותן את אותן שאילתות עם גרף, ולשונית <span class="en">Alerts</span>. שלוש שאילתות שכדאי להכיר: <code>rate(x_total[5m])</code> (כמה בשנייה, בממוצע על 5 דקות), <code>sum by (status) (...)</code> (חיבור לפי <span class="en">label</span>), ו-<code class="wrap">histogram_quantile(0.95, sum by (le) (rate(x_bucket[5m])))</code> (p95). ל-<span class="en">dashboards</span> משתמשים ב-<strong>Grafana</strong>: הוא מתחבר ל-Prometheus (ולמאגר הלוגים), ומציג את אותן שאילתות כלוחות של גרפים. לא נריץ אותו; אין בו רעיון שלא ראיתם כאן. <span class="en">Commit</span>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.8</span><span class="en">Tracing</span>: לאן הלך הזמן</h2>
+
+<p>ה-<code>/chat</code> מהצעד 4 לקח 45 מילישניות, ומהן 25 בשירות ההערות. את זה הבנו מחיבור ידני של שתי שורות. <strong><span class="en">Tracing</span></strong> עושה את החיבור מראש: כל קטע עבודה (<strong><span class="en">span</span></strong>) נרשם עם התחלה, סוף, שם, ו"מי הקטע שקרא לי". כל ה-<span class="en">spans</span> של בקשה אחת יחד הם <strong><span class="en">trace</span></strong>, וכלי מציג אותם כמפל:</p>
+
+<div class="diagram">
+  <div class="trace">
+    <div class="span"><span class="label">api: DELETE</span><span class="bar" style="--start:0;--len:67.4"><i></i><b>64 ms</b></span></div>
+    <div class="span"><span class="label">api: saga, archive</span><span class="bar" style="--start:0;--len:11.6"><i></i><b>11 ms</b></span></div>
+    <div class="span"><span class="label">notes: GET</span><span class="bar" style="--start:13.7;--len:12.6"><i class="other"></i><b>12 ms</b></span></div>
+    <div class="span"><span class="label">notes: DELETE</span><span class="bar" style="--start:30.5;--len:20"><i class="other"></i><b>19 ms</b></span></div>
+    <div class="span"><span class="label">api: saga, delete</span><span class="bar" style="--start:52.6;--len:12.6"><i></i><b>12 ms</b></span></div>
+    <div class="span"><span class="label">worker: the event</span><span class="bar" style="--start:94.7;--len:1"><i class="later"></i></span></div>
+  </div>
+  <div class="caption">מחיקת שיחה אחת בגרסה של סוף הפרק, משוחזרת מהשורות שלה בלוגים (כמו בתרגיל 1): כחול ב-<code>api</code>, סגול בשירות ההערות, כתום ב-<span class="en">worker</span>, 26 מילישניות אחרי שה-<code>api</code> כבר ענה. כלי <span class="en">tracing</span> מצייר את זה לבד.</div>
+</div>
+
+<p>כדי שה-<span class="en">span</span> בשירות ההערות יידע מי ההורה שלו, הקורא שולח את מזהה ה-<span class="en">trace</span> ואת מזהה ה-<span class="en">span</span> שלו בכותרת. לזה קוראים <strong><span class="en">context propagation</span></strong>, והתקן הוא כותרת W3C בשם <code>traceparent</code>. ה-<code>X-Request-ID</code> שלנו הוא הגרסה הצנועה של אותו רעיון: מזהה <span class="en">trace</span> בלי <span class="en">spans</span>.</p>
+<p>הכלי המקובל היום הוא <strong>OpenTelemetry</strong> (OTel): תקן וספריות לכל השפות, שמייצרים <span class="en">traces</span>, וגם מדדים ולוגים, ושולחים אותם לכל מאגר (Jaeger, Grafana Tempo, ענן). יש לו חבילות אוטומטיות ל-FastAPI, httpx, SQLAlchemy ו-Kafka: כמה שורות של הגדרה, וכל קריאה הופכת ל-<span class="en">span</span> עם <code>traceparent</code> בכותרת. בפרויקט לא נבנה את זה: זה דורש עוד שרת לאסוף ולהציג, והמזהה כבר נותן לנו את רוב הערך. בפרק 21 תראו <span class="en">tracing</span> של ריצות של סוכן, שם כל צעד של המודל הוא <span class="en">span</span>.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.9</span>התראות</h2>
+
+<p>אף אחד לא יושב מול גרפים. <strong>התראה</strong> (<span class="en">alert</span>) היא שאילתה ש-Prometheus בודק כל כמה שניות, ואם היא נכונה לאורך זמן (<code>for</code>), הוא מודיע. לאן: Prometheus מעביר ל-<strong>Alertmanager</strong>, שמקבץ, משתיק ושולח ל-Slack, למייל או לטלפון של התורן (<span class="en">on-call</span>), דרך שירות כמו PagerDuty.</p>
+
+<h3>על סימפטומים, לא על כל סיבה</h3>
+<p>אפשר להתריע על כל דבר: מעבד מעל 80%, ניסיון חוזר מול שירות ההערות, הודעה ב-DLQ. אחרי שבוע יש מאה התראות ביום, רובן לא אומרות שמישהו סובל, והתורן מפסיק לקרוא אותן. לזה קוראים <strong>עייפות התראות</strong> (<span class="en">alert fatigue</span>), וזה הרגע שבו ההתראה האמיתית מתפספסת. לכן מעירים אדם רק על <strong>סימפטום</strong>: משהו שמשתמשים מרגישים (שגיאות, איטיות), או נתונים שנפגעים. את הסיבות מחפשים <em>אחרי</em> ההתראה, בלוגים ובמדדים. שתי דרגות: <code>page</code> (להעיר עכשיו) ו-<code>ticket</code> (לטפל בשעות העבודה).</p>
+<div class="codebox">
+  <div class="label"><span>monitoring\alerts.yml (two of the seven)</span></div>
+<pre><code>      - alert: ChatErrors
+        expr: |
+          sum(rate(http_requests_total{route=~"/chat|/conversations.*", status=~"5.."}[5m]))
+            / sum(rate(http_requests_total{route=~"/chat|/conversations.*"}[5m])) &gt; 0.05
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: More than 5% of chat requests fail.
+          runbook_url: docs/runbook.md#chaterrors
+
+      - alert: SagaCompensationFailed
+        <span class="cm"># One is enough: the data is now inconsistent, and only a person can fix it.</span>
+        expr: increase(sagas_total{outcome="compensation_failed"}[15m]) &gt; 0
+        labels:
+          severity: page</code></pre>
+</div>
+<p>והשאר: <code>ApiDown</code> (<code>up == 0</code>: כש-Prometheus לא מגיע לשירות, אין שום מונה שגיאות שיעלה, ולכן צריך התראה על היעדר נתונים), <code>ChatSlow</code> (p95 של <code>/chat</code> מעל 3 שניות), <code>NotesFailing</code>, <code>EventsLost</code> ו-<code>WorkerBehind</code>, שלושתן <code>ticket</code>. <code>promtool</code>, שמגיע עם Prometheus, בודק את הקבצים:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker run --rm -v "${PWD}\monitoring:/m:ro" --entrypoint promtool prom/prometheus:v3.5.0 check config /m/prometheus.yml</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Checking /m/prometheus.yml
+  SUCCESS: 1 rule files found
+ SUCCESS: /m/prometheus.yml is valid prometheus config file syntax
+
+Checking /m/alerts.yml
+  SUCCESS: 7 rules found</code></pre>
+</div>
+<p>אבל <code>promtool</code> לא יודע שמדד בשם <code>note_calls_total</code> לא קיים: אולי הוא עוד לא נוצר. התראה עם שגיאת כתיב לא תופעל לעולם, ואף אחד לא יידע. לכן <code>tests\test_alerts.py</code> משווה כל שם בהתראות לרשימת המדדים ש-<code>/metrics</code> מכריז עליהם, ובודק שלכל התראה יש סעיף ב-<span class="en">runbook</span>. עם שגיאת כתיב:</p>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest tests/test_alerts.py (with a typo in alerts.yml)</span></div>
+<pre><code>E           AssertionError: NotesFailing uses unknown metrics: {'note_calls_total'}
+1 failed, 1 passed in 6.49s</code></pre>
+</div>
+
+<h3><span class="en">Runbook</span></h3>
+<p>התראה שמעירה אדם בשלוש בלילה צריכה לומר לו מה לעשות. <code>docs\runbook.md</code> מכיל סעיף לכל התראה: מה היא אומרת, מה לבדוק קודם, ואיך לעצור את הנזק. ה-<code>runbook_url</code> בהתראה מוביל ישר לסעיף:</p>
+<div class="codebox output">
+  <div class="label"><span>docs\runbook.md (one entry, shortened)</span></div>
+<pre><code>## ChatErrors
+
+More than 5% of `/chat` and `/conversations` requests answer 5xx for 5 minutes.
+
+1. Which status and route? In Prometheus:
+   `sum by (route, status) (rate(http_requests_total{status=~"5.."}[5m]))`
+2. 502 on `/chat`: the model fails. Check `llm_errors_total` by `reason` ...
+3. 503 on `DELETE /conversations/...`: the notes service; see NotesFailing.
+4. 500: a bug. Take a `request_id` from an ERROR line and read all its lines.
+5. Mitigate: a recent deploy? Roll back. ...</code></pre>
+</div>
+<p><span class="en">Runbook</span> שלא עודכן גרוע מאין <span class="en">runbook</span>, כי סומכים עליו. לכן הבדיקה מכריחה אותו להתקיים, ומי שמוסיף התראה כותב גם את הסעיף שלה.</p>
+
+<h3><span class="en">SLI</span>, <span class="en">SLO</span> ו-<span class="en">error budget</span></h3>
+<p>כמה שגיאות זה "יותר מדי"? מגדירים את זה מראש, במספרים. <strong>SLI</strong> (<span class="en">service level indicator</span>) הוא מה שמודדים מנקודת המבט של המשתמש, למשל "החלק מבקשות <code>/chat</code> שהצליחו ב-3 שניות או פחות". <strong>SLO</strong> (<span class="en">objective</span>) הוא היעד: 99% מהן, על פני 28 יום. ה-1% שנשאר הוא <strong><span class="en">error budget</span></strong>: בעשרת אלפים בקשות ביום, מאה בקשות גרועות ביום מותרות. </p>
+<div class="table-wrap">
+<table>
+  <tr><th>SLO</th><th>מותר להיכשל ב-28 יום</th><th>בזמן, אם הכול נופל בבת אחת</th></tr>
+  <tr><td>99%</td><td>1 מכל 100 בקשות</td><td>כ-6.7 שעות</td></tr>
+  <tr><td>99.9%</td><td>1 מכל 1,000</td><td>כ-40 דקות</td></tr>
+  <tr><td>99.99%</td><td>1 מכל 10,000</td><td>כ-4 דקות: עשרים <span class="en">deploys</span> עם 12 השניות שמדדתם בפרק 10</td></tr>
+</table>
+</div>
+<p>כל תשיעייה נוספת עולה הרבה יותר מהקודמת, ומשתמש שהרשת הביתית שלו נופלת יותר מזה לא ירגיש בהבדל. כל עוד התקציב לא נגמר, משחררים גרסאות חדשות בקצב רגיל; כשהוא נגמר, עוצרים פיצ'רים ומשקיעים ביציבות. כך "כמה אמין" הופך מוויכוח להחלטה. מכאן גם התנאי של פרק 9 ל-<span class="en">continuous deployment</span>: גרסה שיוצאת אוטומטית חייבת מדד שאומר אם היא פוגעת, והתראה שעוצרת אותה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.10</span>תקלה (<span class="en">incident</span>)</h2>
+
+<p>ההתראה צלצלה, או שמשתמשת כתבה. הסדר:</p>
+<ol>
+  <li><strong>לזהות ולהכריז.</strong> מישהו אחד לוקח אחריות (<span class="en">incident commander</span>) ופותח ערוץ אחד לתקלה. גם "אני בודק" הוא הודעה.</li>
+  <li><strong>קודם לעצור את הנזק</strong> (<span class="en">mitigate</span>), לפני שמבינים. <span class="en">Rollback</span> לגרסה הקודמת (פרק 10), כיבוי של פיצ'ר, העברת תנועה. ההבנה המלאה יכולה לחכות; המשתמשים לא.</li>
+  <li><strong>לאבחן</strong> מהראיות: מדדים לתמונה הכללית ("מתי התחיל? מה עוד השתנה אז?"), לוגים לבקשה אחת, מזהה הבקשה כדי לעבור בין שירותים. לרשום כל ממצא עם השעה.</li>
+  <li><strong>לתקשר.</strong> למשתמשים, בדף סטטוס או בתשובה: מה מושפע, מה לעשות, מתי עדכון הבא. בלי ניחושים על הסיבה.</li>
+  <li><strong>ללמוד.</strong> אחרי שהכול שקט, <span class="en">postmortem</span>.</li>
+</ol>
+<h3>איפה מחפשים</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>השאלה</th><th>איפה</th><th>אצלנו</th></tr>
+  <tr><td>מתי זה התחיל, וכמה זה גדול?</td><td>מדדים, גרף לאורך זמן</td><td>Prometheus, או שתי תמונות של <code>/metrics</code> והפרש ביניהן</td></tr>
+  <tr><td>מה השתנה באותו זמן?</td><td>שורות הפעלה, <span class="en">deploys</span>, שינויי הגדרות</td><td><code>starting ... environment</code>, <code>Started server process</code>, אזהרות בעלייה</td></tr>
+  <tr><td>מה קרה לבקשה הזו?</td><td>לוגים, לפי <code>request_id</code></td><td><code>Select-String</code> על כל השירותים, ממוין לפי <code>time</code></td></tr>
+  <tr><td>מה השירות השני ראה?</td><td>הלוג שלו, באותו מזהה</td><td>"<span class="en">timeout</span>" בצד אחד מול "200 אחרי 2.5 שניות" בצד השני</td></tr>
+  <tr><td>מי עוד הושפע?</td><td>מדדים לפי <span class="en">label</span>, לוגים לפי רמה</td><td><code>notes_calls_total</code> לפי <code>outcome</code>, שורות <code>ERROR</code> לפי <span class="en">logger</span></td></tr>
+</table>
+</div>
+<p>ושלוש מלכודות. <strong>מתאם אינו סיבה:</strong> <code>ERROR</code> שקרה באותה דקה אינו בהכרח קשור; בדקו אם הוא נושא את אותו מזהה. <strong>בדיקות בריאות ירוקות</strong> אומרות רק מה שהן בודקות: <code>/ready</code> בודק שבסיס הנתונים עונה, לא שהשירות מהיר. ו<strong>היעדר שורה אינו היעדר אירוע</strong>: ב-13.1 שירות ההערות שמר הערות ולא כתב עליהן מילה.</p>
+
+<p><strong><span class="en">Postmortem</span></strong> הוא מסמך קצר: מה קרה, ציר זמן, למה, ומה משנים. הוא <strong>בלי האשמות</strong> (<span class="en">blameless</span>): הוא מתאר מה המערכת והתהליך <em>אפשרו</em>, לא מי טעה. מי שפעל, פעל לפי מה שידע; השאלה היא למה זה לא הספיק. צוות שמאשים מקבל אנשים שמסתירים טעויות, וטעות שהוסתרה תחזור. התבנית ב-<code>docs\postmortem-template.md</code>: השפעה, ציר זמן עם ראיה לכל שורה, סיבת שורש וגורמים תורמים, מה עבד, מה לא ואיפה היה לנו מזל, ופעולות, כל אחת עם בעלים: למנוע, לגלות, או לצמצם נזק.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.11</span><span class="en">CI</span>, <span class="en">deploy</span>, וגרסה 0.13.0</h2>
+
+<p><code>ci.yml</code> לא משתנה: הבדיקות החדשות רצות בצעד הקיים, ואף אחת מהן לא צריכה Prometheus. ב-<code>deploy\</code> רק הגרסאות: <code>IMAGE_TAG=0.13.0</code>, <code>NOTES_IMAGE_TAG=0.3.0</code>. Prometheus לא נכנס ל-<code>deploy\compose.yaml</code>: בסביבה אמיתית הוא שירות משותף שאוסף מכל השירותים, או שירות מנוהל בענן. <code>CHANGELOG.md</code>, README (סעיף "Logs, metrics and alerts"), <code>docs\architecture.md</code>. <span class="en">Merge</span>, תגית <code>v0.13.0</code>, ו-<code>scripts\ci_local.py</code> ירוק.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.12</span>תרגילים</h2>
+
+<p>על compose מהדוגמה המודרכת. שינויי קוד על ענף, עם שורה תחת <span class="en">Unreleased</span>. פתרונות <a href="solutions/chapter-13.html">בדף נפרד</a>. תרגיל 3 הוא לב הפרק: תנו לו זמן. בסוף, <code>docker compose --profile monitoring stop</code>.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · מזהה אחד, שלושה שירותים</h3><span class="level">מודרך</span></div>
+  <p>בשיחה חדשה: הודעה רגילה, <code>/note</code>, ומחיקת השיחה (<code>Invoke-WebRequest ... -Method Delete</code>, כמו בפרק 12). לכל אחת מהשלוש, מצאו את מזהה הבקשה (מ-<code>ask.py</code>, או מכותרת <code>X-Request-ID</code> של התשובה: <code>$r.Headers["X-Request-ID"]</code>), ואת כל השורות שלה ב-<code>api</code>, <code>notes</code> ו-<code>worker</code>.</p>
+  <label class="answer-label" for="n-ex1">איזו בקשה הגיעה לאילו שירותים, וכמה שורות לכל אחת? איזו שורה של המחיקה נמצאת בשירות שה-<code>api</code> בכלל לא קורא לו?</label>
+  <textarea class="answer" id="n-ex1" data-id="c13-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c13-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · התראה שמצלצלת</h3><span class="level">מודרך</span></div>
+  <p>עם <code>--profile monitoring</code>: פתחו <code>http://127.0.0.1:9090/alerts</code>. עצרו את ה-<code>api</code> (<code>docker compose stop api</code>), רעננו כל 15 שניות, ורשמו מתי <code>ApiDown</code> עובר מ-<code>inactive</code> ל-<code>pending</code> ומשם ל-<code>firing</code>. החזירו את ה-<code>api</code> וראו אותה נעלמת.</p>
+  <label class="answer-label" for="n-ex2">כמה זמן עבר עד <code>firing</code>, ולמה דווקא כך? למה <code>ChatErrors</code> לא הופעלה בזמן שה-<code>api</code> היה למטה, אף שאף בקשה לא הצליחה?</label>
+  <textarea class="answer" id="n-ex2" data-id="c13-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c13-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · התקלה של דנה</h3><span class="level mid">בינוני</span></div>
+  <p>ב-<code>examples\incident\</code> נמצאות ראיות אמיתיות מתקלה ב-<span class="en">staging</span>, שלא אתם גרמתם: הלוגים של <code>api</code>, <code>notes</code> ו-<code>worker</code>, שתי תמונות של <code>/metrics</code>, תשובה של <code>/ready</code> מאמצע התקלה, וההתראות של Prometheus בסופה. התחילו מ-<code>README.md</code> שם: הדיווח של הבודקת. אין צורך להריץ דבר, ואסור להציץ בקוד לפני שיש לכם השערה מהראיות.</p>
+  <ol>
+    <li>שחזרו את ציר הזמן של הבקשה שבדיווח, שורה אחרי שורה, בשני השירותים.</li>
+    <li>מה גרם לאיטיות? מתי זה התחיל, ומאיפה אתם יודעים?</li>
+    <li>ה-<code>api</code> אמר "nothing was deleted". מה נמחק בפועל, ולמה ה-<span class="en">saga</span> לא החזירה את זה?</li>
+    <li>אילו סימנים בראיות מטעים, ולמה?</li>
+    <li>איזו התראה הייתה צריכה לצלצל, ואיזו צלצלה?</li>
+  </ol>
+  <label class="answer-label" for="n-ex3">האבחנה שלכם: ציר זמן קצר, הסיבה, ושני הסימנים המטעים.</label>
+  <textarea class="answer" id="n-ex3" data-id="c13-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c13-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · שגיאה שאינה "לא"</h3><span class="level mid">בינוני</span></div>
+  <p>על ענף <code>fix/saga-unknown-outcome</code>: כתבו ב-<code>tests\test_saga.py</code> בדיקה שמשחזרת את מה שמצאתם בתרגיל 3 בלי Docker: שירות הערות מזויף שמוחק ואז זורק <code>httpx2.ReadTimeout</code>. הריצו וראו אותה נכשלת. אחר כך תקנו את <code>agent\saga.py</code> כך שהבדיקה עוברת, וגם כל הבדיקות של פרק 12. רמז: מה <code>run_saga</code> מניח על צעד שנכשל?</p>
+  <label class="answer-label" for="n-ex4">מה ההנחה שהייתה שגויה, ואיך התיקון שלכם עובד כשהמחיקה קרתה, כשלא קרתה, וכששירות ההערות עדיין איטי בזמן התיקון?</label>
+  <textarea class="answer" id="n-ex4" data-id="c13-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c13-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · מה שאסור שיגיע ללוג</h3><span class="level mid">בינוני</span></div>
+  <p>כתבו ב-<code>tests\test_observability.py</code> בדיקה ששולחת ל-<code>/chat</code> הודעה כמו <code>"my password is hunter2"</code> ומוודאת שהטקסט לא מופיע באף שורת לוג, כש-<span class="en">fixture</span> אוסף את השורות כ-JSON. כדי לדעת שהיא באמת תופסת, שנו לרגע ב-<code>conversations.py</code> את <code>"model replied"</code> ל-<code>"model replied to: %s", text</code> והריצו. אחר כך החזירו.</p>
+  <label class="answer-label" for="n-ex5">מה הבדיקה הראתה כשהכנסתם את הדליפה? אילו עוד שדות במערכת הזו אסור שיגיעו ללוג, ואיפה הם עלולים להגיע בלי שאיש התכוון?</label>
+  <textarea class="answer" id="n-ex5" data-id="c13-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c13-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · <span class="en">Postmortem</span></h3><span class="level open">פתוח</span></div>
+  <p>כתבו את ה-<span class="en">postmortem</span> של התקלה מתרגיל 3, ב-<code>docs\postmortems\</code>, לפי התבנית. ציר זמן עם ראיה לכל שורה, סיבת שורש וגורמים תורמים, ושלוש פעולות לפחות: אחת שמונעת, אחת שמגלה מהר יותר, ואחת שמצמצמת נזק. ובסוף, הציעו SLO אחד לשירות ההערות כפי שהצ'אט רואה אותו: מה ה-SLI, מה היעד, ואיזו התראה הייתה נובעת ממנו.</p>
+  <label class="answer-label" for="n-ex6">בדקו את המסמך שלכם: האם יש בו משפט שמאשים אדם? שכתבו אותו כך שיתאר מה המערכת אפשרה.</label>
+  <textarea class="answer" id="n-ex6" data-id="c13-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c13-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.13</span>בדקו את עצמכם</h2>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c13-chk1"><span>אני יודע/ת להסביר למה לוג מובנה עדיף על טקסט חופשי, ומה המחיר.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c13-chk2"><span>אני יודע/ת איפה נוצר מזהה בקשה, ואיך הוא עובר ב-HTTP, ב-Kafka ובתוך תהליך אחד.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c13-chk3"><span>אני יודע/ת לומר מה אסור לכתוב בלוג, ולמה שירות כותב ל-<span class="en">stdout</span> ולא לקובץ.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c13-chk4"><span>אני יודע/ת להבדיל בין <span class="en">counter</span>, <span class="en">gauge</span> ו-<span class="en">histogram</span>, ולתת דוגמה לכל אחד.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c13-chk5"><span>אני יודע/ת להסביר למה p99 מספר יותר מממוצע, ולמה מזהה לא נכנס ל-<span class="en">label</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c13-chk6"><span>אני יודע/ת להסביר <span class="en">span</span>, <span class="en">trace</span> ו-<span class="en">context propagation</span>, ומה OpenTelemetry נותן.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c13-chk7"><span>אני יודע/ת למה מתריעים על סימפטומים, ולמה צריך גם התראה על היעדר נתונים.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c13-chk8"><span>אני יודע/ת להסביר SLI, SLO ו-<span class="en">error budget</span> עם מספרים.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c13-chk9"><span>אני יודע/ת את סדר הטיפול בתקלה, ולמה עוצרים את הנזק לפני שמבינים.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c13-chk10"><span>אני יודע/ת להסביר למה <span class="en">timeout</span> אינו "לא קרה".</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.14</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td>שורות של <code>uvicorn</code> בטקסט רגיל, לא JSON</td><td><code>setup_logging</code> לא נקראה, או ש-<code>uvicorn</code> הוגדר אחריה (<code>--log-config</code>)</td><td>ודאו ש-<code>create_app()</code> נקרא בלי <span class="en">settings</span> (כך הוא קורא ל-<code>setup_logging</code>)</td></tr>
+  <tr><td>שורות כמו <code>%4|1795033373.919|GETPID|rdkafka#producer-1| ...</code></td><td><code>librdkafka</code> כותבת ישר ל-<span class="en">stderr</span></td><td><code>"logger": logging.getLogger("kafka")</code> בהגדרות ה-<span class="en">producer</span> וה-<span class="en">consumer</span></td></tr>
+  <tr><td>לשורות ה-<span class="en">worker</span> אין <code>request_id</code></td><td>אירועים שפורסמו לפני 0.13.0 אין להם <span class="en">header</span>, או שה-<code>api</code> רץ מ-<span class="en">image</span> ישן</td><td><code>docker compose up --build -d</code></td></tr>
+  <tr><td><code>ConvertFrom-Json : Invalid JSON primitive</code></td><td>שורה שאינה JSON בפלט (למשל מגרסה ישנה), או ש-<code>--no-log-prefix</code> נשכח</td><td>הוסיפו <code>--no-log-prefix</code>; סננו קודם עם <code>Select-String '^\{'</code></td></tr>
+  <tr><td>ב-Prometheus, יעד <code>worker</code> במצב <code>down</code></td><td><span class="en">image</span> ישן של ה-<span class="en">worker</span>, בלי שרת על 9100</td><td><code>docker compose up --build -d worker</code></td></tr>
+  <tr><td><code>Bind for 127.0.0.1:9090 failed: port is already allocated</code></td><td>Prometheus אחר, או תוכנה אחרת, על 9090</td><td>עצרו אותו, או שנו את הפורט בצד שמאל של <code>ports</code></td></tr>
+  <tr><td>ב-Git Bash: <code>promtool: error: path 'M:/prometheus.yml' does not exist</code></td><td>Git Bash הופך <code>/m/...</code> לנתיב של Windows</td><td>הריצו מ-PowerShell, או <code>export MSYS_NO_PATHCONV=1</code></td></tr>
+  <tr><td>התראה לא מופעלת אף פעם</td><td>שגיאת כתיב בשם המדד: Prometheus מקבל שאילתה על מדד שלא קיים</td><td><code>uv run pytest tests/test_alerts.py</code></td></tr>
+  <tr><td>Prometheus איטי או המחשב נתקע</td><td>Kafka, שני Postgres ו-Prometheus יחד צורכים הרבה זיכרון</td><td><code>docker compose --profile monitoring stop prometheus</code> כשלא צריך אותו</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.15</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>observability</dt><dd>היכולת לענות על שאלות על מערכת חיה מתוך מה שהיא כותבת ומודדת, בלי לשנות אותה.</dd>
+  <dt>structured log</dt><dd>שורת לוג עם שדות קבועים (כאן JSON), שתוכנה יכולה לסנן ולספור.</dd>
+  <dt>log level</dt><dd>חומרה של שורה: DEBUG, INFO, WARNING, ERROR.</dd>
+  <dt>request id / correlation id</dt><dd>מזהה שנוצר בכניסה למערכת ונכתב בכל שורה של אותה בקשה, בכל שירות.</dd>
+  <dt>log aggregator</dt><dd>מאגר שאוסף לוגים מכל השירותים ומאפשר לחפש בהם יחד (Loki, Elasticsearch, CloudWatch).</dd>
+  <dt>middleware</dt><dd>קוד שעוטף כל בקשה לשרת, לפני ה-endpoint ואחריו.</dd>
+  <dt>metric</dt><dd>מספר שהשירות סופר בזיכרון לאורך זמן: counter, gauge או histogram.</dd>
+  <dt>golden signals</dt><dd>latency, traffic, errors, saturation: ארבעת המדדים שמתחילים מהם.</dd>
+  <dt>percentile</dt><dd>p99: הערך ש-99 מכל 100 תצפיות לא עברו.</dd>
+  <dt>cardinality</dt><dd>מספר הסדרות שמדד יוצר: כל צירוף של ערכי labels.</dd>
+  <dt>scrape</dt><dd>Prometheus מושך את /metrics של שירות, כל כמה שניות.</dd>
+  <dt>PromQL</dt><dd>שפת השאילתות של Prometheus.</dd>
+  <dt>span / trace</dt><dd>קטע עבודה אחד עם התחלה וסוף; כל הקטעים של בקשה אחת.</dd>
+  <dt>context propagation</dt><dd>העברת מזהה ה-trace בין שירותים, למשל בכותרת traceparent.</dd>
+  <dt>OpenTelemetry</dt><dd>תקן וספריות לייצור traces, מדדים ולוגים, ולשליחתם לכל מאגר.</dd>
+  <dt>alert fatigue</dt><dd>כשיש כל כך הרבה התראות שאנשים מפסיקים להגיב להן.</dd>
+  <dt>runbook</dt><dd>הוראות למי שהתראה העירה: מה לבדוק ומה לעשות.</dd>
+  <dt>SLI / SLO</dt><dd>מה מודדים מנקודת המבט של המשתמש; היעד למדד הזה.</dd>
+  <dt>error budget</dt><dd>כמה כישלון ה-SLO מרשה; כשהוא נגמר, יציבות לפני פיצ'רים.</dd>
+  <dt>mitigate</dt><dd>לעצור את הנזק למשתמשים, לפני שמבינים את הסיבה.</dd>
+  <dt>postmortem (blameless)</dt><dd>מסמך שאחרי תקלה: מה קרה, למה, ומה משנים, בלי להאשים אנשים.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">13.16</span>מה הלאה</h2>
+
+<p>המערכת שקופה עכשיו: כל בקשה משאירה עקבות בשלושה שירותים, כל מספר חשוב נספר, ומי שמעירים אותו יודע מה לעשות. אבל תסתכלו מי עוד רואה: <code>/metrics</code> פתוח לכל מי שמגיע לפורט, בלי מפתח, ומספר כמה משתמשים יש, מה נכשל ומה עולה כסף. מזהה בקשה שמגיע מבחוץ נכתב ללוגים שלכם. המפתח בין הצ'אט לשירות ההערות הוא סיסמה אחת קבועה, Kafka מקבל כל מי שמתחבר, ה-<span class="en">containers</span> רצים כ-<code>root</code>, ואף אחד לא בדק אם בחבילות שהתקנתם יש חולשה ידועה. מי שלא אמור להיות במערכת יכול לראות אותה, ולפעמים גם לגעת.</p>
+
+<p>סודות שדולפים, הרשאות מינימליות, בדיקת קלט, תלויות פגיעות, הגבלת קצב, ומידע אישי: <strong>פרק 14: אבטחה</strong>.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-13</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים, בלי <code>.git</code> ובלי סודות, כולל <code>examples\incident</code> ו-<code>docs\postmortems</code>. עם <code>db</code> של compose למעלה, <code>uv run --locked python scripts/ci_local.py</code> מריץ 127 בדיקות בצ'אט ו-12 בשירות ההערות, ושני <span class="en">images</span> שמדפיסים <code>0.13.0</code> ו-<code>0.3.0</code>.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-13.html">פתרונות לפרק 13</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

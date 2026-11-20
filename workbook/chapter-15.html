@@ -1,0 +1,697 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 15 · עבודה בצוות | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="15">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 15 · עבודה בצוות</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 15 מתוך 21</div>
+  <h1>עבודה בצוות</h1>
+  <p class="lead">איך הופכים בקשה של שורה אחת לעבודה שאפשר לסיים: כרטיס עם הגדרה של "גמור", מסמך תכנון קצר, הערכה שהיא טווח, <span class="en">pull request</span> שאחרים יכולים לבדוק, ותיעוד שנשאר נכון.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>לקרוא כרטיס עמום, לשאול את השאלות הנכונות, ולכתוב אותו מחדש עם הקשר, תנאי קבלה ומה לא נכלל.</li>
+    <li>להחליט מתי צריך מסמך תכנון, לכתוב אחד בעמוד, ולתעד החלטה ב-<span class="en">ADR</span>.</li>
+    <li>להעריך זמן כטווח, לפרק עבודה ל-<span class="en">pull requests</span> קטנים, להתחיל מהלא-ידוע, ולהודיע מוקדם כשמשהו מתארך.</li>
+    <li>לבדוק עבודה מול <span class="en">definition of done</span> שקשורה לכל מה שבניתם מפרק 3 עד 14.</li>
+    <li>לכתוב תיאור של <span class="en">pull request</span>, לתת ולקבל הערות <span class="en">review</span>, לכתוב עדכון סטטוס, ולהתמצא בקוד שאינו שלכם.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> חמש עד שבע שעות. <strong>מה צריך:</strong> הפרויקט מסוף פרק 14, ו-Docker Desktop להרצת בדיקות ה-<span class="en">migrations</span> על Postgres. הכול במצב <span class="en">mock</span>.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.1</span>הבעיה: כרטיס בשורה אחת</h2>
+
+<p>ארבעה-עשר פרקים בניתם מערכת לבד: שני שירותים, בסיסי נתונים, אירועים, CI, סביבות, ניטור ואבטחה. בכל פרק הספר אמר לכם מה הצעד הבא ומתי סיימתם. עכשיו דמיינו את היום הראשון בצוות. דנה, שבונה אפליקציה מעל ה-<span class="en">API</span> שלכם (הלקוחה <code>dana</code> מפרק 14), פותחת כרטיס:</p>
+
+<div class="codebox output">
+  <div class="label"><span>AGENT-42</span></div>
+<pre><code>Conversation titles look broken in our list.</code></pre>
+</div>
+
+<p>זה כל הכרטיס. אין תיאור. ולפני שכותבים שורת קוד, יש ארבע שאלות שאין לכם תשובה עליהן: <strong>מה בדיוק</strong> שבור, ומה ייחשב תיקון? <strong>כמה זמן</strong> זה ייקח, כשמישהו ישאל מחר בבוקר? <strong>את מי שואלים</strong> כשמשהו לא ברור, ואיך שואלים בלי לבזבז לאחרים את היום? ו<strong>איך מוסרים</strong> את העבודה, כך שמישהו אחר יבדוק אותה, יבין אותה בעוד חצי שנה, ויוכל לבטל אותה אם צריך?</p>
+
+<p>מי שמדלג על השאלות האלה עושה אחד משני דברים. או שהוא מתקן את מה ש<em>הוא</em> חושב שדנה התכוונה, ומגלה אחרי שבוע שהיא רצתה משהו אחר. או שהוא נתקע, לא אומר כלום, ומודיע ביום האחרון שזה ייקח עוד שבוע. שני המקרים לא קורים בגלל קוד גרוע. הם קורים כי העבודה <em>מסביב</em> לקוד לא נעשתה. הפרק הזה הוא על העבודה הזו, ובסופו תיקחו את AGENT-42 לבד, מהשורה האחת ועד <span class="en">pull request</span> ממוזג.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.2</span>המפה: מבקשה ועד "גמור"</h2>
+
+<div class="diagram">
+  <div class="flow steps">
+    <div class="layer"><div class="name">request</div><div class="what">שורה בצ'אט, תקלה, רעיון</div></div>
+    <div class="hop"><b>clarify</b>&rarr;</div>
+    <div class="layer l2"><div class="name">ticket</div><div class="what">הקשר, תנאי קבלה, מה לא נכלל, הערכה</div></div>
+    <div class="hop"><b>if needed</b>&rarr;</div>
+    <div class="layer l3"><div class="name">design doc</div><div class="what">עמוד אחד: אפשרויות, החלטה, סיכונים</div></div>
+    <div class="hop"><b>build</b>&rarr;</div>
+    <div class="layer l4"><div class="name">branch + PR</div><div class="what">קוד, בדיקות, תיעוד, תיאור, review</div></div>
+    <div class="hop"><b>merge</b>&rarr;</div>
+    <div class="layer l2"><div class="name">done</div><div class="what">CI ירוק, אושר, גרסה, <span class="en">deploy</span>, הכרטיס נסגר</div></div>
+  </div>
+  <div class="caption">פרק 2 לימד את האמצע: ענף, <span class="en">commits</span>, <span class="en">pull request</span>, <span class="en">merge</span>. פרקים 9 ו-10 לימדו את הסוף. הפרק הזה מוסיף את ההתחלה (מבקשה לכרטיס שאפשר לעבוד עליו) ואת התקשורת לאורך כל הדרך.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.3</span>איך עבודה מגיעה אליכם</h2>
+
+<p>בצוות, עבודה כמעט אף פעם לא מגיעה כ"תעשה את זה עכשיו". היא נכנסת לרשימה. ה-<strong><span class="en">backlog</span></strong> הוא הרשימה של כל מה שמישהו רוצה שייעשה: תקלות, בקשות, חובות טכניים (כמו פערי האבטחה ב-<code>docs\security.md</code>). מישהו, לרוב מנהל מוצר או ראש צוות, ממיין אותה לפי חשיבות. כל פריט בה הוא <strong>כרטיס</strong> (<span class="en">ticket</span>, או <span class="en">issue</span>): יחידת עבודה עם מזהה (<code>AGENT-42</code>), כותרת, תיאור, מי אחראי ומה המצב שלה. הכלים משתנים (Jira, Linear, GitHub Issues), והעיקרון זהה.</p>
+
+<p><strong><span class="en">Sprint</span></strong> (בשיטת <span class="en">Scrum</span>) הוא פרק זמן קבוע, לרוב שבועיים. בתחילתו הצוות בוחר מה-<span class="en">backlog</span> כמה שהוא מאמין שיספיק, ובסופו מראה מה נגמר ושואל מה ללמוד מזה. היתרון: קצב צפוי ונקודת עצירה קבועה לשאול "האם אנחנו בונים את הדבר הנכון". החיסרון: עבודה שמגיעה באמצע ה-<span class="en">sprint</span> מחכה, או שוברת את התוכנית.</p>
+
+<p><strong><span class="en">Kanban</span></strong> הוא לוח עם עמודות (<span class="en">To do</span>, <span class="en">In progress</span>, <span class="en">In review</span>, <span class="en">Done</span>), בלי פרקי זמן. כל אחד מושך את הכרטיס הבא כשהוא מתפנה, ויש מגבלה על כמה כרטיסים יכולים להיות בעבודה בבת אחת (<span class="en">WIP limit</span>), כי עשרה דברים פתוחים במקביל נגמרים מאוחר יותר מעשרה דברים אחד אחרי השני. מתאים לצוותים שהעבודה שלהם מגיעה בזרם, כמו תמיכה ותחזוקה.</p>
+
+<p>שתי השיטות הן כלים, לא דת. מה שחשוב לכם ביום הראשון: איפה הכרטיסים, מי ממיין אותם, מה אומר כל מצב בלוח, ומתי הצוות מדבר על התקדמות. שאלו את זה בשבוע הראשון.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.4</span>כרטיס טוב, ואיך מגיעים אליו</h2>
+
+<p>כרטיס טוב עונה על שלוש שאלות, ובכל אחת יש מקום לטעות אחרת:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>חלק</th><th>השאלה</th><th>מה קורה בלעדיו</th></tr>
+  <tr><td><strong>הקשר</strong> (<span class="en">context</span>)</td><td>מה קורה היום, למי זה מפריע, ולמה עכשיו?</td><td>פותרים בעיה אחרת, או פותרים נכון במקום הלא נכון</td></tr>
+  <tr><td><strong>תנאי קבלה</strong> (<span class="en">acceptance criteria</span>)</td><td>מה בדיוק צריך להיות נכון כשסיימנו? כל תנאי בודק, כן או לא</td><td>אין דרך לדעת מתי סיימתם, וה-<span class="en">review</span> הופך לוויכוח על טעם</td></tr>
+  <tr><td><strong>מה לא נכלל</strong> (<span class="en">out of scope</span>)</td><td>מה דומה, מפתה, ו<em>לא</em> נעשה עכשיו?</td><td>הכרטיס גדל בשקט עד שהוא לא נגמר</td></tr>
+</table>
+</div>
+
+<p>כרטיס עמום הופכים לטוב בשאלות, לא בניחושים. כמה שאלות שעובדות כמעט תמיד:</p>
+<ul>
+  <li><strong>"תראי לי."</strong> דוגמה אחת אמיתית שווה פסקה של תיאור. ואם אתם יכולים לשחזר את הבעיה בעצמכם, עשו את זה לפני שאתם שואלים.</li>
+  <li><strong>"איפה רואים את זה, ומי?"</strong> מסך אחד, לקוח אחד, או כולם.</li>
+  <li><strong>"איך נדע שזה תוקן?"</strong> התשובה היא טיוטה של תנאי הקבלה.</li>
+  <li><strong>"ומה עם מה שכבר קיים?"</strong> נתונים ישנים, לקוחות ישנים, גרסה ישנה שעוד רצה.</li>
+  <li><strong>"מה <em>לא</em> צריך?"</strong> ומה הכי פשוט שיספיק.</li>
+  <li><strong>"עד מתי, ולמה דווקא אז?"</strong></li>
+</ul>
+<p>שלחו את כל השאלות בהודעה אחת, ממוספרות, עם מה שכבר בדקתם. "ניסיתי לשחזר, והנה מה שראיתי. שש שאלות, אפשר לענות במספרים" חוסך לשני הצדדים יום של הודעות הלוך וחזור. ואחרי התשובות, כתבו אותן <em>בכרטיס</em>, לא רק בצ'אט: מי שיקרא את הכרטיס בעוד חודש לא יראה את השיחה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.5</span>מסמך תכנון, ו-<span class="en">ADR</span></h2>
+
+<p>לא כל כרטיס צריך מסמך. תיקון שורה עם בדיקה, לא. מסמך תכנון (<span class="en">design doc</span>) שווה את הזמן כשטעות בהחלטה יקרה לתקן אחר כך: שינוי בנתונים שמורים (פרק 7), שירות או תהליך חדש (פרקים 11 ו-12), תלות חדשה (פרק 14), שינוי ב-<span class="en">API</span> שלקוחות מחזיקים בו, או כשיש יותר מדרך סבירה אחת והצוות צריך לבחור. הכלל: אם מישהו בצוות עשוי להגיד ב-<span class="en">review</span> "הייתי עושה את זה אחרת לגמרי", עדיף שיגיד את זה על עמוד אחד לפני שכתבתם 400 שורות.</p>
+
+<div class="codebox">
+  <div class="label"><span>a one-page design doc: the headings</span></div>
+<pre><code># Design: &lt;what&gt;
+Ticket, author, status (proposed / accepted / replaced), date.
+
+## Problem              <span class="cm"># what hurts today, with one real example</span>
+## Goals                <span class="cm"># what will be true when this is done</span>
+## Non-goals            <span class="cm"># what this will not do, on purpose</span>
+## Options considered   <span class="cm"># two or three, each with for and against, in a table</span>
+## Decision             <span class="cm"># which one, and why; the parts of the code it touches</span>
+## Risks                <span class="cm"># what can go wrong, and what we do about each</span>
+## Rollout and rollback <span class="cm"># how it reaches users, and how we undo it</span>
+## Open questions       <span class="cm"># what we do not know yet, and who decides</span></code></pre>
+</div>
+
+<p>שני חלקים עושים את רוב העבודה. <strong><span class="en">Non-goals</span></strong> עוצרים את הוויכוח לפני שהוא מתחיל: "לא נאפשר לשנות כותרת ידנית" הוא משפט שחוסך שיחה. ו<strong><span class="en">options considered</span></strong> מראה שבחרתם, ולא רק עשיתם את הדבר הראשון שעלה בראש. אפשרות שנפסלה כתובה עם הסיבה, כדי שמישהו לא יציע אותה שוב בעוד חצי שנה.</p>
+
+<p>מסמך תכנון מתאר שינוי. <strong><span class="en">ADR</span></strong> (<span class="en">Architecture Decision Record</span>) מתעד החלטה אחת שנשארת: קובץ קצר וממוספר ב-<code>docs\adr\</code>, עם הקשר, החלטה, השלכות וחלופות. כבר קיבלתם כמה כאלה בלי לכתוב אותן: "ה-<span class="en">migrations</span> רצים כצעד נפרד והאפליקציה אף פעם לא מריצה אותם" (פרק 7), "ה-<span class="en">worker</span> הוא תהליך של שירות הצ'אט ולא שירות שלישי" (פרק 12). מי שמצטרף לצוות קורא את ה-<span class="en">ADRs</span> ומבין למה הקוד נראה כפי שהוא נראה. ADR לא משנים אחרי שהתקבל; כשהחלטה מתחלפת, כותבים ADR חדש שמחליף אותו. תכתבו את הראשון בתרגיל 3.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.6</span>הערכת זמן</h2>
+
+<p>"כמה זמן זה ייקח?" היא השאלה שהכי קשה לענות עליה ביום הראשון, ויש לה ארבעה כללים.</p>
+
+<p><strong>הערכה היא טווח.</strong> "שש שעות" נשמע מדויק ואינו. "חמש עד שמונה" אומר את האמת: יש חלקים שאתם מכירים ויש חלקים שלא. רוחב הטווח הוא מידע. כשמישהו מתכנן לפי ההערכה שלכם, הוא צריך לדעת כמה לסמוך עליה.</p>
+
+<p><strong>מפרקים לפני שמעריכים.</strong> אי אפשר להעריך "לתקן את הכותרות". אפשר להעריך "פונקציה ובדיקות", "<span class="en">migration</span> ובדיקה", "תיעוד". חלק שאי אפשר להעריך אותו בכלל גדול מדי: פרקו שוב. אותו פירוק הוא גם הפירוק ל-<span class="en">pull requests</span>: כל אחד קטן מספיק כדי שמישהו יבדוק אותו בחצי שעה, עובד לבד, ולא שובר את <code>main</code> אם הבא לא יגיע. <span class="en">Pull request</span> של 1,500 שורות לא נבדק באמת: הוא נחתם.</p>
+
+<p><strong>מתחילים מהלא-ידוע.</strong> החלק שבו אתם הכי פחות בטוחים הוא החלק עם הטווח הרחב, והוא זה שיפיל את ההערכה. עשו אותו ראשון, לפעמים כ-<strong><span class="en">spike</span></strong>: ניסוי קצר ומוגבל בזמן ("שעה, לא יותר") שהמטרה שלו היא תשובה, לא קוד. הקוד של ה-<span class="en">spike</span> נזרק; התשובה נכנסת להערכה.</p>
+
+<p><strong>מודיעים מוקדם.</strong> הערכות מתפספסות; זה לא כישלון. כישלון הוא לגלות ביום שני שזה ייקח שבוע ולספר ביום חמישי. ברגע שאתם יודעים שהטווח לא מחזיק, כתבו: מה גיליתם, מה ההערכה החדשה, ומה האפשרויות (לדחות, לצמצם את הכרטיס, לבקש עזרה). מי שמודיע ביום שני נותן לאחרים ארבעה ימים לתכנן מחדש.</p>
+
+<div class="callout">
+  <span class="title">ומה עם <span class="en">story points</span>?</span>
+  <p>יש צוותים שמעריכים בנקודות ולא בשעות: מספר יחסי של "גודל" (1, 2, 3, 5, 8), שמשווים בין כרטיסים ולא מול השעון. הרעיון הגיוני: קל יותר להגיד "זה כפול מההוא" מאשר "זה שש שעות". אם הצוות שלכם עובד כך, למדו את הסולם שלו. ארבעת הכללים למעלה נכונים גם לנקודות.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.7</span><span class="en">Definition of done</span></h2>
+
+<p>"עובד אצלי" אינו "גמור". <strong><span class="en">Definition of done</span></strong> היא רשימה קבועה, של הצוות כולו, שכל שינוי עובר לפני שהוא נחשב גמור, כדי שלא כל אחד יחליט לבד. הרשימה שלכם כבר קיימת, מפוזרת ב-14 פרקים. הנה היא במקום אחד:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>שורה</th><th>מה בודקים</th><th>מאיזה פרק</th></tr>
+  <tr><td>תנאי קבלה</td><td>כל תנאי בכרטיס נבדק, בבדיקה או ביד (וכתוב איזה)</td><td>15</td></tr>
+  <tr><td>בדיקות</td><td>התנהגות חדשה נבדקת; תיקון באג בא עם בדיקה שנכשלה לפניו</td><td>3</td></tr>
+  <tr><td>CI</td><td><code>ci_local.py</code> ירוק, עם Postgres לבדיקות ה-<span class="en">migrations</span></td><td>9</td></tr>
+  <tr><td>נתונים</td><td>שינוי בטבלאות או בנתונים בא עם <span class="en">migration</span> שעובד עם הגרסה הקודמת, ועם <span class="en">downgrade</span></td><td>7, 10</td></tr>
+  <tr><td>הגדרות</td><td>משתנה חדש ב-<code>.env.example</code>, בטבלה ב-README, וב-<code>deploy\*.env</code> אם צריך</td><td>1, 10</td></tr>
+  <tr><td>נראות</td><td>דרך חדשה להיכשל נכתבת ללוג (מזהים ומספרים, לא תוכן), ואם היא חשובה, נספרת, עם התראה ו-<span class="en">runbook</span></td><td>13</td></tr>
+  <tr><td>אבטחה</td><td>אין סוד ואין תוכן של משתמשים בקוד, בלוגים ובאירועים; קלט חדש נבדק; הוחלט מי מורשה</td><td>14</td></tr>
+  <tr><td>תיעוד</td><td>README, <code>docs\</code> ו-<code>CHANGELOG.md</code> (<span class="en">Unreleased</span>) אומרים מה השתנה</td><td>9, 15</td></tr>
+  <tr><td><span class="en">Rollback</span></td><td>אפשר לבטל: <span class="en">revert</span> ו-<code>deploy.py --skip-migrations</code></td><td>10</td></tr>
+</table>
+</div>
+
+<p>שורה שלא רלוונטית לא נמחקת: ב-<span class="en">pull request</span> כותבים לידה "אין שינוי בנתונים" או "אין הגדרה חדשה". כך מי שבודק יודע שחשבתם עליה, ולא שכחתם. בדוגמה המודרכת תכניסו את הרשימה ל-<code>CONTRIBUTING.md</code>, ותבנית ל-<code>.github\pull_request_template.md</code>, קובץ ש-GitHub מכניס לבד לכל <span class="en">pull request</span> חדש.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.8</span>דוגמה מודרכת: <span class="en">AGENT-42</span> מהשורה ועד ה-<span class="en">merge</span></h2>
+
+<p>מתחילים מ-<code>main</code> נקי, עם הפרויקט מסוף פרק 14. השרת רץ בלי Docker, כמו בפרק 5 (<code>uv run uvicorn agent.api:create_app --factory</code>, בחלון נפרד), ו-<code>agent.db</code> מעודכן (<code>uv run alembic upgrade head</code>).</p>
+
+<div class="step">
+  <h3><span class="step-num">1</span>משחזרים לפני ששואלים</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python scripts\ask.py "Could you explain how database indexes work in PostgreSQL and in SQLite?"
+uv run python scripts\ask.py "Here is my error:`nTraceback (most recent call last):`n  File app.py, line 3"
+uv run python scripts\ask.py "hi"
+curl.exe -s -H "X-API-Key: &lt;your AGENT_API_KEY&gt;" http://127.0.0.1:8000/conversations</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (the last command)</span></div>
+<pre><code>[{"conversation_id":"56df9a9c14de4cf3a5915f95eccdffc7","title":"hi"},
+ {"conversation_id":"f79df902cd51464bac997ca3e8147031","title":"Here is my error:\nTraceback (most recent call last"},
+ {"conversation_id":"e08684c6b85c4237ac04a9a5ab6ede80","title":"Could you explain how database indexes work in Pos"}]</code></pre>
+</div>
+  <p>(<code>`n</code> בתוך מירכאות כפולות הוא ירידת שורה ב-PowerShell, כמו הדבקה של שגיאה.) עכשיו "שבור" הוא כבר לא מילה. שלוש בעיות: מילה חתוכה באמצע (<code>Pos</code>), ירידת שורה בתוך כותרת, ואין סימן שמשהו נחתך. הכותרת היא <code>text[:50]</code> מ-<code>send()</code> ב-<code>agent\conversations.py</code> (פרק 7).</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>שואלים, וכותבים את הכרטיס מחדש</h3>
+  <p>הודעה אחת לדנה, עם הדוגמה מלמטה ושש שאלות: איפה היא רואה את הכותרות (סרגל צד, שורה אחת לשיחה, מ-<code>GET /conversations</code>)? מה ייחשב תיקון? כמה ארוכה יכולה להיות כותרת (50 בסדר)? מה עם שיחות קיימות (גם הן, יש למשתמשים מאות)? היא צריכה לשנות כותרות ידנית, או כותרות שהמודל כותב (אולי פעם, לא עכשיו)? ולמה לא לנקות אצלה (כי כל לקוח היה צריך לעשות אותו דבר, והכותרת השמורה כבר חתוכה ב-50, כך שאין לה מאיפה לדעת איפה המילה נגמרת). את התשובות כותבים בכרטיס:</p>
+<div class="codebox">
+  <div class="label"><span>examples\team\ticket-AGENT-42.md (the acceptance criteria)</span></div>
+<pre><code>1. A new conversation's title has no line breaks, tabs or repeated spaces: all whitespace
+   becomes one space, and the ends are trimmed.
+2. A title is at most 50 characters, including the ending `...`.
+3. A longer first message is cut after the last whole word that fits, and ends with `...`.
+   A first word longer than the limit is cut inside the word (a long URL, for example).
+4. A first message that fits is the whole title, without `...`.
+5. A first message of whitespace only leaves the title `New conversation`.
+6. Existing conversations get the new title from a migration, when their title is still the
+   automatic one (the start of their first message). Any other title is left as it is.
+7. Downgrading the migration puts the old titles back.
+8. The API does not change: same endpoints, same fields.</code></pre>
+</div>
+  <p>כל תנאי הוא כן או לא, ואפשר לכתוב לו בדיקה. תחת <span class="en">Out of scope</span>: שינוי כותרת ידני, כותרות מהמודל, אורך אחר. הקובץ המלא ב-<code>checkpoints\chapter-15\examples\team\</code>. בצוות אמיתי הכרטיס חי בכלי הכרטיסים, לא ב-git; כאן הוא בפרויקט כדוגמה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>מסמך תכנון של עמוד</h3>
+  <p>שינוי בנתונים שמורים (תנאי 6) הוא בדיוק המקרה של 15.5. צרו ענף, וכתבו את <code>docs\design\2026-11-19-readable-titles.md</code> לפי התבנית. הלב שלו הוא טבלת האפשרויות:</p>
+<div class="codebox">
+  <div class="label"><span>docs\design\2026-11-19-readable-titles.md (excerpt)</span></div>
+<pre><code>| Option | For | Against |
+|---|---|---|
+| A. Each client cleans the title | No server change | Every client repeats the work, and the stored title is already cut at 50 |
+| B. Compute the title when reading, from the first message | Old conversations fixed with no migration | One more query per listed conversation (50 per list), on every read, forever |
+| C. Compute a clean title when the first message is saved, and fix old rows once in a migration | One cheap rule, written once; reads stay as they are | A data migration on a table that grows |
+
+## Decision
+Option C. `make_title(text)` in `agent/conversations.py` builds the title; `send()` uses it.
+Migration `0008` rewrites the titles of existing conversations whose title is still the
+automatic one, `first_message[:50]`. It has its own copy of the rule.</code></pre>
+</div>
+  <p>תחת <span class="en">Risks</span>: טבלה גדולה, שיחות שעברו <code>/reset</code> (הכותרת נשארה, ההודעה שממנה היא באה נמחקה), שיחה שנפתחת בדיוק בזמן ה-<span class="en">deploy</span>, וקוד ישן על הנתונים החדשים. לכל אחד, משפט על מה עושים. ולמה <code>...</code> ולא התו <code>…</code>: כותרות מודפסות ב-<span class="en">terminal</span> ונכתבות לקבצים, ובחלק מקידודי Windows התו היחיד נשבר.</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git switch -c fix/readable-titles
+git add docs\design examples\team
+git commit -m "Design: readable conversation titles (AGENT-42)"</code></pre>
+</div>
+  <p>לבד, אין מי שיגיב. במקום זה, קראו את המסמך שוב אחרי הפסקה, כאילו כתב אותו מישהו אחר. בצוות, כאן שולחים קישור ומחכים יום להערות לפני שכותבים קוד.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>מעריכים ומפרקים, והלא-ידוע ראשון</h3>
+<div class="codebox">
+  <div class="label"><span>docs\design\2026-11-19-readable-titles.md, "Estimate" (before starting)</span></div>
+<pre><code>| Task                                                       | Estimate (hours) |
+|------------------------------------------------------------|------------------|
+| Clarify the ticket, reproduce it                           | 0.5              |
+| This design doc                                            | 0.5 to 1         |
+| Spike: a data migration with Python logic, on a copy       | 0.5 to 1.5       |
+| make_title and its tests                                   | 1 to 1.5         |
+| Migration 0008 and its test, SQLite and Postgres           | 1 to 2           |
+| Docs, changelog, PR description, self-review               | 1                |
+| Review and merge                                           | 0.5              |
+| Total                                                      | 5 to 8           |</code></pre>
+</div>
+  <p>החלק שאתם הכי פחות מכירים הוא <span class="en">migration</span> שמחשב ערכים ב-Python, שורה אחרי שורה. בפרק 7 כל ה-<span class="en">backfills</span> היו SQL אחד. אז קודם <span class="en">spike</span>: טיוטה גסה של <code>0008</code>, רצה על עותק של <code>agent.db</code>, וגם במצב ה-<code>--sql</code> שפרק 7 הראה. על העותק היא עבדה. ב-<code>--sql</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>uv run alembic upgrade 0007:0008 --sql (the spike, shortened)</span></div>
+<pre><code>  File "...\migrations\versions\0008_titles_are_cut_after_a_whole_word.py", line 67, in with_first_message
+    return list(op.get_bind().execute(query))
+TypeError: 'NoneType' object is not iterable</code></pre>
+</div>
+  <p>תשובה של <span class="en">spike</span>: <code>--sql</code> כותב SQL בלי בסיס נתונים, ולכן אין שורות לקרוא. <span class="en">Migration</span> כזה לא יכול לרוץ במצב הזה. זה לא חוסם, אבל זה נכנס לתוכנית: הודעת שגיאה ברורה, ושורה ב-README. ה-<span class="en">spike</span> לקח פחות משעה, ובלעדיו הייתם מגלים את זה ב-<span class="en">review</span>, או אצל מי שמריץ <code>--sql</code> לפני <span class="en">deploy</span>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>תנאי קבלה הופכים לבדיקות</h3>
+  <p>ב-<code>tests\test_titles.py</code>, שורה לכל תנאי, כך שמי שבודק יכול לעבור עליהם אחד אחד (הקובץ המלא ב-<span class="en">checkpoint</span>):</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_titles.py (excerpt)</span></div>
+<pre><code>CASES = [
+    <span class="cm"># 4. a message that fits is the whole title</span>
+    ("hi", "hi"),
+    <span class="cm"># 1. line breaks, tabs and repeated spaces become one space; the ends are trimmed</span>
+    ("  plan   a\ttrip\n", "plan a trip"),
+    <span class="cm"># 1 and 3. a pasted error: one line, cut after the last whole word, with ...</span>
+    (
+        "Here is my error:\nTraceback (most recent call last):\n  File app.py, line 3",
+        "Here is my error: Traceback (most recent call...",
+    ),
+    <span class="cm"># 3. a first word longer than the limit is cut inside the word</span>
+    ("https://example.com/" + "a" * 60, "https://example.com/" + "a" * 27 + "..."),
+    <span class="cm"># 5. whitespace only: the conversation keeps its first title</span>
+    (" \n\t ", NEW_TITLE),
+]
+
+
+@pytest.mark.parametrize(("text", "title"), CASES)
+def test_the_title_is_one_line_cut_at_a_word(text, title):
+    assert make_title(text) == title</code></pre>
+</div>
+  <p>הרצה ראשונה נכשלת, כמו שצריך: <code>ImportError: cannot import name 'make_title' from 'agent.conversations'</code>. עכשיו הפונקציה, ושימוש בה ב-<code>send()</code> במקום <code>text[:TITLE_LENGTH]</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\conversations.py</span></div>
+<pre><code>CUT = "..."  <span class="cm"># ends a title that was cut; ASCII, so every terminal and file can show it</span>
+
+
+def make_title(text: str) -&gt; str:
+    """One line for lists: the start of the first message, cut after a whole word."""
+    words = " ".join(text.split())  <span class="cm"># line breaks, tabs and repeated spaces become one space</span>
+    if not words:
+        return NEW_TITLE
+    if len(words) &lt;= TITLE_LENGTH:
+        return words
+    room = TITLE_LENGTH - len(CUT)
+    space = words.rfind(" ", 0, room + 1)  <span class="cm"># the last space that leaves room for the CUT</span>
+    end = space if space &gt; 0 else room  <span class="cm"># one word longer than the room: cut inside it</span>
+    return words[:end] + CUT</code></pre>
+</div>
+  <p><code>uv run pytest tests\test_titles.py</code>: 16 עוברות. כל הבדיקות, <code>uv run pytest</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>&gt;       assert conversations.title(conversation_id) == ("plan a trip to the north " * 4)[:50]
+E       AssertionError: assert 'plan a trip ...rip to the...' == 'plan a trip ...to the north '
+FAILED tests/test_conversations.py::test_the_first_message_names_the_conversation
+1 failed, 153 passed, 4 skipped</code></pre>
+</div>
+  <p>בדיקה מפרק 7 שמצפה בדיוק להתנהגות הישנה. זה לא באג אלא שינוי מכוון, אז מעדכנים את הציפייה ל-<code>"plan a trip to the north plan a trip to the..."</code>. ההבדל חשוב: לפני שמשנים בדיקה שנכשלה, ודאו שהיא נכשלת <em>בגלל השינוי שרציתם</em>, ולא בגלל משהו ששברתם. <code>commit</code>: "New conversations get a one-line title, cut after a whole word".</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">6</span><span class="en">Migration</span> לשיחות הקיימות</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run alembic revision --rev-id 0008 -m "titles are cut after a whole word"</code></pre>
+</div>
+  <p>הקובץ מגדיר את הטבלאות כפי שהן ב-<span class="en">revision</span> הזה (כמו <code>0002</code>), ו<strong>עותק</strong> של <code>make_title</code>: <span class="en">migration</span> חייב להמשיך לעשות בדיוק את מה שעשה, גם אחרי שהקוד ב-<code>agent\</code> ישתנה. הלב שלו:</p>
+<div class="codebox">
+  <div class="label"><span>migrations\versions\0008_titles_are_cut_after_a_whole_word.py (excerpt)</span></div>
+<pre><code>def retitle(rule_now: Callable[[str], str], rule_after: Callable[[str], str]) -&gt; None:
+    """Give a new title to every conversation whose title still follows rule_now."""
+    if op.get_context().as_sql:  <span class="cm"># --sql writes SQL without a database: there are no rows</span>
+        raise RuntimeError("0008 reads the conversations in Python; run it without --sql.")
+    for conversation_id, title, first_message in with_first_message():
+        <span class="cm"># Any other title is kept: after /reset, the message it came from is gone.</span>
+        if title == rule_now(first_message) and title != rule_after(first_message):
+            op.execute(
+                conversations.update()
+                .where(conversations.c.id == conversation_id)
+                .values(title=rule_after(first_message))
+            )
+
+
+def upgrade() -&gt; None:
+    retitle(old_title, make_title)
+
+
+def downgrade() -&gt; None:
+    retitle(make_title, old_title)  <span class="cm"># old_title(text) is text[:50]: criterion 7</span></code></pre>
+</div>
+  <p>ב-<code>tests\test_migrations.py</code>, בדיקה חדשה: עולים ל-<code>0007</code>, מכניסים שלוש שיחות (כותרת מודבקת, כותרת קצרה, ושיחה אחרי <code>/reset</code>), עולים ל-<code>0008</code>, בודקים, יורדים ל-<code>0007</code>, ובודקים שוב. היא עוברת. אבל:</p>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest tests\test_migrations.py (shortened)</span></div>
+<pre><code>E         {'chat': 'a very long first question a very long first...'} != {'chat': 'a very long first question a very long first quest'}
+FAILED tests/test_migrations.py::test_the_backfill_names_old_conversations[sqlite]
+1 failed, 4 passed, 5 skipped</code></pre>
+</div>
+  <p>הבדיקה של <code>0002</code> מפרק 7 עלתה עד <code>head</code>, ולכן בדקה את כל מה שבא אחריה, כולל <code>0008</code>. היא אמורה לבדוק את <code>0002</code> ו-<code>0003</code> בלבד: <code>upgrade(url, "0003")</code>. זו ההפתעה השנייה, והיא נחתה, כמו הראשונה, במשימה עם הטווח הרחב. <code>commit</code>.</p>
+  <p>ועכשיו על נתונים אמיתיים, על עותק:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>Copy-Item agent.db try.db
+$env:DATABASE_URL = "sqlite:///try.db"
+uv run alembic upgrade head
+uv run python -m sqlite3 try.db "SELECT title FROM conversations ORDER BY created_at"
+uv run alembic downgrade 0007
+uv run python -m sqlite3 try.db "SELECT title FROM conversations ORDER BY created_at"
+Remove-Item Env:DATABASE_URL; Remove-Item try.db</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>INFO  [alembic.runtime.migration] Running upgrade 0007 -&gt; 0008, titles are cut after a whole word
+('Could you explain how database indexes work in...',)
+('Here is my error: Traceback (most recent call...',)
+('hi',)
+INFO  [alembic.runtime.migration] Running downgrade 0008 -&gt; 0007, titles are cut after a whole word
+('Could you explain how database indexes work in Pos',)
+('Here is my error:\nTraceback (most recent call last',)
+('hi',)</code></pre>
+</div>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">7</span>תיעוד, ו-CI על המחשב</h3>
+  <p>מה שהשתנה למשתמשים נכנס ל-<code>CHANGELOG.md</code> תחת <span class="en">Unreleased</span>, בשפה שלהם:</p>
+<div class="codebox">
+  <div class="label"><span>CHANGELOG.md</span></div>
+<pre><code>### Fixed
+- Conversation titles are one line, at most 50 characters, cut after a whole word, with
+  `...` when something was cut (AGENT-42). Migration `0008` gives the same titles to existing
+  conversations; it reads them in Python, so it cannot run with `--sql`.</code></pre>
+</div>
+  <p>ב-README: המשפט על כותרות בסעיף הטרמינל, ושורה על <code>--sql</code> בסעיף ה-<span class="en">migrations</span>. ב-<code>CONTRIBUTING.md</code>: סעיף "Definition of done" עם שורות הטבלה של 15.7, ומשפט על מתי מתחילים ממסמך תכנון. וקובץ חדש, <code>.github\pull_request_template.md</code>, עם הכותרות של תיאור טוב ורשימת הסימון. <code>commit</code>, ואז הבדיקות של CI, עם <code>db</code> של compose למעלה ומסד <code>agent_test</code> (README, "Migrations"):</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run --locked python scripts/ci_local.py --job checks</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>tests\test_migrations.py ..........                                      [ 60%]
+...
+tests\test_titles.py ................                                    [ 93%]
+============================ 160 passed in 24.17s =============================
+    ok (28.1s)
+All steps passed.</code></pre>
+</div>
+  <p>עשר בדיקות <span class="en">migrations</span>, חמש על SQLite וחמש על Postgres: ה-<span class="en">migration</span> רץ על שני בסיסי הנתונים, כמו ב-CI.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">8</span><span class="en">Self-review</span>, ותיאור</h3>
+  <p>לפני שמבקשים ממישהו לקרוא, קוראים בעצמכם, כמו <span class="en">reviewer</span>: <code>git diff main...</code>, קובץ אחר קובץ, מול רשימת ה-<span class="en">definition of done</span>. בקריאה הזו מצאתם עוד בדיקה מפרק 14 שעולה עד <code>head</code> (הבעלים מ-<code>0007</code>); היא עוד לא נשברה, אבל תישבר ב-<span class="en">migration</span> הבא. <code>upgrade(url, "0007")</code>, ו-<code>commit</code> נפרד. ובדקתם טענה אחת מהמסמך בפועל: קוד 0.14.0 (<code>git worktree add ..\old v0.14.0</code>) על בסיס נתונים ב-<code>0008</code> עולה ועובד, עם שורת לוג אחת:</p>
+<div class="codebox output">
+  <div class="label"><span>agent.log of 0.14.0, on the migrated database (shortened)</span></div>
+<pre><code>{"level": "WARNING", "logger": "agent.db", "message": "database is at 0008, newer than this code (0007)"}</code></pre>
+</div>
+  <p>ואז התיאור, לפי התבנית החדשה (המלא ב-<code>examples\team\pr-readable-titles.md</code>):</p>
+<div class="codebox">
+  <div class="label"><span>pull request description (excerpt)</span></div>
+<pre><code>## What
+Conversation titles are one line, at most 50 characters, cut after a whole word, with `...`
+when something was cut. Migration `0008` gives existing conversations the same titles.
+
+Before: `Here is my error:\nTraceback (most recent call last`
+After:  `Here is my error: Traceback (most recent call...`
+
+## Why
+Ticket: AGENT-42 (Dana's sidebar shows titles cut mid-word, with line breaks).
+Design: `docs/design/2026-11-19-readable-titles.md` (why the server, why a migration).
+
+## Definition of done
+- [x] Acceptance criteria checked: 1 to 7 by tests, 8 by `tests/test_api.py` (unchanged, green)
+- [x] Migration works with the previous version (no column changes; 0.14.0 runs on it), and has a downgrade
+- [x] Settings, logs, metrics, security: nothing new
+
+## Notes for the reviewer
+- The migration has its own copy of `make_title` on purpose (see its docstring).
+- Two old migration tests upgraded to `head`; they now stop at their own revision.</code></pre>
+</div>
+  <p>"<span class="en">Notes for the reviewer</span>" הוא המקום לכל מה שייראה מוזר בקריאה ראשונה. עדיף שתסבירו מראש מאשר שמישהו יבזבז רבע שעה כדי לשאול.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">9</span><span class="en">Push</span>, <span class="en">merge</span>, ובדיקה אחרי</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git fetch
+git rebase origin/main
+git push -u origin fix/readable-titles
+git switch main
+git merge --ff-only fix/readable-titles
+git push
+git branch -d fix/readable-titles
+git push origin --delete fix/readable-titles</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Current branch fix/readable-titles is up to date.
+ * [new branch]      fix/readable-titles -&gt; fix/readable-titles
+Updating f7578e3..9d11078
+Fast-forward
+ 12 files changed, 415 insertions(+), 9 deletions(-)
+   f7578e3..9d11078  main -&gt; main
+Deleted branch fix/readable-titles (was 9d11078).
+ - [deleted]         fix/readable-titles</code></pre>
+</div>
+  <p>ב-GitHub, בין ה-<code>push</code> ל-<span class="en">merge</span> פותחים <span class="en">pull request</span>, מחכים ל-CI ולאישור, ולוחצים <span class="en">Merge</span> (פרק 2 ופרק 9). <span class="en">Merge</span> הוא לא הסוף: עצרו את השרת, גבו את <code>agent.db</code>, הריצו <code>uv run alembic upgrade head</code>, הפעילו שוב, ובדקו את מה שדנה תראה:</p>
+<div class="codebox output">
+  <div class="label"><span>GET /conversations, after the migration</span></div>
+<pre><code>[{"conversation_id":"56df9a9c14de4cf3a5915f95eccdffc7","title":"hi"},
+ {"conversation_id":"f79df902cd51464bac997ca3e8147031","title":"Here is my error: Traceback (most recent call..."},
+ {"conversation_id":"e08684c6b85c4237ac04a9a5ab6ede80","title":"Could you explain how database indexes work in..."}]</code></pre>
+</div>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">10</span>מה היה לעומת מה שהערכתם, וגרסה</h3>
+  <p>הוסיפו להערכה במסמך עמודה, "<span class="en">What happened</span>", ואת השעות שלכם. במקרה הזה: ה-<span class="en">spike</span> מצא את <code>--sql</code>; ה-<span class="en">migration</span> שבר בדיקה ישנה; התיעוד לקח יותר כי <span class="en">definition of done</span> ותבנית עוד לא היו. שתי ההפתעות נחתו במשימות עם הטווח הרחב, וזו בדיוק הסיבה שהיה להן טווח רחב. לא מעריכים כדי לצדוק, אלא כדי ללמוד לאן הזמן הולך. אחרי כמה כרטיסים תראו את הדפוס שלכם.</p>
+  <p>ואז גרסה, לפי <code>CONTRIBUTING.md</code>: ענף <code>release/0.15.0</code>, כותרת <code>## [0.15.0] - 2026-11-19</code> מתחת ל-<span class="en">Unreleased</span>, <code>version = "0.15.0"</code> ב-<code>pyproject.toml</code>, <code>uv lock</code>, <code>IMAGE_TAG=0.15.0</code> בשני קובצי <code>deploy\*.env</code>, <span class="en">merge</span>, ו-<code>git tag -a v0.15.0 -m "my-agent 0.15.0"</code>. ה-<span class="en">deploy</span> ל-<span class="en">staging</span> ואז ל-<span class="en">prod</span> הוא בדיוק של פרק 10. בסוף, כותבים בכרטיס מה נעשה ובאיזו גרסה, וסוגרים אותו.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.9</span><span class="en">Code review</span> משני הצדדים</h2>
+
+<p>פרק 2 הראה את מחזור החיים של <span class="en">pull request</span>. עכשיו, איך עושים אותו טוב.</p>
+
+<p><strong>כשאתם כותבים.</strong> <span class="en">Pull request</span> קטן, על נושא אחד. תיאור שעונה על מה, למה (קישור לכרטיס), איך בודקים, ומה מוזר בכוונה. <span class="en">Commits</span> שמספרים סיפור, כך שאפשר לקרוא אותם אחד אחרי השני. ושינויים שלא קשורים (סידור קוד, שינוי שם) ב-<span class="en">pull request</span> נפרד: בתוך שינוי אמיתי הם מסתירים אותו.</p>
+
+<p><strong>כשאתם קוראים.</strong> קודם התמונה: האם זה פותר את הכרטיס, והאם הגישה סבירה? רק אחר כך שורות. הריצו את הקוד לפי "<span class="en">How to test</span>". סמנו כל הערה לפי משקלה, כדי שהכותב ידע מה חוסם:</p>
+<div class="table-wrap">
+<table>
+  <tr><th>סימון</th><th>משמעות</th><th>דוגמה</th></tr>
+  <tr><td><strong>must</strong></td><td>לא ממזגים בלי זה: באג, סיכון, תנאי קבלה שלא מתקיים</td><td>"must: עם <code>CHAT_TITLE_LENGTH=300</code> Postgres זורק <code>value too long for type character varying(200)</code>. צריך גבול עליון, או עמודה רחבה יותר."</td></tr>
+  <tr><td><strong>suggestion</strong></td><td>הייתי עושה אחרת; תחליטו אתם</td><td>"suggestion: אולי לקרוא את זה דרך <code>config.py</code>, כמו שאר ההגדרות?"</td></tr>
+  <tr><td><strong>question</strong></td><td>לא הבנתי; אולי צריך הערה בקוד</td><td>"question: למה העותק ב-<span class="en">migration</span> ולא <code>import</code>?"</td></tr>
+  <tr><td><strong>nit</strong></td><td>פרט קטן, לא חוסם</td><td>"nit: <code>space</code> שם קצת עמום, אולי <code>last_space</code>"</td></tr>
+</table>
+</div>
+<p>כתבו על הקוד, לא על האדם, והסבירו למה: "השורה הזו קוראת את המשתנה בזמן <code>import</code>, אז טעות בו מפילה את השרת לפני הלוג" עדיף על "זה לא נכון". ואמרו גם מה טוב. <span class="en">Review</span> שכולו הערות שליליות מלמד את הכותב להסתיר.</p>
+
+<p><strong>כשאתם מקבלים.</strong> עונים על כל הערה: בתיקון ("תוקן ב-<code>abc123</code>"), או בהסבר למה לא. <span class="en">Commit</span> חדש לכל סבב תיקונים, כדי שהקורא יראה רק מה השתנה מאז. אל תסגרו בעצמכם שיחה שמישהו אחר פתח, אלא אם זה הנוהג בצוות. ואם ויכוח ממשיך יותר משני סבבים בכתב, דברו חמש דקות, וכתבו את המסקנה בשיחה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.10</span>תיעוד שנשאר חי</h2>
+
+<p>תיעוד שאף אחד לא מעדכן גרוע מאין תיעוד: הוא מטעה בביטחון. שלושה כללים שומרים עליו חי. <strong>קרוב לקוד:</strong> קובץ ב-<code>docs\</code> שמשתנה באותו <span class="en">pull request</span> כמו הקוד נשאר נכון; דף בוויקי רחוק נשכח. <strong>חלק מ"גמור":</strong> שורת התיעוד ב-<span class="en">definition of done</span> היא מה שמכריח לעדכן. <strong>בעל מקום אחד:</strong> כל עובדה כתובה פעם אחת, וכל השאר מקשרים אליה.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מסמך</th><th>למי</th><th>אצלכם</th></tr>
+  <tr><td>README</td><td>מי שמגיע לפרויקט: מה זה, איך מריצים, איך בודקים</td><td><code>README.md</code></td></tr>
+  <tr><td><span class="en">Docstrings</span> והערות</td><td>מי שקורא את הקוד: <em>למה</em>, כשהקוד לבד לא אומר</td><td>"A copy on purpose" ב-<code>0008</code></td></tr>
+  <tr><td>ארכיטקטורה</td><td>מי שמשנה משהו גדול: מי מדבר עם מי, מי מחזיק איזה מידע</td><td><code>docs\architecture.md</code></td></tr>
+  <tr><td>תכנון ו-<span class="en">ADR</span></td><td>מי ששואל "למה ככה?"</td><td><code>docs\design\</code>, <code>docs\adr\</code></td></tr>
+  <tr><td><span class="en">Runbook</span></td><td>מי שהתעורר בלילה בגלל התראה</td><td><code>docs\runbook.md</code></td></tr>
+  <tr><td><span class="en">Changelog</span></td><td>מי שמשתמש בכם: מה השתנה בכל גרסה</td><td><code>CHANGELOG.md</code></td></tr>
+</table>
+</div>
+
+<p>ומה <strong>לא</strong> מתעדים: מה שהקוד כבר אומר (<code># add 1 to i</code>), היסטוריה ש-git כבר זוכר ("פעם הפונקציה הזו עשתה..."), תוכניות שאף אחד לא התחייב אליהן, וכל דבר שאתם לא מוכנים לעדכן. ומה שנכון רק לרגע (מי בחופש, מה שבור היום) הולך לצ'אט, לא לקובץ.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.11</span>לבקש עזרה, לעדכן, ולהתמצא בקוד זר</h2>
+
+<p><strong>מתי לשאול.</strong> אחרי שניסיתם באמת, ולפני שאיבדתם יום. כלל אצבע לחודשים הראשונים: אם אתם תקועים על אותו דבר יותר משעה בלי התקדמות, שאלו. השאלה שלכם עולה לאחר חמש דקות; היום שלכם עולה לצוות יום.</p>
+<p><strong>איך לשאול.</strong> שאלה טובה עומדת לבד: מה ניסיתם להשיג, מה עשיתם (פקודה מדויקת), מה קרה (פלט מדויק, לא "זה לא עובד"), מה ציפיתם, ומה כבר בדקתם. לעיתים קרובות, כתיבת השאלה כך פותרת אותה לבד. שאלו בערוץ של הצוות, לא בהודעה פרטית: גם אחרים ילמדו מהתשובה, ויש יותר מאדם אחד שיכול לענות.</p>
+<p><strong>עדכון סטטוס.</strong> ב-<span class="en">standup</span> (פגישה יומית קצרה), או בכתב, שלוש שורות: מה נגמר מאז הפעם הקודמת, מה הלאה, ומה חוסם. והחשוב מכולם: שינוי בהערכה, ברגע שאתם יודעים עליו. עדכון כתוב טוב נקרא בלי הקשר:</p>
+<div class="codebox">
+  <div class="label"><span>a written status update</span></div>
+<pre><code>AGENT-42 (readable titles): code and tests done; migration 0008 works on SQLite and Postgres.
+Found: the migration cannot run with --sql (it reads rows in Python). Not a blocker; README says so.
+Next: docs and the PR, today. Estimate unchanged: 5 to 8 hours, now at about 5.
+Blocked: nothing.</code></pre>
+</div>
+<p><strong>להתמצא בקוד שאינו שלכם.</strong> ביום הראשון בצוות אתם קוראים קוד שלא כתבתם, וזה המצב הרגיל, לא חריג. סדר שעובד: README ו-<code>docs\</code>; להריץ את הפרויקט ואת הבדיקות (אם זה לא הולך, זה הכרטיס הראשון שלכם, ותיקון של ה-README הוא <span class="en">pull request</span> ראשון מצוין); לעקוב אחרי בקשה אחת מהכניסה עד בסיס הנתונים; ולשאול את git:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git log --oneline -3 -- agent/conversations.py           <span class="cm"># what changed here lately, and why</span>
+git log -S "make_title" --oneline                        <span class="cm"># every commit that added or removed this text</span>
+git blame -L 44,44 agent/conversations.py                <span class="cm"># who wrote this line, in which commit</span>
+Select-String -Path agent\*.py -Pattern "make_title\("    <span class="cm"># where it is called</span></code></pre>
+</div>
+<p>ההודעות של ה-<span class="en">commits</span> וקישורי הכרטיסים בהן הם התיעוד הכי מדויק שיש: הם נכתבו באותו רגע שבו הקוד השתנה. מכאן גם למה כדאי לכתוב אותם טוב.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.12</span>תרגילים</h2>
+
+<p>התרגילים בונים זה על זה: כרטיס חדש (מחיקת שיחות ישנות, הפער השביעי ב-<code>docs\security.md</code>), באג אחרי <span class="en">merge</span>, ו-<span class="en">review</span>. שינויי קוד וקבצים על ענף, עם שורה תחת <span class="en">Unreleased</span> כשמשהו משתנה למשתמשים. פתרונות <a href="solutions/chapter-15.html">בדף נפרד</a>.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · מכרטיס עמום לכרטיס טוב</h3><span class="level">מודרך</span></div>
+  <p>כרטיס חדש: <strong><span class="en">AGENT-43: "We should delete old conversations."</span></strong> מקור: <code>docs\security.md</code>, פער 7. כתבו את השאלות שהייתם שולחים, בהודעה אחת וממוספרות (לפחות חמש). אחר כך ענו עליהן בעצמכם, בהחלטות סבירות, וכתבו את הכרטיס ב-<code>examples\team\ticket-AGENT-43.md</code>: הקשר, תנאי קבלה שכל אחד מהם כן או לא, ומה לא נכלל.</p>
+  <label class="answer-label" for="n-ex1">אילו שאלות שאלתם? איזו מהן שינתה הכי הרבה את תנאי הקבלה?</label>
+  <textarea class="answer" id="n-ex1" data-id="c15-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c15-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · הערכה, ועדכון כשהיא לא מחזיקה</h3><span class="level">מודרך</span></div>
+  <p>פרקו את AGENT-43 למשימות ול-<span class="en">pull requests</span> (כל אחד עובד לבד ולא שובר את <code>main</code>), ותנו לכל משימה טווח בשעות. סמנו את המשימה הכי לא ידועה, ותכננו לה <span class="en">spike</span> של שעה: מה השאלה שהוא עונה עליה? אחר כך הניחו שה-<span class="en">spike</span> גילה ש-<code>created_at</code> שמור כזמן UTC בלי אזור זמן, ושההשוואה ל"לפני 90 יום" צריכה לטפל בזה. כתבו את עדכון הסטטוס שהייתם שולחים, בארבע שורות.</p>
+  <label class="answer-label" for="n-ex2">הטווח הכולל, המשימה שמתחילים בה, ועדכון הסטטוס:</label>
+  <textarea class="answer" id="n-ex2" data-id="c15-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c15-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · ה-<span class="en">ADR</span> הראשון</h3><span class="level mid">בינוני</span></div>
+  <p>כתבו את <code>docs\adr\0001-migrations-run-as-a-separate-step.md</code>: ההחלטה מפרק 7 שה-<span class="en">migrations</span> רצים כצעד נפרד, והאפליקציה רק בודקת את בסיס הנתונים כשהיא עולה. ארבעה חלקים: הקשר, החלטה, השלכות (גם השליליות), וחלופות שנפסלו. חפשו בקוד איפה ההחלטה הזו חיה (<code>check_schema</code>, <code>compose.yaml</code>, <code>scripts\deploy.py</code>), והוסיפו את <code>adr/</code> לתיאור של <code>docs\</code> ב-README.</p>
+  <label class="answer-label" for="n-ex3">איזו השלכה של ההחלטה הייתם רוצים שמצטרף חדש יידע ביום הראשון? ואיזו השלכה גיליתם רק בפרק הזה?</label>
+  <textarea class="answer" id="n-ex3" data-id="c15-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c15-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · באג אחרי <span class="en">merge</span></h3><span class="level mid">בינוני</span></div>
+  <p>יום אחרי השחרור, דנה שולחת צילום: שיחה שנפתחה בהודעה הזו (הקלידו אותה עם <code>`n</code>) קיבלה כותרת שנגמרת ב-<code>2....</code>, ארבע נקודות:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python scripts\ask.py "Please   review my plan:`n1. Read the ticket`n2. Ask questions`n3. Write the design doc"</code></pre>
+</div>
+  <p>שחזרו. כתבו כרטיס של שלוש שורות (AGENT-44): מה קורה, מה צריך לקרות, ומה עם כותרות שכבר נשמרו כך. על ענף <code>fix/</code>: מקרה חדש ב-<code>tests\test_titles.py</code> שנכשל, תיקון ב-<code>make_title</code> שעובר, שורה ב-<code>CHANGELOG.md</code>, ו-<span class="en">merge</span>. האם <code>0008</code> צריך להשתנות?</p>
+  <label class="answer-label" for="n-ex4">מה היה התיקון? מה החלטתם לגבי כותרות קיימות, ולמה לא נוגעים ב-<code>0008</code>? איזה תנאי קבלה היה חסר ב-AGENT-42?</label>
+  <textarea class="answer" id="n-ex4" data-id="c15-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c15-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · <span class="en">Review</span> משני הצדדים</h3><span class="level mid">בינוני</span></div>
+  <p>חבר צוות פותח <span class="en">pull request</span> בשם "make title length configurable", בלי תיאור. כל השינוי:</p>
+<div class="codebox">
+  <div class="label"><span>git show, the teammate's commit (shortened)</span></div>
+<pre><code>@@ -5,6 +5,7 @@ Every message is saved in the database, so conversations survive a restart.
+ import logging
+<span class="hl">+import os</span>
+ import time
+@@ -18,7 +19,7 @@ from agent.llm import ChatClient
+ log = logging.getLogger(__name__)
+<span class="hl">-TITLE_LENGTH = 50  # a title is the start of the first message, at most this long</span>
+<span class="hl">+TITLE_LENGTH = int(os.getenv("CHAT_TITLE_LENGTH", "50"))  # Dana wants longer titles</span>
+ CUT = "..."  # ends a title that was cut; ASCII, so every terminal and file can show it</code></pre>
+</div>
+  <p>הבדיקות ו-ruff עוברים. צרו את השינוי על ענף זמני, ונסו אותו עם <code>CHAT_TITLE_LENGTH</code> של <code>2</code>, <code>fifty</code> ו-<code>300</code> (האחרון על Postgres). כתבו <span class="en">review</span>: הערה כללית, והערות מסומנות <strong>must</strong>, <strong>suggestion</strong>, <strong>question</strong> או <strong>nit</strong>. ואז החליפו צד: על ה-<span class="en">pull request</span> שלכם מ-15.8 מישהו כתב "suggestion: why not the single character … instead of three dots? It looks nicer." כתבו תשובה. בסוף, מחקו את הענף הזמני.</p>
+  <label class="answer-label" for="n-ex5">ההערות שכתבתם, והתשובה להערה על ה-<span class="en">pull request</span> שלכם:</label>
+  <textarea class="answer" id="n-ex5" data-id="c15-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c15-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · מסמך תכנון למחיקת שיחות</h3><span class="level open">פתוח</span></div>
+  <p>כתבו את <code>docs\design\2026-11-20-conversation-retention.md</code> ל-AGENT-43, לפי התבנית של 15.5, במצב <code>proposed</code>. כדי לכתוב אותו תצטרכו להתמצא בקוד: איך מוחקים היום שיחה ואת ההערות שלה (פרק 12), מה קורה לשיחה שנשארה <span class="en">archived</span> אחרי <span class="en">saga</span> שנכשלה, איפה <code>created_at</code> ובאיזה אזור זמן, ומה יכול להריץ משהו פעם בלילה. לפחות שלוש אפשרויות (למשל: פקודה שרצה מתזמן, DAG של Airflow מפרק 12, לולאה בתוך ה-<code>api</code>), החלטה, סיכונים (מה אם השאילתה מוחקת את השיחות הלא נכונות?), פירוק ל-<span class="en">pull requests</span>, והערכה. את הקוד עצמו אל תכתבו: זה הכרטיס של מי שיקבל את המסמך, אולי אתם.</p>
+  <label class="answer-label" for="n-ex6">איזו אפשרות בחרתם, ואיזה סיכון הכי הדאיג אתכם? מה עשיתם כדי שהשחרור הראשון לא ימחק כלום בטעות?</label>
+  <textarea class="answer" id="n-ex6" data-id="c15-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c15-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.13</span>בדקו את עצמכם</h2>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c15-chk1"><span>אני יודע/ת להסביר מה זה <span class="en">backlog</span>, ומה ההבדל בין <span class="en">sprint</span> ל-<span class="en">kanban</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c15-chk2"><span>אני יודע/ת לכתוב כרטיס עם הקשר, תנאי קבלה שאפשר לבדוק, ומה לא נכלל.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c15-chk3"><span>אני יודע/ת אילו שאלות לשלוח על כרטיס עמום, ואיך לשלוח אותן.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c15-chk4"><span>אני יודע/ת מתי צריך מסמך תכנון, מה יש בו, ומה ההבדל בינו ל-<span class="en">ADR</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c15-chk5"><span>אני יודע/ת להעריך בטווח, לפרק ל-<span class="en">pull requests</span> קטנים, ולהסביר למה מתחילים מהלא-ידוע.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c15-chk6"><span>אני יודע/ת למנות את שורות ה-<span class="en">definition of done</span>, ומאיזה פרק כל אחת.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c15-chk7"><span>אני יודע/ת לכתוב תיאור של <span class="en">pull request</span>, ולסמן הערת <span class="en">review</span> לפי משקלה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c15-chk8"><span>אני יודע/ת לכתוב עדכון סטטוס של ארבע שורות, ולהודיע על איחור ברגע שהוא ידוע.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c15-chk9"><span>אני יודע/ת למה <span class="en">migration</span> מחזיק עותק של הלוגיקה שלו, ולמה בדיקה של <span class="en">migration</span> ישן לא עולה עד <code>head</code>.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.14</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td><code>RuntimeError: 0008 reads the conversations in Python; run it without --sql.</code></td><td><code>--sql</code> כותב SQL בלי בסיס נתונים, ו-<code>0008</code> צריך לקרוא שורות</td><td>הריצו אותו רגיל, על עותק קודם (15.8, צעד 6)</td></tr>
+  <tr><td>בדיקה של <span class="en">migration</span> ישן נכשלת אחרי שהוספתם <span class="en">migration</span> חדש</td><td>היא עולה עד <code>head</code>, ולכן בודקת גם את החדש</td><td>עצרו אותה ב-<span class="en">revision</span> שהיא בודקת: <code>upgrade(url, "0003")</code></td></tr>
+  <tr><td><code>ImportError: cannot import name 'make_title'</code></td><td>הבדיקה נכתבה לפני הקוד</td><td>זה הצעד הראשון הנכון; עכשיו כתבו את הפונקציה</td></tr>
+  <tr><td><code>fatal: Not possible to fast-forward, aborting.</code></td><td><code>main</code> התקדם מאז שיצאתם ממנו</td><td>על הענף: <code>git fetch</code>, <code>git rebase origin/main</code>, הבדיקות שוב, ואז <span class="en">merge</span></td></tr>
+  <tr><td><code>error: the branch 'fix/x' is not fully merged</code></td><td>הענף לא אוחד ל-<code>main</code> המקומי (או אוחד ב-GitHub ב-<span class="en">squash</span>)</td><td>בדקו ב-<code>git log main</code>; אם השינוי שם, <code>git branch -D</code></td></tr>
+  <tr><td>GitHub לא ממלא את התיאור מהתבנית</td><td>הקובץ לא ב-<code>.github\pull_request_template.md</code> בענף ברירת המחדל</td><td>מזגו אותו ל-<code>main</code> קודם; הוא חל על <span class="en">pull requests</span> חדשים</td></tr>
+  <tr><td><span class="en">Review</span> שנמשך שבוע</td><td><span class="en">Pull request</span> גדול, או בלי תיאור, ואף אחד לא מוצא חצי שעה</td><td>פרקו; כתבו "<span class="en">How to test</span>"; בקשו <span class="en">reviewer</span> בשם</td></tr>
+  <tr><td>ההערכה מתפספסת שוב ושוב באותו מקום</td><td>הלא-ידוע נשאר לסוף</td><td><span class="en">Spike</span> ראשון, הערכה מחדש אחריו, ועדכון ברגע שהטווח זז</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.15</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>backlog</dt><dd>הרשימה הממוינת של כל העבודה שמישהו רוצה שתיעשה.</dd>
+  <dt>ticket / issue</dt><dd>יחידת עבודה אחת עם מזהה, תיאור, אחראי ומצב.</dd>
+  <dt>acceptance criteria</dt><dd>תנאי קבלה: מה צריך להיות נכון כשהכרטיס גמור; כל אחד כן או לא.</dd>
+  <dt>out of scope</dt><dd>מה שקרוב לכרטיס ולא נעשה בו, בכוונה.</dd>
+  <dt>sprint</dt><dd>פרק זמן קבוע (לרוב שבועיים) שהצוות מתחייב בו לרשימת כרטיסים.</dd>
+  <dt>kanban</dt><dd>לוח עמודות שבו מושכים כרטיס כשמתפנים, עם מגבלה על עבודה פתוחה.</dd>
+  <dt>WIP limit</dt><dd>מספר מרבי של כרטיסים בעבודה בבת אחת.</dd>
+  <dt>design doc</dt><dd>מסמך קצר לפני שינוי: בעיה, מטרות, אפשרויות, החלטה, סיכונים.</dd>
+  <dt>non-goals</dt><dd>מה שהשינוי לא יעשה, כתוב במפורש.</dd>
+  <dt>ADR</dt><dd>תיעוד ממוספר של החלטה אחת: הקשר, החלטה, השלכות, חלופות.</dd>
+  <dt>estimate</dt><dd>הערכת זמן; טווח, לא מספר.</dd>
+  <dt>spike</dt><dd>ניסוי קצר ומוגבל בזמן שמטרתו תשובה, לא קוד.</dd>
+  <dt>story points</dt><dd>יחידת גודל יחסית להערכה, במקום שעות.</dd>
+  <dt>definition of done</dt><dd>הרשימה הקבועה שכל שינוי עובר לפני שהוא נחשב גמור.</dd>
+  <dt>self-review</dt><dd>לקרוא את ה-diff שלכם כמו reviewer, לפני שמבקשים מאחר.</dd>
+  <dt>nit</dt><dd>הערת review על פרט קטן שאינו חוסם.</dd>
+  <dt>standup</dt><dd>עדכון יומי קצר: מה נגמר, מה הלאה, מה חוסם.</dd>
+  <dt>onboarding</dt><dd>הכניסה של אדם חדש לצוות ולקוד.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">15.16</span>מה הלאה</h2>
+
+<p>כאן נגמר החלק של החוברת על מה שמסביב לקוד. יש לכם מערכת שלמה, ודרך לעבוד עליה עם אחרים. אבל הסתכלו על מה שהסוכן עצמו יודע לעשות: הוא מקבל הודעה ומחזיר טקסט. הוא לא יכול לבדוק משהו, לחפש בהערות של המשתמש, או לפעול בעולם. כל "פעולה" במערכת היא פקודה שאדם הקליד (<code>/note</code>, <code>/notes</code>) או קוד שכתבתם מראש.</p>
+
+<p>החלק האחרון של החוברת הופך את הצ'אט שרק מדבר למשהו שפועל: מודל שמחליט בעצמו לקרוא לכלי, רואה את התוצאה, וממשיך. מה ההבדל בין קריאה אחת למודל, <span class="en">workflow</span> ו-<span class="en">agent</span>, איך כותבים את הלולאה הזו ביד עם כלי אחד, ומתי בכלל לא צריך סוכן: <strong>פרק 16: מה זה <span class="en">AI agent</span></strong>.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-15</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים: גרסה 0.15.0, <code>make_title</code> ו-<code>0008</code>, התיקון מתרגיל 4 תחת <span class="en">Unreleased</span>, <code>docs\design\</code> (שני מסמכים), <code>docs\adr\0001...</code>, <code>examples\team\</code> (שני כרטיסים ותיאור <span class="en">pull request</span>), <span class="en">definition of done</span> ב-<code>CONTRIBUTING.md</code> ותבנית ב-<code>.github\</code>. עם <code>db</code> של compose למעלה, <code>ci_local.py</code> מריץ 162 בדיקות בצ'אט ו-12 בשירות ההערות.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-15.html">פתרונות לפרק 15</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

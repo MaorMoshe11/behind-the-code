@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 18 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-18.html">→ חזרה לפרק 18</a>
+    <span>פתרונות לפרק 18</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 18 · <span class="en">Tools</span> ו-<span class="en">integrations</span></h1>
+  <p class="lead">כל הפלטים כאן אמיתיים, מריצה במצב <span class="en">mock</span>. מספרי הטוקנים הם הספירה המומצאת של ה-<span class="en">mock</span> (תו לכל ארבעה): נכונים להשוואה, לא כמחיר.</p>
+</header>
+
+<h2><span class="sec">1</span>כמה עולה כלי שלא נקרא</h2>
+<div class="codebox output">
+  <div class="label"><span>"hello" in a new conversation, without and with CHAT_WRITE_TOOLS=1 (Format-Table message, input_tokens)</span></div>
+<pre><code>message                input_tokens
+-------                ------------
+agent step 1: end_turn          154
+agent step 1: end_turn          388</code></pre>
+</div>
+<p>אותה הודעה, אותה תשובה, אף כלי לא נקרא. ההבדל, 234 טוקנים, הוא ההגדרות של <code>add_note</code> ו-<code>delete_note</code>: כ-117 לכל כלי, ו-<code>list_notes</code> לבדו הוא רוב ה-154. הסכום הזה נשלח <em>בכל</em> קריאה למודל, ובשאלה עם כלי פעמיים לפחות. עם מודל אמיתי המספרים אחרים (וה-<span class="en">API</span> מוסיף פרומפט מערכת משלו לכלים), אבל הצורה זהה: כלי עולה גם כשלא משתמשים בו. "כלי לכל <span class="en">endpoint</span>" היה מכפיל את זה, ומוסיף למודל בחירות שקשה להבחין ביניהן. לכן שלושה כלים מעל חמישה <span class="en">endpoints</span>, וכותבים רק כשצריך. בפרק 19 תראו איך <span class="en">prompt caching</span> מוזיל את החלק הזה, שחוזר בכל קריאה בלי שינוי.</p>
+
+<h2><span class="sec">2</span>לשבור את הכלים</h2>
+<div class="codebox output">
+  <div class="label"><span>the chat with CHAT_WRITE_TOOLS=1, and the agent.tools lines of agent.log</span></div>
+<pre><code>you&gt; [mock:call add_note {"text": ""}]
+agent&gt; [mock reply, turn 1] I tried, but the tool failed: Invalid input for
+add_note: text: String should have at least 1 character. Fix the input and call
+add_note again.
+
+you&gt; [mock:call delete_note {"note": "the dentist one"}]
+agent&gt; [mock reply, turn 2] I tried, but the tool failed: Invalid input for
+delete_note: note: String should match pattern '^[0-9a-f]{8}$'. Fix the input
+and call delete_note again.
+
+you&gt; [mock:call list_notes {"search": "x", "limit": 5}]
+agent&gt; [mock reply, turn 3] I tried, but the tool failed: Invalid input for
+list_notes: limit: Extra inputs are not permitted. Fix the input and call
+list_notes again.
+
+you&gt; [mock:call list_notes {}] [mock:call add_note {"text": "eggs"}]
+agent&gt; [mock reply, turn 4] I looked it up. The tool said:
+No notes found.
+I looked it up. The tool said:
+Saved: [8f621b81] eggs
+
+level   message                 writes
+WARNING tool add_note: error      True
+WARNING tool delete_note: error   True
+WARNING tool list_notes: error   False
+INFO    tool list_notes: ok      False
+INFO    tool add_note: ok         True</code></pre>
+</div>
+<p>שלושת הראשונים נדחו בבדיקה של Pydantic, לפני כל בקשה: בחלון של שירות ההערות לא הופיעה שורה. ההודעה הכי פחות מועילה היא של <code>pattern</code>: היא אומרת מה לא תקין, לא איפה מוצאים <span class="en">ref</span>. אפשר לשפר אותה בלי לגעת בבדיקה, דרך התיאור של השדה ("<span class="en">the 8 characters in brackets that list_notes shows</span>"), שהמודל רואה ממילא. <code>limit</code> נדחה כי הוא לא חלק מהכלי: הדף קבוע בקוד (20).</p>
+<p>בהודעה עם שתי הקריאות, שתיהן רצו באותו צעד, לפי הסדר, והתוצאות חזרו בהודעה אחת. <code>list_notes</code> רץ <em>לפני</em> <code>add_note</code>, ולכן לא ראה את "eggs". מודל שמבקש שני כלים באותו צעד מניח שהם בלתי תלויים; כשהם תלויים, הוא אמור לבקש אותם בשני צעדים. ועם שירות ההערות למטה:</p>
+<div class="codebox output">
+  <div class="label"><span>"Remember that I need eggs." with the notes service stopped (agent.log, shortened)</span></div>
+<pre><code>agent&gt; [mock reply, turn 1] I tried, but the tool failed: The notes service is
+unavailable right now. Tell the user; do not retry now. The note was not saved.
+
+WARNING agent.notes  notes: POST /v1/notes: ConnectTimeout('timed out'); retry in 0.15 s
+WARNING agent.notes  notes: POST /v1/notes: ConnectTimeout('timed out'); retry in 0.07 s
+WARNING agent.tools  tool add_note: error</code></pre>
+</div>
+<p>ההודעה הזו היא היחידה שאומרת גם מה <em>לא</em> לעשות ("<span class="en">do not retry now</span>") ומה מצב הנתונים ("<span class="en">The note was not saved</span>"), כדי שהמודל לא יבטיח למשתמש משהו שלא קרה.</p>
+
+<h2><span class="sec">3</span>כלי חדש, בלי לגעת בלולאה</h2>
+<div class="codebox">
+  <div class="label"><span>agent\clock.py</span></div>
+<pre><code>Zone = Literal["UTC", "Asia/Jerusalem", "Europe/London", "America/New_York"]
+
+
+class CurrentTimeInput(ToolInput):
+    timezone: Zone = Field("UTC", description="Where the user is. Leave it out for UTC.")
+
+
+def make_current_time(now: Callable[[], datetime] = lambda: datetime.now(UTC)) -&gt; Tool:
+    """The tool. A test passes its own `now`, so the answer is always the same."""
+
+    def run(context: ToolContext, args: CurrentTimeInput) -&gt; str:
+        local = now().astimezone(ZoneInfo(args.timezone))
+        return local.strftime(f"%A %Y-%m-%d %H:%M ({args.timezone})")
+
+    return Tool(
+        name="current_time",
+        description=(
+            "Today's date, the day of the week and the time. Call it when the answer depends "
+            "on today: 'what day is it', 'how long until Monday', 'is it late in London'."
+        ),
+        input_model=CurrentTimeInput,
+        run=run,
+    )</code></pre>
+</div>
+<p>ועוד שתי שורות: <code>registry.register(make_current_time())</code> ב-<code>build_registry()</code>, ובמוק <code>TIME = re.compile(r"\bwhat (?:time|day|date)\b", re.IGNORECASE)</code> עם תנאי ב-<code>wanted_calls</code>. ב-<code>tests\test_clock.py</code> שלוש בדיקות: "<span class="en">What day is it?</span>" עם שעון קבוע (<code>Thursday 2026-11-19 21:30 (UTC)</code>), אזור מהרשימה (<code>Asia/Jerusalem</code> נותן 23:30) ואזור שלא ממנה (<code>Mars/Base</code>, שגיאה עם הרשימה), ושהכלי רשום וקורא בלבד.</p>
+<p>ארבעה קבצים: <code>clock.py</code> ו-<code>test_clock.py</code> חדשים, שורה ב-<code>notes_tools.py</code> ושתיים ב-<code>llm.py</code>. ב-<code>loop.py</code>, ב-<code>trace.py</code> וב-<code>mcp_server.py</code>: אפס. ושתי בדיקות קיימות נכשלו:</p>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest -q, after registering the tool (shortened)</span></div>
+<pre><code>FAILED tests/test_tools.py::test_writing_tools_are_offered_only_when_allowed
+FAILED tests/test_tools.py::test_the_mcp_server_lists_and_runs_the_same_tools
+2 failed, 184 passed, 5 skipped in 16.93s</code></pre>
+</div>
+<p>זה בדיוק מה שהן אמורות לעשות: רשימת הכלים שהמודל ושרת ה-<span class="en">MCP</span> רואים השתנתה, ומישהו צריך לאשר את זה במודע. אחרי עדכון הרשימות בשתיהן: 189 עוברות ו-5 מדולגות. שימו לב לשני דברים בעיצוב: <code>timezone</code> הוא <code>enum</code>, לא טקסט חופשי שהמודל ינחש, ו-<code>ToolContext</code> מתקבל ולא בשימוש. זה בסדר: הוא החוזה של כל כלי. ב-<code>CHANGELOG.md</code> השינוי נכנס תחת <span class="en">Unreleased</span>.</p>
+
+<h2><span class="sec">4</span>לתקן כלים של מישהו אחר</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>היה</th><th>עכשיו</th><th>הכלל</th></tr>
+  <tr><td><code class="wrap">get_events(user_id, start, end)</code>, "<span class="en">Returns events.</span>"</td><td><code class="wrap">list_events(day_from, days=1)</code>, <code class="wrap">day_from</code> בפורמט <code class="wrap">YYYY-MM-DD</code>, <code class="wrap">days</code> עד 14. תיאור: "<span class="en">List the user's events. Call it when the user asks what is planned, or before creating or changing an event.</span>"</td><td>שם ותיאור למודל; המשתמש נקבע בקוד, לא <code class="wrap">user_id</code></td></tr>
+  <tr><td>JSON מלא של כל אירוע</td><td>שורה לאירוע: <code class="wrap">- [e41a9c0b] Mon 10:00-10:30 Dentist (confirmed)</code>, לכל היותר 30, ושורה שאומרת שיש עוד</td><td>פלט קצר; <span class="en">ref</span> לצעד הבא; גבול גודל</td></tr>
+  <tr><td><code class="wrap">create_event(calendar_id, payload: object)</code>, "<span class="en">POST /events</span>"</td><td><code class="wrap">add_event(title, day, start, minutes=30)</code>, כל שדה עם טיפוס ותיאור; היומן נקבע בקוד</td><td>קלט שקל לדייק בו; בלי מזהים; בלי <code class="wrap">object</code> פתוח</td></tr>
+  <tr><td>(אין)</td><td><span class="en">Idempotency-Key</span> מהמשתמש, הכותרת והשעה; כותב, ולכן כבוי כברירת מחדל ומסומן לאישור</td><td><span class="en">idempotency</span>; הרשאה</td></tr>
+  <tr><td><code class="wrap">update_event_status(event_id, status: str)</code></td><td><code class="wrap">set_event_status(event, status)</code>: <code class="wrap">event</code> הוא <span class="en">ref</span> מ-<code class="wrap">list_events</code>, שנבדק מול האירועים של המשתמש; <code class="wrap">status</code> הוא <code class="wrap">enum</code> של שלושת הערכים</td><td><code class="wrap">enum</code>; בעלות נבדקת בקוד</td></tr>
+  <tr><td>שגיאות של ה-<span class="en">API</span> כמו שהן (<code class="wrap">409</code>)</td><td>"<span class="en">That time overlaps 'Dentist' [e41a9c0b]. Ask the user whether to move one of them.</span>"</td><td>שגיאה שאומרת איך להמשיך</td></tr>
+</table>
+</div>
+<p><code class="wrap">cancelled</code> הוא בפועל מחיקה: אולי כדאי כלי נפרד, <code class="wrap">cancel_event</code>, עם תיאור שאומר "<span class="en">only when the user clearly asks</span>", כדי ש-<span class="en">host</span> או פרק 21 יוכלו לבקש עליו אישור בלי לבקש על כל שינוי סטטוס.</p>
+
+<h2><span class="sec">5</span><span class="en">resource</span> בשרת ה-<span class="en">MCP</span></h2>
+<p>החתימות מהחבילה: <code>on_list_resources</code> מקבל <code>(ctx, PaginatedRequestParams | None)</code> ומחזיר <code>ListResourcesResult</code>; <code>on_read_resource</code> מקבל <code>(ctx, ReadResourceRequestParams)</code> ומחזיר <code>ReadResourceResult</code>.</p>
+<div class="codebox">
+  <div class="label"><span>agent\mcp_server.py (inside build_server; the types of ctx and params shortened)</span></div>
+<pre><code>    async def list_resources(ctx, params) -&gt; types.ListResourcesResult:
+        notes = types.Resource(
+            uri=NOTES_URI,  <span class="cm"># "notes://conversation"</span>
+            name="notes",
+            description="Every note of this conversation, one per line (at most 20, oldest first).",
+            mime_type="text/plain",
+        )
+        return types.ListResourcesResult(resources=[notes])
+
+    async def read_resource(ctx, params) -&gt; types.ReadResourceResult:
+        if params.uri != NOTES_URI:
+            raise MCPError(INVALID_PARAMS, f"No resource {params.uri!r}. There is {NOTES_URI}.")
+        <span class="cm"># The same code as the tool: one way to read notes, with its limits and its errors.</span>
+        outcome = await anyio.to_thread.run_sync(toolbox.call, "list_notes", {})
+        text = types.TextResourceContents(uri=NOTES_URI, mime_type="text/plain", text=outcome.content)
+        return types.ReadResourceResult(contents=[text])</code></pre>
+</div>
+<p>ושני ארגומנטים ל-<code>Server(...)</code>: <code>on_list_resources=list_resources, on_read_resource=read_resource</code>. ב-<code>mcp_try.py</code>, <code>client.list_resources()</code> אחרי הכלים, ו-<code>read &lt;uri&gt;</code> קורא ל-<code>client.read_resource(uri)</code>. הבדיקה ב-<code>test_tools.py</code> קוראת את ה-<span class="en">resource</span> דרך <code>Client(server)</code>.</p>
+<div class="codebox output">
+  <div class="label"><span>uv run python scripts/mcp_try.py --conversation &lt;id&gt; read notes://conversation (the first conversation of the chapter)</span></div>
+<pre><code>connected to my-agent-notes 0.17.0
+  list_notes (read-only): ['search']
+  current_time (read-only): ['timezone']
+  resource notes://conversation: Every note of this conversation, one per line (at most 20, oldest first).
+notes://conversation -&gt;
+- [ee6776c6] I parked on level 3, row F
+- [840c5866] the car key is in the blue bag
+- [1167f721] I owe Dana 20 shekels</code></pre>
+</div>
+<p><span class="en">URI</span> אחר (<code>read notes://elsewhere</code>) מסתיים ב-<code>MCPError: No resource 'notes://elsewhere'. There is notes://conversation.</code> אצל הלקוח. <strong>כלי או <span class="en">resource</span>?</strong> כלי: המודל מחליט, באמצע ריצה, אם ומתי לקרוא, ועם איזה חיפוש. <span class="en">Resource</span>: ה-<span class="en">host</span> או המשתמש מחליטים לצרף את הנתונים להקשר מראש, למשל "צרף את ההערות שלי" לפני שאלה. <span class="en">Resource</span> מתאים לנתונים קטנים שתמיד רלוונטיים; כלי מתאים כשיש הרבה נתונים ורק המודל יודע מה מהם צריך.</p>
+
+<h2><span class="sec">6</span>פקודות או כלים?</h2>
+<p>המדידה: סקריפט קטן ששולח הודעה אחת בכל דרך דרך <code>Conversations</code> ו-<code>note_command</code>, עם שירות הערות מזויף (<code>httpx2.MockTransport</code>), וקורא את <code>agent_steps</code> ו-<code>llm_tokens_total</code> מ-<code>REGISTRY</code> לפני ואחרי:</p>
+<div class="codebox output">
+  <div class="label"><span>the measurement (after exercise 3, so with four tools)</span></div>
+<pre><code>writes=False '/note buy stamps': model calls 0, notes calls ['POST'], tokens 0 -&gt; Noted: buy stamps
+writes=False 'Remember that I need to buy stamps.': model calls 1, notes calls [], tokens 302 -&gt; [mock reply, turn 1] You said: Remember that I need to buy stamps.
+writes=True '/note buy stamps': model calls 0, notes calls ['POST'], tokens 0 -&gt; Noted: buy stamps
+writes=True 'Remember that I need to buy stamps.': model calls 2, notes calls ['POST'], tokens 1164 -&gt; Saved: [aaaaaaaa] I need to buy stamps</code></pre>
+</div>
+<p>ההחלטה בפרויקט, ב-<code>docs\adr\0003-note-commands-stay-next-to-the-tools.md</code>: הפקודות נשארות, והכותבים כבויים כברירת מחדל. מה שהכריע: הפקודה עולה אפס קריאות למודל ותמיד שומרת; הכלי עולה שתי קריאות (כ-1,164 טוקנים מדומים לעומת 0), ושומר רק אם המודל בחר בו. מה שנותן לכלי ערך הוא שפה חופשית ("<span class="en">remember that</span>"), לא שמירה זולה יותר. וההבדל העדין שה-<span class="en">ADR</span> מתעד: <code>/note</code> שנשלח פעמיים שומר שתי הערות (מפתח חדש בכל פקודה), <code>add_note</code> שומר אחת. מה היה הופך את ההחלטה: אישור אנושי לכותבים (פרק 21), או משתמשים שלא מכירים פקודות בכלל, כמו בדף הצ'אט.</p>
+
+<h2><span class="sec">·</span>ההיסטוריה ב-git</h2>
+<p>ענף <code>feature/tools</code>, ממוזג ב-<span class="en">fast-forward</span>: "<span class="en">Tools as data: a registry, Pydantic validation, the loop without tool code</span>"; "<span class="en">Notes tools: list, add, delete; writing tools behind CHAT_WRITE_TOOLS; mock asks for several tools</span>"; "<span class="en">/title: a title as structured output, checked with Pydantic</span>"; "<span class="en">The notes tools as an MCP server, and a small MCP client</span>"; "<span class="en">Document the tools, structured output and MCP; version 0.17.0</span>"; "<span class="en">One name for the registry: build_registry</span>". אחריו התג <code>v0.17.0</code>. התרגילים על ענפים משלהם: <code>feature/current-time</code> (3) ו-<code>feature/mcp-resource</code> (5), שניהם תחת <span class="en">Unreleased</span> ב-<code>CHANGELOG.md</code>, ואז ב-<code>main</code> ה-<span class="en">ADR</span> של תרגיל 6 ושורה ב-README. הקומיטים הראשונים של הענף לא עוברים בדיקות כל אחד לבדו (הרישום והכלים נכנסו בשני חלקים); בעבודה אמיתית עדיף שכל קומיט יעבור.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-18.html">→ חזרה לפרק 18</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

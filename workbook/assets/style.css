@@ -1,0 +1,339 @@
+/* Behind the Code - workbook styles. Light theme, RTL Hebrew, print-friendly. */
+:root {
+  --bg: #fbfaf7;
+  --paper: #ffffff;
+  --ink: #1f2430;
+  --muted: #5d6677;
+  --line: #e2ddd3;
+  --accent: #1f6f78;
+  --accent-soft: #e4f1f2;
+  --warn: #9a5b00;
+  --warn-soft: #fdf3dc;
+  --good: #2c6e3f;
+  --good-soft: #e6f3e9;
+  --code-bg: #f4f2ec;
+  --code-ink: #2a2f3a;
+  --mono: "Cascadia Code", "Cascadia Mono", Consolas, "Courier New", monospace;
+  --sans: "Segoe UI", "Arial Hebrew", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html { font-size: 17px; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  line-height: 1.75;
+}
+
+.page { max-width: 860px; margin: 0 auto; padding: 24px 16px 80px; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  position: sticky; top: 0; z-index: 5;
+  background: rgba(251, 250, 247, 0.96);
+  border-bottom: 1px solid var(--line);
+}
+.topbar-inner {
+  max-width: 860px; margin: 0 auto; padding: 8px 16px;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  font-size: 0.86rem;
+}
+.topbar a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.topbar .spacer { flex: 1; }
+.progress-wrap { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.progress-bar {
+  width: 130px; height: 8px; border-radius: 4px;
+  background: var(--line); overflow: hidden;
+}
+.progress-bar > span { display: block; height: 100%; width: 0; background: var(--accent); }
+.btn {
+  font: inherit; font-size: 0.82rem; cursor: pointer;
+  border: 1px solid var(--line); background: var(--paper); color: var(--ink);
+  border-radius: 6px; padding: 3px 10px;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- headings ---------- */
+.chapter-head { border-bottom: 3px solid var(--accent); padding-bottom: 14px; margin-bottom: 28px; }
+.chapter-num { color: var(--accent); font-weight: 700; letter-spacing: 0.04em; font-size: 0.9rem; }
+h1 { font-size: 2.1rem; line-height: 1.25; margin: 4px 0 8px; }
+.lead { color: var(--muted); font-size: 1.08rem; margin: 0; }
+h2 {
+  font-size: 1.45rem; margin: 52px 0 12px; padding-top: 8px;
+  border-top: 1px solid var(--line); line-height: 1.35;
+}
+h2 .sec { color: var(--accent); margin-inline-end: 8px; font-weight: 700; }
+h3 { font-size: 1.12rem; margin: 30px 0 8px; }
+p { margin: 10px 0; }
+a { color: var(--accent); }
+ul, ol { padding-inline-start: 26px; }
+li { margin: 5px 0; }
+
+/* ---------- English inside Hebrew ---------- */
+code, kbd, .en { direction: ltr; unicode-bidi: isolate; }
+code {
+  font-family: var(--mono); font-size: 0.86em;
+  background: var(--code-bg); color: var(--code-ink);
+  padding: 1px 5px; border-radius: 4px; white-space: nowrap;
+}
+kbd {
+  font-family: var(--mono); font-size: 0.8em;
+  border: 1px solid #c9c3b6; border-bottom-width: 2px; border-radius: 4px;
+  background: var(--paper); padding: 0 5px;
+}
+
+/* ---------- code blocks ---------- */
+.codebox {
+  direction: ltr; text-align: left; position: relative;
+  margin: 14px 0; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--code-bg); overflow: hidden;
+}
+.codebox .label {
+  display: flex; justify-content: space-between; align-items: center;
+  font-family: var(--mono); font-size: 0.72rem; color: var(--muted);
+  padding: 4px 12px; border-bottom: 1px solid var(--line); background: #ece9e0;
+}
+.codebox pre {
+  margin: 0; padding: 12px 14px; overflow-x: auto;
+  font-family: var(--mono); font-size: 0.83rem; line-height: 1.6; color: var(--code-ink);
+}
+.codebox pre code { background: none; padding: 0; font-size: inherit; white-space: pre; }
+.codebox.output { background: var(--paper); }
+.codebox.output .label { background: #f3f1ea; }
+.copy-btn {
+  font: inherit; font-size: 0.7rem; cursor: pointer; color: var(--muted);
+  border: 1px solid var(--line); background: var(--paper); border-radius: 4px; padding: 0 8px;
+}
+.copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+.hl { background: #fff1b8; }
+.cm { color: #7a8194; }
+
+/* ---------- callouts ---------- */
+.callout {
+  margin: 18px 0; padding: 12px 16px; border-radius: 8px;
+  border-inline-start: 5px solid var(--accent); background: var(--accent-soft);
+}
+.callout > :first-child { margin-top: 0; }
+.callout > :last-child { margin-bottom: 0; }
+.callout .title { font-weight: 700; display: block; margin-bottom: 2px; }
+.callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+.callout.good { border-color: var(--good); background: var(--good-soft); }
+
+/* ---------- goals list ---------- */
+.goals { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 14px 20px; }
+.goals h3 { margin-top: 0; }
+
+/* ---------- tables ---------- */
+.table-wrap { overflow-x: auto; margin: 14px 0; }
+table { border-collapse: collapse; width: 100%; background: var(--paper); font-size: 0.93rem; }
+th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: start; vertical-align: top; }
+th { background: #f1eee6; font-weight: 700; }
+
+/* ---------- diagram ---------- */
+.diagram {
+  direction: ltr; margin: 18px 0; padding: 16px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 10px;
+}
+.layers { display: flex; flex-direction: column; gap: 8px; }
+.layer { border: 2px solid var(--accent); border-radius: 8px; padding: 8px 12px; background: var(--paper); }
+.layer .name { font-family: var(--mono); font-weight: 700; font-size: 0.88rem; color: var(--accent); }
+.layer .what { direction: rtl; text-align: right; font-size: 0.88rem; color: var(--muted); }
+.layer .inner { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.layer.l2 { border-color: #4a7fb0; } .layer.l2 > .name { color: #4a7fb0; }
+.layer.l3 { border-color: #8a6bb0; } .layer.l3 > .name { color: #8a6bb0; }
+.layer.l4 { border-color: #b07a3a; } .layer.l4 > .name { color: #b07a3a; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; }
+.row > .layer { flex: 1 1 200px; }
+.caption { direction: rtl; text-align: center; color: var(--muted); font-size: 0.85rem; margin-top: 10px; }
+
+/* ---------- steps ---------- */
+.step {
+  margin: 22px 0; padding-inline-start: 16px;
+  border-inline-start: 3px solid var(--line);
+}
+.step > h3 { margin-top: 0; }
+.step-num {
+  display: inline-block; min-width: 1.7em; text-align: center;
+  background: var(--accent); color: #fff; border-radius: 50%;
+  font-size: 0.85rem; font-weight: 700; margin-inline-end: 6px;
+}
+
+/* ---------- exercises ---------- */
+.exercise {
+  margin: 22px 0; padding: 16px 18px; background: var(--paper);
+  border: 1px solid var(--line); border-radius: 10px;
+  border-top: 4px solid var(--accent);
+}
+.exercise.done { border-top-color: var(--good); background: #fbfdfb; }
+.ex-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.ex-head h3 { margin: 0; flex: 1; }
+.level {
+  font-size: 0.74rem; font-weight: 700; padding: 1px 9px; border-radius: 10px;
+  background: var(--accent-soft); color: var(--accent); white-space: nowrap;
+}
+.level.mid { background: var(--warn-soft); color: var(--warn); }
+.level.open { background: #f1e6f5; color: #6a3d82; }
+.check { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; }
+.check input { width: 18px; height: 18px; margin-top: 6px; accent-color: var(--good); flex: none; }
+.ex-done { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line); font-weight: 600; }
+textarea.answer {
+  width: 100%; min-height: 84px; margin-top: 8px; padding: 8px 10px;
+  font: inherit; font-size: 0.92rem; line-height: 1.6;
+  border: 1px solid var(--line); border-radius: 6px; background: #fffef9; resize: vertical;
+}
+.answer-label { font-size: 0.85rem; color: var(--muted); margin-top: 10px; display: block; }
+.checklist { list-style: none; padding: 0; }
+.checklist li { margin: 6px 0; }
+
+/* ---------- glossary ---------- */
+dl.glossary { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; }
+dl.glossary dt { font-family: var(--mono); font-weight: 700; font-size: 0.88rem; direction: ltr; text-align: left; }
+dl.glossary dd { margin: 0; }
+
+/* ---------- index page ---------- */
+.toc { list-style: none; padding: 0; margin: 20px 0; }
+.toc li {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 14px; margin: 8px 0;
+}
+.toc .n { font-weight: 700; color: var(--accent); min-width: 2em; }
+.toc .t { flex: 1; min-width: 200px; }
+.toc .t a { font-weight: 700; text-decoration: none; }
+.toc .t small { display: block; color: var(--muted); }
+.toc li.soon { opacity: 0.62; }
+.pill { font-size: 0.74rem; padding: 1px 9px; border-radius: 10px; background: #eee9dd; color: var(--muted); }
+.part-title { margin-top: 34px; color: var(--muted); font-size: 0.95rem; letter-spacing: 0.03em; }
+
+.footer-nav {
+  margin-top: 56px; padding-top: 16px; border-top: 1px solid var(--line);
+  display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 0.92rem;
+}
+
+@media (max-width: 600px) {
+  html { font-size: 16px; }
+  h1 { font-size: 1.7rem; }
+  dl.glossary { grid-template-columns: 1fr; gap: 0; }
+  dl.glossary dd { margin-bottom: 10px; }
+}
+
+/* ---------- print ---------- */
+@media print {
+  @page { size: A4; margin: 18mm 16mm; }
+  html { font-size: 11.5pt; }
+  body { background: #fff; }
+  .topbar, .copy-btn, .footer-nav, .no-print { display: none !important; }
+  .page { max-width: none; padding: 0; }
+  h2 { break-after: avoid; margin-top: 26pt; }
+  h3 { break-after: avoid; }
+  .codebox, .callout, .exercise, .diagram, table, .step { break-inside: avoid; }
+  .codebox pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow: visible; }
+  .codebox pre code { white-space: pre-wrap; }
+  .codebox, .codebox .label, .callout, th, code, .layer {
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  a { color: inherit; text-decoration: none; }
+  .check input {
+    appearance: none; -webkit-appearance: none;
+    width: 13pt; height: 13pt; border: 1.2pt solid #333; border-radius: 2pt; margin-top: 3pt;
+  }
+  .check input:checked { background: #333; }
+  textarea.answer {
+    border: 1pt solid #999; min-height: 90pt; resize: none; background:
+      repeating-linear-gradient(#fff, #fff 21pt, #bbb 21pt, #bbb 22pt);
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+}
+
+/* ---------- chapter 02: flow diagram (four places code lives) ---------- */
+.flow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.flow > .layer { flex: 1 1 120px; align-self: stretch; }
+.flow > .layer.machine { flex: 3 1 470px; border-color: var(--muted); }
+.flow.steps > .layer { flex: 1 1 100px; }
+.layer.machine > .name { color: var(--muted); }
+.flow.steps { margin-top: 8px; }
+.hop {
+  flex: 0 0 auto; text-align: center; line-height: 1.35;
+  font-family: var(--mono); font-size: 1.1rem; color: var(--muted);
+}
+.hop b { display: block; color: var(--ink); font-size: 0.76rem; }
+@media print {
+  .flow > .layer.machine { flex-basis: 100%; }
+}
+/* chapter 02: show code exactly as typed. Cascadia Code otherwise draws "->" as an arrow
+   and "=======" (a merge-conflict marker) as one long bar. */
+code, kbd, .codebox pre { font-variant-ligatures: none; font-feature-settings: "calt" 0, "liga" 0; }
+/* chapter 02: long commands and error messages inside table cells may wrap at spaces,
+   so the troubleshooting table fits the page instead of scrolling sideways. */
+body[data-chapter="02"] td code { white-space: normal; }
+/* chapter 03: a few inline code samples are long calls (log.info(...), Select-String ...).
+   Those carry class="wrap" and may wrap at spaces instead of widening the page. Table cells
+   wrap as in chapter 02. Short inline code keeps the default (no wrap), which reads better in RTL. */
+code.wrap { white-space: normal; }
+body[data-chapter="03"] td code { white-space: normal; }
+/* chapter 04: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 and 03. */
+body[data-chapter="04"] td code { white-space: normal; }
+/* chapter 05: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 to 04. */
+body[data-chapter="05"] td code { white-space: normal; }
+/* chapter 06: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 to 05. */
+body[data-chapter="06"] td code { white-space: normal; }
+/* chapter 07: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 to 06. */
+body[data-chapter="07"] td code { white-space: normal; }
+/* chapter 08: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 to 07. */
+body[data-chapter="08"] td code { white-space: normal; }
+/* chapter 09: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 to 08. */
+body[data-chapter="09"] td code { white-space: normal; }
+/* chapter 10: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 to 09. */
+body[data-chapter="10"] td code { white-space: normal; }
+/* chapter 11: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 to 10. */
+body[data-chapter="11"] td code { white-space: normal; }
+/* chapter 12: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 to 11. */
+body[data-chapter="12"] td code { white-space: normal; }
+/* chapter 13: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 to 12. .trace draws a trace as a waterfall:
+   one row per span, its bar placed by inline --start and --len (percent of the whole trace). */
+body[data-chapter="13"] td code { white-space: normal; }
+.trace { font-family: var(--mono); font-size: 0.8rem; }
+.trace .span { display: grid; grid-template-columns: 11em 1fr; align-items: center; gap: 8px; margin: 4px 0; }
+.trace .span .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trace .bar { position: relative; height: 18px; border-bottom: 1px dashed var(--line); }
+.trace .bar > i {
+  position: absolute; top: 2px; bottom: 2px; min-width: 3px; border-radius: 3px;
+  left: calc(var(--start) * 1%); width: calc(var(--len) * 1%);
+  background: #4a7fb0; -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+.trace .bar > i.other { background: #8a6bb0; }
+.trace .bar > i.later { background: #b07a3a; }
+.trace .bar > b { position: absolute; top: 1px; font-weight: 400; color: var(--muted); left: calc((var(--start) + var(--len)) * 1% + 4px); }
+/* chapter 14: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 to 13. */
+body[data-chapter="14"] td code { white-space: normal; }
+/* chapter 17: the troubleshooting and failure-pattern tables hold long error messages and commands;
+   let them wrap at spaces inside table cells, as in chapters 02 to 14. */
+body[data-chapter="17"] td code { white-space: normal; }
+/* chapter 16: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 to 14. */
+body[data-chapter="16"] td code { white-space: normal; }
+/* chapter 18: the troubleshooting table holds long error messages and commands; let them wrap
+   at spaces inside table cells, as in chapters 02 to 17. */
+body[data-chapter="18"] td code { white-space: normal; }
+
+/* chapter 19: inline code in table cells wraps at spaces, as in chapters 02 to 18. */
+body[data-chapter="19"] td code { white-space: normal; }
+
+/* chapter 20: inline code in table cells wraps at spaces, as in chapters 02 to 19. */
+body[data-chapter="20"] td code { white-space: normal; }
+
+/* chapter 21: inline code in table cells wraps at spaces, as in chapters 02 to 20. */
+body[data-chapter="21"] td code { white-space: normal; }

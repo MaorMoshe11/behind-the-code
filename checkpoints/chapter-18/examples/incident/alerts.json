@@ -1,0 +1,1 @@
+{"status":"success","data":{"alerts":[{"labels":{"alertname":"NotesFailing","severity":"ticket"},"annotations":{"runbook_url":"docs/runbook.md#notesfailing","summary":"More than 10% of calls to the notes service fail or are refused."},"state":"firing","activeAt":"2026-11-18T20:44:41.48256191Z","value":"9.090909090909091e-01"}]}}

@@ -1,0 +1,114 @@
+# Architecture
+
+Two services in one repository. Each one owns its data: no service reads or writes the
+other's database. They talk over HTTP, through a versioned API, and through events in Kafka.
+
+| Service | Code | Data it owns | Who calls it |
+|---|---|---|---|
+| chat (`my-agent`) | `agent/` | conversations and messages, in its Postgres (`db`) | people: the web page, `ask.py`, the terminal |
+| usage worker (part of the chat service) | `worker/`, same image | usage statistics, in its own SQLite file (`usagedata`); derived, rebuilt from the events | nobody: it reads `chat-events` |
+| notes (`notes-service`) | `notes-service/` | notes, in its own Postgres (`notes-db`) | the chat service only (`/v1`, with `NOTES_API_KEY`) |
+
+## The calls between them
+
+The chat calls the notes service for `/note`, `/notes`, and when a conversation is deleted
+(`agent/notes.py`):
+
+- timeout 2 s per attempt (`NOTES_TIMEOUT`), 3 attempts, backoff 0.2 s and 0.4 s with jitter:
+  a user waits about 7 s at most;
+- every new note carries an `Idempotency-Key`; the notes service saves a key once;
+- after 3 failed calls in a row the circuit breaker opens: for 30 s, `/note` answers at once.
+
+The chat publishes events to Kafka (`chat-events`, 3 partitions, key = conversation id) and
+never waits for anyone to read them. The usage worker consumes them at least once and applies
+each event id once.
+
+Deleting a conversation is an orchestrated saga in the chat (`agent/saga.py`): archive the
+conversation, delete its notes, delete the conversation; on failure, compensate newest first.
+
+The model can also use notes, through the agent loop (`agent/loop.py`) and the tool
+registry (`agent/tools.py`, `agent/notes_tools.py`): with a notes service, every message is
+sent with the notes tools, and when the model asks for one the chat validates the input,
+calls the notes service for this conversation (the id is set by the code, never by the
+model) and sends the result back. At most `CHAT_MAX_STEPS` (5) model calls per message.
+`list_notes` reads (`GET /v1/notes`, with `q` and `limit`). `add_note` (`POST /v1/notes`,
+Idempotency-Key from the conversation and the text) and `delete_note` (a `GET` to check the
+note is this conversation's, then `DELETE /v1/notes/{id}`) write, and are offered only with
+`CHAT_WRITE_TOOLS=1`. The model acts on text it reads, so writing tools are off by default
+and every call is logged; an approval step for risky tools is still to come.
+
+The same registry is served over MCP (`agent/mcp_server.py`, stdio), for MCP hosts other
+than the chat. It calls the notes service exactly as the chat does.
+
+## Seeing what happens
+
+One request id follows a request everywhere: the api makes it (or keeps a well-formed
+`X-Request-ID`), the notes client sends it as `X-Request-ID`, events carry it in the Kafka
+header `request_id`. Every service logs JSON lines to stdout with that id. The api and the
+worker expose metrics (`/metrics`, worker port 9100); Prometheus scrapes them and evaluates
+`monitoring/alerts.yml`; `docs/runbook.md` says what to do for each alert.
+
+## Who may do what
+
+Every client of the chat has its own key (the server keeps hashes) and sees only its own
+conversations; the chat has one key for the notes service; Prometheus has a token that reads
+`/metrics` and nothing else. The threat model, and the gaps, are in `docs/security.md`.
+
+## Context and memory (0.18)
+
+The database is the truth: every turn is stored whole (questions, tool steps, answers). What
+the model sees on a call is a view of it, assembled by `agent/context.py` within a token
+budget: the latest summary, the newest whole turns that fit, the question. When a turn would
+not fit, the older turns are summarised first (`agent/compaction.py`, one extra model call);
+the summary goes in the context, the turns stay stored. The client asks the API to cache the
+prompt, so the unchanged start of each call costs a fraction. Facts that outlive a
+conversation are in `memories`, per client, written and read by tools; earlier conversations
+are found by keyword search, also per client.
+
+## When something is down
+
+| Down | What still works | What users see |
+|---|---|---|
+| notes | chatting, history, conversations | "Notes are unavailable right now"; the model's `list_notes` call gets an error result and says so; deleting a conversation answers 503 and changes nothing; `/ready` 200 with `"notes": "unreachable"` |
+| notes-db | the same | the same (the notes service answers 503 on `/ready`, 500 on `/v1`) |
+| kafka | everything users do | nothing at once; events wait in the api's memory for up to 30 s, then are lost (logged) |
+| worker | everything users do | statistics fall behind; the worker catches up when it is back (the lag) |
+| chat's db | nothing in the chat; notes keep their data | errors; `/ready` 503 |
+
+## Known gaps
+
+- Dual write: the api saves a message, then publishes its event. If the process dies in
+  between, or Kafka is down for more than 30 s, the event is lost. The fix is an outbox table
+  in the chat's database, written in the same transaction, and a relay that publishes it.
+- The saga keeps its progress in memory. If the api dies in the middle, a conversation can
+  stay archived with its notes gone. Archived conversations older than a few minutes should be
+  found and finished (deleted) by a cleanup job.
+- Restored notes (a compensation) are new notes with new ids.
+- A person who sends `/note` again after "unavailable" makes a new key, so a note that was
+  saved after all may appear twice. Only automatic retries are protected.
+- The circuit breaker lives in one process: each copy of the chat service has its own.
+- Writing tools run without a person's approval once `CHAT_WRITE_TOOLS=1`: a model that
+  follows instructions in a note it read could add or delete this conversation's notes
+  (never another conversation's). Off by default; approval is a planned change.
+- `delete_note` finds the note among the newest 100 of the conversation (the service's
+  largest page); an older note cannot be deleted by the model.
+- The context budget is an estimate (a token per four characters). Text in Hebrew, code and
+  JSON have more tokens per character, so a real call can be larger than the budget says;
+  the API's count_tokens and each response's usage are the real numbers.
+- Search over earlier conversations is by keywords (a plural without its s): "dessert" does
+  not find "cake", and the agent's own earlier searches and answers are found too.
+  Embeddings (vector search) would find related words; not built.
+- A summary is written by the model and can drop or distort a detail. The original turns
+  stay in the database, but the model sees only the summary of them.
+
+## Plan: an outbox for the events (not built yet)
+
+1. Migration: a table `outbox` (id, topic, key, payload JSON, created_at, sent_at NULL).
+2. `Conversations.send()` and the delete saga's last step add the event row in the same
+   transaction as the messages: the event exists if and only if the change was committed.
+3. A relay process (like the worker: same image, `python -m agent.relay`) reads unsent rows
+   oldest first, publishes each with `acks=all`, waits for the confirmation, then sets
+   `sent_at`. If it dies between the two, the row is published again: consumers must stay
+   idempotent (they are: `event_id`).
+4. A job deletes sent rows older than a week. Kafka's own transactions do not replace this:
+   they cover Kafka writes only, not the chat's Postgres.

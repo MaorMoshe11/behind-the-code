@@ -1,0 +1,42 @@
+# The agent's service and its database, started together: docker compose up --build
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      # A local development database. Real passwords never go in this file (chapter 10).
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent
+    volumes:
+      - pgdata:/var/lib/postgresql/data  # the data lives in a volume, not in the container
+    ports:
+      - "127.0.0.1:5432:5432"  # only this computer can connect, for tools and scripts
+    healthcheck:
+      # "Ready" means Postgres accepts connections, not just that the process started.
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
+      interval: 2s
+      timeout: 5s
+      retries: 30  # a new database needs time to initialise on its first start
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]  # a separate step, as in chapter 7
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    env_file: .env  # AGENT_API_KEY, CHAT_MOCK and the rest, from your private file
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent  # wins over .env
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:

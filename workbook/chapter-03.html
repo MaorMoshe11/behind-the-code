@@ -1,0 +1,979 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 3 · איכות קוד | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="03">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 3 · איכות קוד</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 3 מתוך 21</div>
+  <h1>איכות קוד</h1>
+  <p class="lead">איך יודעים שהקוד עובד בלי לבדוק אותו ביד בכל פעם, ואיך כותבים קוד שאדם אחר (או אתם בעוד חצי שנה) יוכל לקרוא, לשנות, ולא לשבור.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>לפצל קובץ אחד גדול ל-<span class="en">package</span> של מודולים קטנים, שלכל אחד תפקיד אחד.</li>
+    <li>לכתוב בדיקות עם <code>pytest</code>, ולהסביר מה ההבדל בין <span class="en">unit test</span> ל-<span class="en">integration test</span>.</li>
+    <li>להחליף רכיב אמיתי ברכיב מזויף (<span class="en">mock</span>), כדי שהבדיקות לא יפנו לרשת ולא יעלו כסף.</li>
+    <li>להריץ <code>ruff</code>, שמוצא בעיות ומסדר את הקוד, ו-<code>mypy</code>, שבודק את ה-<span class="en">type hints</span>.</li>
+    <li>לטפל בשגיאות במקום הנכון, ולכתוב <span class="en">logs</span> במקום <code>print</code>.</li>
+    <li>לקרוא קוד שמישהו אחר כתב, כולל קוד של ספרייה.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> חמש עד שש שעות, כולל התרגילים. <strong>מה צריך:</strong> הפרויקט מסוף פרק 2, כ-<span class="en">repository</span> עם ה-<span class="en">remote</span> המקומי <code>origin</code>. הכול רץ במצב <span class="en">mock</span>, בלי מפתח.</p>
+</section>
+
+<h2><span class="sec">3.1</span>הבעיה: "בדקתי, זה עבד"</h2>
+
+<p>בפרק 1 מצאתם באג ב-<code>trim_history</code>: היא שמרה 3 הודעות במקום 6, והשיחה התחילה בתשובה של <code>assistant</code>. מצאתם אותו כי מישהו כתב לכם קובץ שמדפיס "ציפיתי ל-6, קיבלתי 3". בפרק 2, ב-<span class="en">review</span> של <code>/history</code>, אותה טעות בדיוק (הודעות במקום תורות) התגלתה רק כשהרצתם את הקוד ביד.</p>
+
+<p>עכשיו הסוכן צריך באמת לחתוך שיחות ארוכות, כי כל תור שולח את כל השיחה ועולה יותר. נניח שאתם מכניסים את <code>trim_history</code> לסוכן. איך תדעו שהיא עובדת? תפתחו את הצ'אט, תכתבו אחת-עשרה הודעות, ותספרו. ובשבוע הבא, אחרי שינוי קטן ב-<code>/reset</code>, שוב. ובחודש הבא, כשמישהו בצוות "ינקה" את הפונקציה ויכתוב <code>messages[-max_turns:]</code>, אף אחד לא יספור, והבאג יגיע למשתמש.</p>
+
+<p>בדיקה ידנית היא זיכרון של אדם: היא נשכחת, היא איטית, והיא בודקת רק את מה שנזכרתם לבדוק. ויש עוד שלוש בעיות שגדלות עם הקוד. הכול נמצא ב-<code>chat.py</code> אחד, ואי אפשר לבדוק חלק ממנו בלי להריץ את כולו. ה-<span class="en">reviewer</span> מבזבז זמן על יבוא מיותר ועל רווחים, דברים שמכונה רואה בשנייה. וכשמשהו נכשל אצל משתמש, נשארת הודעה אחת במסך ושום עקבות. הפרק עונה על ארבעתן, בסדר הזה: בדיקות, חבילה, כלים אוטומטיים, ושגיאות עם <span class="en">logs</span>.</p>
+
+<h2><span class="sec">3.2</span>המפה: חבילה ובדיקות</h2>
+
+<p>כך ייראה הפרויקט בסוף הפרק. הקוד מחולק ל-<span class="en">package</span> בשם <code>agent</code>, ולידו תיקיית <code>tests</code>:</p>
+
+<div class="diagram">
+  <div class="row">
+    <div class="layer l3">
+      <div class="name">agent\ (the package)</div>
+      <div class="inner">
+        <div class="layer l2"><div class="name">cli.py</div><div class="what">לולאת הצ'אט: קוראת מה הקלדתם ומדפיסה תשובות. משתמשת בשלושת המודולים שמתחתיה</div></div>
+        <div class="row">
+          <div class="layer l4"><div class="name">config.py</div><div class="what">הגדרות ממשתני סביבה</div></div>
+          <div class="layer l4"><div class="name">history.py</div><div class="what">חיתוך השיחה</div></div>
+          <div class="layer l4"><div class="name">llm.py</div><div class="what">ClaudeClient האמיתי ו-MockClient המזויף</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="layer">
+      <div class="name">tests\</div>
+      <div class="inner">
+        <div class="layer l2"><div class="name">test_cli.py</div><div class="what"><span class="en">integration</span>: כל הצ'אט, עם MockClient</div></div>
+        <div class="layer l4"><div class="name">test_history.py</div><div class="what"><span class="en">unit</span>: פונקציה אחת</div></div>
+        <div class="layer l4"><div class="name">test_llm.py</div><div class="what"><span class="en">unit</span>: הלקוחות, עם SDK מזויף</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="caption">כל קובץ בדיקות בודק מודול אחד, חוץ מ-test_cli.py שבודק את כולם יחד. שום בדיקה לא פונה ל-API האמיתי.</div>
+</div>
+
+<p>למה לפצל? כי כל מודול עונה על שאלה אחת, ואפשר לבדוק אותו לבד. <code>history.py</code> לא יודע שיש <span class="en">terminal</span>, ולכן בודקים אותו בשורה. <code>cli.py</code> לא יודע אם הלקוח אמיתי או מזויף, ולכן אפשר להריץ את כל הצ'אט בבדיקה בלי לשלם על אף תשובה.</p>
+
+<h2><span class="sec">3.3</span><code>pytest</code> בחמש דקות</h2>
+
+<p><strong>בדיקה אוטומטית</strong> (<span class="en">automated test</span>) היא פונקציה שמריצה חלק מהקוד ובודקת שהתוצאה היא מה שציפיתם. <code>pytest</code> הוא הכלי המקובל ב-Python להריץ אותן. הוא מחפש קבצים ששמם מתחיל ב-<code>test_</code>, ובתוכם פונקציות ששמן מתחיל ב-<code>test_</code>. בדיקה היא <code>assert</code> רגיל: אם התנאי שקרי, הבדיקה נכשלת ו-<code>pytest</code> מדפיס את הערכים שהיו בו. כל בדיקה רצה בנפרד, וכישלון של אחת לא עוצר את האחרות.</p>
+
+<p>רוב הבדיקות בנויות משלושה שלבים: מכינים קלט (<span class="en">arrange</span>), מריצים (<span class="en">act</span>), ובודקים (<span class="en">assert</span>). מה הופך בדיקה לטובה:</p>
+<ul>
+  <li><strong>השם אומר מה נבדק</strong>, כמשפט. כשהיא תיכשל בעוד חצי שנה, השם הוא הדבר הראשון שתקראו.</li>
+  <li><strong>מהירה ודטרמיניסטית</strong>: אותה תוצאה בכל הרצה, בלי רשת ובלי שעון. בדיקה שנכשלת "לפעמים" מלמדת את כולם להתעלם מכישלונות.</li>
+  <li><strong>בודקת התנהגות, לא מימוש</strong>: "השיחה מתחילה בהודעה של <code>user</code>", ולא "הפונקציה משתמשת ב-<span class="en">slice</span>".</li>
+  <li><strong>ראיתם אותה נכשלת.</strong> בדיקה שמעולם לא נכשלה אולי לא בודקת כלום. לכן בדוגמה המודרכת תחזירו את הבאג של פרק 1, בכוונה.</li>
+</ul>
+
+<h2><span class="sec">3.4</span>דוגמה מודרכת: מקובץ לחבילה, ובדיקה ראשונה</h2>
+
+<p>עובדים ב-<code>~\projects\my-agent</code>, על ענף, כמו בפרק 2. צרו קבצים ב-VS Code, לא עם <code>&gt;</code> ב-PowerShell (פרק 2, סעיף 2.4). המזהים והשעות בפלטים הם מההרצה שלנו.</p>
+
+<div class="step">
+  <h3><span class="step-num">1</span>ענף, ותיקיות</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects\my-agent
+git switch main
+git pull
+git switch -c refactor/package
+mkdir agent, tests</code></pre>
+</div>
+  <p><strong><span class="en">Refactoring</span></strong> הוא שינוי של מבנה הקוד בלי לשנות את מה שהוא עושה. זה מה שתעשו עכשיו, ולכן אחרי הצעד הזה הצ'אט צריך להתנהג בדיוק כמו לפניו.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>החבילה</h3>
+  <p>תיקייה עם קובץ <code>__init__.py</code> היא <strong><span class="en">package</span></strong>: Python מרשה לייבא ממנה, למשל <code>from agent.history import trim_history</code>. כל קובץ <code>.py</code> בתוכה הוא <strong><span class="en">module</span></strong>. צרו את <code>agent\__init__.py</code> עם שורה אחת, <span class="en">docstring</span> שמתאר את החבילה:</p>
+  <p dir="ltr"><code>"""my-agent: a small chat agent on the Claude API."""</code></p>
+  <p>ההגדרות: במקום ארבעה משתנים גלובליים, אובייקט אחד שמחזיק את כולן, והגדרה חדשה, <code>CHAT_MAX_TURNS</code>: כמה תורות אחרונים נשלחים למודל.</p>
+<div class="codebox">
+  <div class="label"><span>agent\config.py</span></div>
+<pre><code>"""Settings, read from environment variables."""
+
+import os
+from dataclasses import dataclass
+
+SYSTEM_PROMPT = (
+    "You are a friendly assistant. Keep your answers short and clear. "
+    "Answer in the language the user writes in."
+)
+
+
+@dataclass(frozen=True)
+class Settings:
+    model: str
+    mock: bool
+    agent_name: str
+    max_turns: int
+    api_key: str | None
+
+
+def load_settings() -&gt; Settings:
+    """Build the settings from environment variables, with defaults."""
+    return Settings(
+        model=os.getenv("CHAT_MODEL", "claude-opus-5-5"),
+        mock=os.getenv("CHAT_MOCK", "0") == "1",
+        agent_name=os.getenv("AGENT_NAME", "agent"),
+        max_turns=int(os.getenv("CHAT_MAX_TURNS", "10")),
+        api_key=os.getenv("ANTHROPIC_API_KEY") or None,
+    )</code></pre>
+</div>
+  <p>הסימונים <code>: str</code> ו-<code>-&gt; Settings</code> הם <span class="en">type hints</span> (סעיף 3.7). בינתיים קראו אותם כהערות. <code>MessageParam</code> בקבצים הבאים הוא הטיפוס שה-SDK מגדיר להודעה אחת. הפונקציה מפרק 1, עם התיקון שלכם:</p>
+<div class="codebox">
+  <div class="label"><span>agent\history.py</span></div>
+<pre><code>"""The conversation history, and how it is kept short."""
+
+from anthropic.types import MessageParam
+
+
+def trim_history(messages: list[MessageParam], max_turns: int) -&gt; list[MessageParam]:
+    """Keep only the last `max_turns` turns of the conversation.
+
+    One turn is two messages: the user's message and the assistant's reply.
+    """
+    if len(messages) &lt;= max_turns * 2:
+        return messages
+    return messages[-max_turns * 2:]</code></pre>
+</div>
+  <p>הלקוחות: <code>ask_claude</code> ו-<code>ask_mock</code> הופכים לשתי מחלקות עם אותה מתודה, <code>reply</code>. מי שמשתמש בהן לא צריך לדעת איזו מהן קיבל.</p>
+<div class="codebox">
+  <div class="label"><span>agent\llm.py</span></div>
+<pre><code>"""Clients that turn a conversation into a reply.
+
+ClaudeClient talks to the real Claude API. MockClient returns fake replies,
+costs nothing, and is the one the tests use.
+"""
+
+from typing import Protocol
+
+import anthropic
+from anthropic.types import MessageParam
+
+
+class ChatClient(Protocol):
+    """Anything that can answer a conversation."""
+
+    def reply(self, messages: list[MessageParam]) -&gt; str: ...
+
+
+class ClaudeClient:
+    """Sends the whole conversation to Claude and returns the reply text."""
+
+    def __init__(
+        self, model: str, system_prompt: str, sdk: anthropic.Anthropic | None = None
+    ) -&gt; None:
+        self.model = model
+        self.system_prompt = system_prompt
+        # Tests pass a fake SDK client here, so they never touch the network.
+        self.sdk = sdk or anthropic.Anthropic()
+
+    def reply(self, messages: list[MessageParam]) -&gt; str:
+        response = self.sdk.messages.create(
+            model=self.model,
+            max_tokens=16000,
+            system=self.system_prompt,
+            messages=messages,
+        )
+        if response.stop_reason == "refusal":
+            return "(The model declined to answer this request.)"
+        return "".join(block.text for block in response.content if block.type == "text")
+
+
+class MockClient:
+    """Returns a predictable fake reply. Free, offline, the same every time."""
+
+    def reply(self, messages: list[MessageParam]) -&gt; str:
+        last_message = messages[-1]["content"]
+        turn = (len(messages) + 1) // 2
+        return f"[mock reply, turn {turn}] You said: {last_message}"</code></pre>
+</div>
+  <p>הצ'אט. רוב הקוד עובר כמו שהוא מ-<code>chat.py</code>. ההבדלים: הלולאה קיבלה פונקציה משלה, <code>chat_loop</code>, שמקבלת את הלקוח מבחוץ, ואחרי כל תשובה השיחה נחתכת.</p>
+<div class="codebox">
+  <div class="label"><span>agent\cli.py</span></div>
+<pre><code>"""The terminal chat: reads what you type and prints the agent's replies."""
+
+import os
+import sys
+
+import anthropic
+from anthropic.types import MessageParam
+from dotenv import load_dotenv
+from rich.console import Console
+
+from agent.config import SYSTEM_PROMPT, Settings, load_settings
+from agent.history import trim_history
+from agent.llm import ChatClient, ClaudeClient, MockClient
+
+console = Console()
+
+
+def make_client(settings: Settings) -&gt; ChatClient:
+    """Pick the mock or the real client, according to the settings."""
+    if settings.mock:
+        print("Running in MOCK mode - answers are fake, nothing is sent to the API.")
+        return MockClient()
+    if not settings.api_key:
+        print("ANTHROPIC_API_KEY is not set.")
+        print("Put it in a .env file, or set CHAT_MOCK=1 to run without a key.")
+        sys.exit(1)
+    print(f"Chatting with {settings.model}.")
+    return ClaudeClient(settings.model, SYSTEM_PROMPT)
+
+
+def chat_loop(client: ChatClient, settings: Settings) -&gt; None:
+    """Run the conversation until the user quits."""
+    print("Type a message and press Enter. Type '/reset' to start over, 'exit' to quit.\n")
+    messages: list[MessageParam] = []
+
+    while True:
+        user_text = input("you&gt; ").strip()
+        if user_text.lower() in ("exit", "quit", "bye"):
+            break
+        if not user_text:
+            continue
+        if user_text == "/reset":
+            # Forget the whole conversation and start a new one.
+            messages.clear()
+            print("Conversation cleared. Starting over.\n")
+            continue
+
+        messages.append({"role": "user", "content": user_text})
+
+        try:
+            reply = client.reply(messages)
+        <span class="cm"># ... the three "except anthropic...." blocks, copied unchanged from chat.py ...</span>
+
+        messages.append({"role": "assistant", "content": reply})
+        # Keep only the last turns, so long chats do not get slow and expensive.
+        messages = trim_history(messages, settings.max_turns)
+        console.print(f"{settings.agent_name}&gt; {reply}\n", style="cyan", markup=False)
+
+    print("Bye!")
+
+
+def main() -&gt; None:
+    load_dotenv()
+    settings = load_settings()
+    client = make_client(settings)
+    chat_loop(client, settings)</code></pre>
+</div>
+  <p>ונקודת הכניסה, <code>agent\__main__.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\__main__.py</span></div>
+<pre><code>"""Lets you start the agent with `python -m agent`."""
+
+from agent.cli import main
+
+main()</code></pre>
+</div>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>מוחקים את הישן ומריצים</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git rm chat.py debug_me.py
+$env:CHAT_MAX_TURNS = "2"
+uv run python -m agent</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>rm 'chat.py'
+rm 'debug_me.py'
+...
+you&gt; three
+agent&gt; [mock reply, turn 3] You said: three
+
+you&gt; four
+agent&gt; [mock reply, turn 3] You said: four</code></pre>
+</div>
+  <p><code>git rm</code> מוחק קבצים וגם מכניס את המחיקה ל-<span class="en">staging</span>. הם נשארים בהיסטוריה. <code>debug_me.py</code> עשה את שלו: בצעד 5 בדיקה תיקח את התפקיד שלו.</p>
+  <p><code>python -m agent</code> פירושו "הרץ את ה-<span class="en">package</span> בשם <code>agent</code>", ו-Python מריץ את <code>__main__.py</code> שבו. זה עובד רק מתיקיית הפרויקט, כי משם Python מוצא את <code>agent</code>. ה-<span class="en">mock</span> מספר כמה תורות הוא רואה, ובתור הרביעי הוא עדיין אומר 3: שני תורות קודמים ועוד ההודעה החדשה. החיתוך עובד. צאו עם <code>exit</code>, נקו (<code>Remove-Item Env:CHAT_MAX_TURNS</code>), ושמרו:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git add agent
+git commit -m "Split chat.py into the agent package"</code></pre>
+</div>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>מתקינים את <code>pytest</code></h3>
+  <p>הריצו <code>uv add --dev pytest</code>. הדגל <code>--dev</code> שם את החבילה בקבוצה נפרדת ב-<code>pyproject.toml</code>, <code>[dependency-groups] dev</code>. אלה <strong><span class="en">dev dependencies</span></strong>: כלים שהמפתחים צריכים והסוכן עצמו לא. כשהסוכן ירוץ על שרת, אפשר להשאיר אותם בחוץ (<code>uv sync --no-dev</code>). כל כלי בפרק שומר את ההגדרות שלו באותו קובץ, בטבלה <code>[tool.&lt;name&gt;]</code>, כך שמי שמקבל את הפרויקט מקבל גם את הכללים. הוסיפו בסוף <code>pyproject.toml</code>:</p>
+<div class="codebox">
+  <div class="label"><span>pyproject.toml</span></div>
+<pre><code>[tool.pytest.ini_options]
+# Let the tests import the `agent` package from the project folder.
+pythonpath = ["."]
+testpaths = ["tests"]</code></pre>
+</div>
+  <p>בלי <code>pythonpath</code>, <code>pytest</code> לא מחפש בתיקיית הפרויקט, וכל בדיקה נכשלת ב-<code>ModuleNotFoundError: No module named 'agent'</code>. בדקנו.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>הבדיקה הראשונה</h3>
+  <p>צרו את <code>tests\test_history.py</code>. הבדיקה השנייה בו היא ההבטחה מפרק 1: בדיקה שהייתה תופסת את הבאג.</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_history.py</span></div>
+<pre><code>"""Tests for agent.history."""
+
+from anthropic.types import MessageParam
+
+from agent.history import trim_history
+
+
+def make_conversation(turns: int) -&gt; list[MessageParam]:
+    """Build a fake conversation: question 1, answer 1, question 2, answer 2, ..."""
+    messages: list[MessageParam] = []
+    for number in range(1, turns + 1):
+        messages.append({"role": "user", "content": f"question {number}"})
+        messages.append({"role": "assistant", "content": f"answer {number}"})
+    return messages
+
+
+def test_short_conversation_is_kept_whole():
+    messages = make_conversation(turns=2)
+    assert trim_history(messages, max_turns=3) == messages
+
+
+def test_trim_keeps_the_last_whole_turns():
+    # The test that would have caught the bug from chapter 1.
+    messages = make_conversation(turns=5)
+    trimmed = trim_history(messages, max_turns=3)
+    assert len(trimmed) == 6
+    assert trimmed[0] == {"role": "user", "content": "question 3"}
+    assert trimmed[-1] == {"role": "assistant", "content": "answer 5"}</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run pytest</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>collected 2 items
+
+tests\test_history.py ..                                                 [100%]
+
+============================== 2 passed in 4.16s ==============================</code></pre>
+</div>
+  <p>כל נקודה היא בדיקה שעברה. <code>uv run pytest -v</code> מציג גם את השמות.</p></div>
+
+<div class="step">
+  <h3><span class="step-num">6</span>רואים אותה נכשלת</h3>
+  <p>החזירו את הבאג של פרק 1: ב-<code>agent\history.py</code> שנו את השורה האחרונה ל-<code>return messages[-max_turns:]</code>, שמרו, והריצו <code>uv run pytest</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>tests\test_history.py .F                                                 [100%]
+____________________ test_trim_keeps_the_last_whole_turns _____________________
+...
+&gt;       assert len(trimmed) == 6
+E       AssertionError: assert 3 == 6
+E        +  where 3 = len([{'role': 'assistant', 'content': 'answer 4'}, {'role': 'user', 'content': 'question 5'}, {'role': 'assistant', 'content': 'answer 5'}])
+
+tests\test_history.py:26: AssertionError
+========================= 1 failed, 1 passed in 4.46s =========================</code></pre>
+</div>
+  <p>קוראים כמו <span class="en">traceback</span>: איזו בדיקה נכשלה, באיזו שורה (<code>&gt;</code>), ומה היה בפועל (<code>E</code>). <code>pytest</code> אפילו מראה את הרשימה, ורואים בה את מה שמצאתם בפרק 1 עם ה-<span class="en">debugger</span>: היא מתחילה ב-<code>assistant</code>. הפעם זה לקח ארבע שניות ואפס מחשבה. החזירו את התיקון ושמרו:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git restore agent\history.py
+git add pyproject.toml uv.lock tests
+git commit -m "Add pytest and tests for trim_history"</code></pre>
+</div>
+  <p>בדיקה כזו נקראת <strong><span class="en">regression test</span></strong>: היא שומרת שבאג שתוקן לא יחזור. כלל עבודה טוב: כל תיקון באג מגיע עם בדיקה שנכשלת לפניו ועוברת אחריו.</p>
+</div>
+
+<h2><span class="sec">3.5</span><span class="en">Unit</span>, <span class="en">integration</span>, ו-<span class="en">mocks</span></h2>
+
+<p>הבדיקות ב-<code>test_history.py</code> בודקות פונקציה אחת, לבד. הן <strong><span class="en">unit tests</span></strong>. הן לא יתפסו טעות אחרת: מישהו מוחק את השורה שקוראת ל-<code>trim_history</code> מתוך <code>chat_loop</code>. הפונקציה תקינה, היא פשוט לא נקראת. לזה צריך בדיקה שמריצה כמה חלקים יחד:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>סוג</th><th>מה היא בודקת</th><th>מחיר</th><th>בפרויקט</th></tr>
+  <tr><td><span class="en">Unit</span></td><td>יחידה אחת, לבד</td><td>אלפיות שנייה</td><td><code>test_history.py</code>, <code>test_llm.py</code></td></tr>
+  <tr><td><span class="en">Integration</span></td><td>כמה חלקים שעובדים יחד</td><td>מהירה, כל עוד אין רשת</td><td><code>test_cli.py</code>: הצ'אט, החיתוך והלקוח</td></tr>
+  <tr><td><span class="en">End-to-end</span></td><td>המערכת האמיתית, כולל שירותים חיצוניים</td><td>איטית, עולה כסף, נכשלת כשהרשת נופלת</td><td>אין. את ה-<span class="en">API</span> האמיתי בודקים ביד, לעיתים רחוקות</td></tr>
+</table>
+</div>
+
+<p>בפרויקט בריא רוב הבדיקות הן <span class="en">unit</span>, מעט <span class="en">integration</span>, ומעט מאוד <span class="en">end-to-end</span>. ומה עושים עם החלק שאסור להריץ בבדיקה, ה-<span class="en">API</span>? מחליפים אותו. רכיב מזויף שעומד במקום רכיב אמיתי נקרא <strong><span class="en">test double</span></strong>, ובשפת היומיום <strong><span class="en">mock</span></strong>. ל-<code>MockClient</code> יש כבר כל מה שצריך: הוא חינמי, לא צריך רשת, ותמיד עונה אותו דבר.</p>
+
+<h3>בדיקת <span class="en">integration</span> לצ'אט</h3>
+
+<p><code>chat_loop</code> קוראת מהמקלדת ומדפיסה למסך. ל-<code>pytest</code> יש לזה <strong><span class="en">fixtures</span></strong>: פרמטרים שמוסיפים לפונקציית הבדיקה לפי שם, ו-<code>pytest</code> מעביר אותם לבד. <code>monkeypatch</code> מחליף משהו זמנית, רק לבדיקה הזו. <code>capsys</code> תופס את כל מה שהודפס.</p>
+
+<div class="codebox">
+  <div class="label"><span>tests\test_cli.py</span></div>
+<pre><code>"""Integration tests: the whole chat loop, with the mock client."""
+
+from agent.cli import chat_loop
+from agent.config import Settings
+from agent.llm import MockClient
+
+SETTINGS = Settings(
+    model="test-model", mock=True, agent_name="agent", max_turns=2, api_key=None
+)
+
+
+def type_lines(monkeypatch, *lines):
+    """Make input() return these lines one by one, as if a user typed them."""
+    answers = iter(lines)
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+
+
+def test_a_short_conversation(monkeypatch, capsys):
+    type_lines(monkeypatch, "hello", "how are you", "exit")
+    chat_loop(MockClient(), SETTINGS)
+    output = capsys.readouterr().out
+    assert "agent&gt; [mock reply, turn 1] You said: hello" in output
+    assert "agent&gt; [mock reply, turn 2] You said: how are you" in output
+    assert output.endswith("Bye!\n")
+
+
+def test_long_conversation_is_trimmed(monkeypatch, capsys):
+    type_lines(monkeypatch, "one", "two", "three", "four", "exit")
+    chat_loop(MockClient(), SETTINGS)
+    output = capsys.readouterr().out
+    # max_turns is 2: the model sees two earlier turns plus the new message.
+    assert "[mock reply, turn 3] You said: three" in output
+    assert "[mock reply, turn 3] You said: four" in output</code></pre>
+</div>
+
+<p>הבדיקה השנייה היא הניסוי מצעד 3, בלי ידיים. מחקנו מ-<code>chat_loop</code> את הקריאה ל-<code>trim_history</code>, והיא נכשלה מיד: במקום <code>turn 3</code> הופיע <code>turn 4</code>.</p>
+
+<h3>לבדוק את <code>ClaudeClient</code> בלי לשלוח כלום</h3>
+
+<p>את <code>ClaudeClient</code> אי אפשר להחליף ב-<code>MockClient</code>, כי הוא עצמו מה שבודקים. אבל אפשר להחליף את מה <em>שהוא</em> משתמש בו: ה-SDK. בשביל זה יש לו הפרמטר <code>sdk</code>. כשמחלקה מקבלת את התלויות שלה מבחוץ במקום ליצור אותן בעצמה, קוראים לזה <strong><span class="en">dependency injection</span></strong>, וזה מה שהופך קוד לניתן לבדיקה. את ה-SDK המזויף נותן <code>unittest.mock.Mock</code>, שמגיע עם Python: אובייקט שמקבל כל קריאה, זוכר אותה, ומחזיר מה שתגידו לו.</p>
+
+<div class="codebox">
+  <div class="label"><span>tests\test_llm.py</span></div>
+<pre><code>"""Tests for agent.llm. None of them talks to the real API."""
+
+from unittest.mock import Mock
+
+from agent.llm import ClaudeClient, MockClient
+
+
+def test_mock_client_repeats_the_last_message():
+    reply = MockClient().reply([{"role": "user", "content": "hello"}])
+    assert reply == "[mock reply, turn 1] You said: hello"
+
+
+def test_claude_client_sends_the_conversation_and_joins_the_text():
+    # A fake SDK client: it records every call and returns what we tell it to.
+    sdk = Mock()
+    sdk.messages.create.return_value = Mock(
+        stop_reason="end_turn",
+        content=[Mock(type="text", text="Hi "), Mock(type="text", text="there")],
+    )
+    client = ClaudeClient("test-model", "Be brief.", sdk=sdk)
+    messages = [{"role": "user", "content": "hello"}]
+
+    assert client.reply(messages) == "Hi there"
+
+    sdk.messages.create.assert_called_once()
+    sent = sdk.messages.create.call_args.kwargs
+    assert sent["model"] == "test-model"
+    assert sent["messages"] == messages</code></pre>
+</div>
+
+<div class="callout warn">
+  <span class="title">מה <span class="en">mock</span> לא מוכיח</span>
+  <p><code>Mock()</code> מסכים לכל דבר. אם תכתבו <code>max_token=16000</code> במקום <code>max_tokens</code>, הבדיקה תעבור וה-<span class="en">API</span> האמיתי ידחה את הבקשה. בדיקה עם <span class="en">mock</span> מוכיחה שהקוד שלכם נכון <em>בהנחה</em> שה-SDK מתנהג כמו שדמיינתם. לכן משלבים: <code>mypy</code> (סעיף 3.7) בודק את השמות מול ה-SDK, וריצה אמיתית אחת ביד בכל פעם שמשנים את הקריאה ל-<span class="en">API</span>.</p>
+</div>
+
+<p><strong>רשת ביטחון.</strong> מה אם מישהו יכתוב בעתיד בדיקה שיוצרת <code>ClaudeClient</code> בלי <code>sdk</code>, ובמחשב שלו יש מפתח אמיתי? צרו את <code>tests\conftest.py</code>. <code>pytest</code> טוען אותו לבד, ו-<code>autouse=True</code> מריץ את ה-<span class="en">fixture</span> לפני כל בדיקה:</p>
+
+<div class="codebox">
+  <div class="label"><span>tests\conftest.py</span></div>
+<pre><code>"""Shared test setup. pytest loads this file by itself, before the tests."""
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def no_real_api(monkeypatch):
+    """Runs before every test: make sure no test can reach the real API by mistake."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:9")</code></pre>
+</div>
+
+<p><code>monkeypatch</code> מחזיר כל שינוי בסוף כל בדיקה, כך שהסביבה שלכם לא נפגעת. <code>ANTHROPIC_BASE_URL</code> אומר ל-SDK לאן לשלוח, ו-<code>127.0.0.1:9</code> היא כתובת במחשב שלכם שאף אחד לא מאזין בה. תראו מה קורה כששולחים אליה בסעיף 3.9. הריצו <code>uv run pytest</code> (שש בדיקות עוברות), ושמרו: <code>git add tests</code> ואז <code>git commit -m "Test the clients and the chat loop with the mock"</code>.</p>
+
+<h2><span class="sec">3.6</span><span class="en">Linting</span> ו-<span class="en">formatting</span> עם <code>ruff</code></h2>
+
+<p><strong><span class="en">Linter</span></strong> קורא את הקוד בלי להריץ אותו ומחפש בעיות: יבוא שלא בשימוש, משתנה שלא הוגדר, תבניות שידועות כמקור לבאגים. <strong><span class="en">Formatter</span></strong> מסדר את הצורה: רווחים, שבירת שורות, מירכאות. <code>ruff</code> עושה את שניהם, ומהר מאוד.</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv add --dev ruff
+uv run ruff check</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>F401 [*] `os` imported but unused
+ --&gt; agent\cli.py:3:8
+  |
+3 | import os
+  |        ^^
+help: Remove unused import: `os`
+
+Found 1 error.
+[*] 1 fixable with `--fix`.</code></pre>
+</div>
+
+<p>הוא צודק. כשהעברתם קוד מ-<code>chat.py</code>, <code>import os</code> הגיע יחד עם השאר, אבל ב-<code>cli.py</code> אין בו שימוש. השארנו אותו בכוונה בסעיף 3.4: זו בדיוק הטעות שמתפספסת ב-<span class="en">refactoring</span>, ושאף אחד לא צריך לחפש בעיניים. <code>F401</code> הוא קוד הכלל, ואפשר לחפש אותו בתיעוד של <code>ruff</code>. הוסיפו ל-<code>pyproject.toml</code> אילו כללים להפעיל, ותנו לו לתקן ולסדר:</p>
+
+<div class="codebox">
+  <div class="label"><span>pyproject.toml</span></div>
+<pre><code>[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# E/F: errors and likely bugs, I: import order, B: common bug patterns, UP: modern syntax
+select = ["E", "F", "I", "B", "UP"]</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>PS&gt; uv run ruff check --fix
+Found 1 error (1 fixed, 0 remaining).
+PS&gt; uv run ruff format
+2 files reformatted, 10 files left unchanged</code></pre>
+</div>
+
+<p><code>--fix</code> מחק את היבוא. <code>ruff format</code> שינה שני קבצים: ב-<code>history.py</code> הוסיף רווח, <code>messages[-max_turns * 2 :]</code>, וב-<code>test_cli.py</code> איחד את <code>SETTINGS</code> לשורה אחת, כי היא נכנסת ב-100 תווים. אולי <code>2 :</code> נראה לכם מוזר. זה לא משנה: הוויכוח על צורה נגמר. כולם בצוות מריצים את אותו <span class="en">formatter</span>, ולכן ב-<span class="en">diff</span> של <span class="en">pull request</span> יש רק שינויים אמיתיים.</p>
+
+<p>כדאי גם להתקין ב-VS Code את התוסף <span class="en">Ruff</span> (של Astral): הוא מסמן הפרות בזמן ההקלדה, וכ-<span class="en">Default Formatter</span> עם <span class="en">Format On Save</span> הוא מסדר בכל שמירה. אחרי שינוי אוטומטי בקוד מריצים את הבדיקות (<code>uv run pytest</code>), ואז <code>git add -A</code> ו-<code>git commit -m "Add ruff, remove an unused import, format the code"</code>. <code>git add -A</code> מכניס את כל השינויים בתיקייה, כולל מחיקות. זה בטוח רק כי <code>.gitignore</code> שלכם טוב. הסתכלו ב-<code>git status</code> לפני, אם אתם לא בטוחים.</p>
+
+<h2><span class="sec">3.7</span><span class="en">Type hints</span> ו-<code>mypy</code></h2>
+
+<p><strong><span class="en">Type hint</span></strong> אומר איזה סוג ערך צפוי: <code>max_turns: int</code>, <code>api_key: str | None</code> (מחרוזת או כלום), <code>-&gt; list[MessageParam]</code> (מחזירה רשימת הודעות). Python עצמו מתעלם מהם בזמן ריצה. מי שקורא אותם הוא אדם, ה-<span class="en">IDE</span> (השלמה אוטומטית, קווים אדומים), ו-<strong><span class="en">type checker</span></strong>: כלי שבודק שכל הקוד מסכים עם הסימונים.</p>
+
+<p>שימו לב ל-<code>ChatClient</code> ב-<code>llm.py</code>. הוא <code>Protocol</code>: לא מחלקה שיורשים ממנה, אלא תיאור של צורה. "כל דבר עם מתודה <code>reply</code> שמקבלת הודעות ומחזירה מחרוזת". <code>BrokenClient</code> שתכתבו בסעיף 3.8 יתאים לו בלי לדעת שהוא קיים.</p>
+
+<p>התקינו (<code>uv add --dev mypy</code>), והוסיפו ל-<code>pyproject.toml</code> מצב קפדני. בלעדיו <code>mypy</code> מדלג על פונקציות בלי סימונים, ושם בדיוק מסתתרים באגים:</p>
+
+<div class="codebox">
+  <div class="label"><span>pyproject.toml</span></div>
+<pre><code>[tool.mypy]
+# Every function in the agent package must say what it takes and what it returns.
+strict = true</code></pre>
+</div>
+
+<p>הריצו <code>uv run mypy agent</code>. התשובה צריכה להיות <code>Success: no issues found in 6 source files</code>. עכשיו ניסוי. ב-<code>cli.py</code>, שנו <code>client.reply(messages)</code> ל-<code>client.reply(user_text)</code>, טעות הקלדה סבירה לגמרי, והריצו את שלושת הכלים:</p>
+
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>PS&gt; uv run mypy agent
+agent\cli.py:50: error: Argument 1 to "reply" of "ChatClient" has incompatible type "str"; expected "list[UserMessageParam | AssistantMessageParam | SystemMessageParam]"  [arg-type]
+Found 1 error in 1 file (checked 6 source files)
+PS&gt; uv run ruff check
+All checks passed!
+PS&gt; uv run pytest
+FAILED tests/test_cli.py::test_a_short_conversation - TypeError: string indic...
+FAILED tests/test_cli.py::test_long_conversation_is_trimmed - TypeError: stri...
+2 failed, 4 passed in 4.94s</code></pre>
+</div>
+
+<p><code>ruff</code> לא רואה כלום, כי מבחינת צורה הקוד תקין. <code>mypy</code> מצביע על השורה המדויקת בלי להריץ דבר. הבדיקות נכשלות עם שגיאה שצריך לחקור, וגם זה רק כי במקרה יש בדיקה שעוברת בשורה הזו. שלושת הכלים משלימים זה את זה. החזירו (<code>git restore agent\cli.py</code>), ושמרו: <code>git add pyproject.toml uv.lock</code> ואז <code>git commit -m "Add mypy in strict mode"</code>.</p>
+
+<h2><span class="sec">3.8</span>טיפול בשגיאות</h2>
+
+<p>נסו לכתוב בדיקה ל-<code>chat_loop</code> כשה-<span class="en">API</span> לא זמין. הלקוח המזויף יצטרך לזרוק <code>anthropic.APIConnectionError</code>, כי זה מה ש-<code>cli.py</code> תופס. כלומר הבדיקה של הצ'אט צריכה להכיר את החריגות הפנימיות של ה-SDK. וזו הבעיה עצמה: <code>cli.py</code> יודע איך <code>anthropic</code> נכשל, למרות שהוא לא אמור לדעת ש-<code>anthropic</code> קיים. תחליפו ספק, והצ'אט ישתנה.</p>
+
+<p>הפתרון הוא כלל שימושי בכל קוד: <strong>מתרגמים שגיאות בגבול.</strong> הלקוח, שמדבר עם ה-SDK, תופס את החריגות שלו והופך אותן לחריגה אחת משלכם, שהשאר מכירים. ב-<code>llm.py</code>, הוסיפו מעל <code>ChatClient</code> את המחלקה, ועטפו את הקריאה ב-<code>ClaudeClient.reply</code>:</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\llm.py</span></div>
+<pre><code>class LLMError(Exception):
+    """The model could not answer. `fatal` means that trying again will not help."""
+
+    def __init__(self, message: str, fatal: bool = False) -&gt; None:
+        super().__init__(message)
+        self.fatal = fatal
+...
+        try:
+            response = self.sdk.messages.create(
+                model=self.model,
+                max_tokens=16000,
+                system=self.system_prompt,
+                messages=messages,
+            )
+        except anthropic.AuthenticationError as error:
+            raise LLMError(
+                "The API rejected your key. Check ANTHROPIC_API_KEY.", fatal=True
+            ) from error
+        except anthropic.APIConnectionError as error:
+            raise LLMError("Could not reach the API. Check your internet connection.") from error
+        except anthropic.APIStatusError as error:
+            raise LLMError(f"The API returned an error ({error.status_code}).") from error</code></pre>
+</div>
+
+<p>ב-<code>cli.py</code> שלושת ה-<code>except</code> הופכים לאחד. מחקו את <code>import anthropic</code> וייבאו את <code>LLMError</code> מ-<code>agent.llm</code>:</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\cli.py</span></div>
+<pre><code>        try:
+            reply = client.reply(messages)
+        except LLMError as error:
+            print(f"{error}\n")
+            if error.fatal:
+                sys.exit(1)
+            messages.pop()  # forget the message that got no answer
+            continue</code></pre>
+</div>
+
+<p>עכשיו הבדיקה פשוטה. הוסיפו ל-<code>tests\test_cli.py</code> (עם <code>LLMError</code> בייבוא):</p>
+
+<div class="codebox">
+  <div class="label"><span>tests\test_cli.py</span></div>
+<pre><code>class BrokenClient:
+    """A fake client whose every request fails, like an API that cannot be reached."""
+
+    def reply(self, messages):
+        raise LLMError("Could not reach the API. Check your internet connection.")
+
+
+def test_a_failed_request_does_not_end_the_chat(monkeypatch, capsys):
+    type_lines(monkeypatch, "hello", "exit")
+    chat_loop(BrokenClient(), SETTINGS)
+    output = capsys.readouterr().out
+    assert "Could not reach the API." in output
+    assert output.endswith("Bye!\n")</code></pre>
+</div>
+
+<p>ואת התרגום עצמו בודקים ב-<code>tests\test_llm.py</code>, עם <code>Mock</code> שזורק חריגה במקום להחזיר תשובה (<code>side_effect</code>). <code>pytest.raises</code> הפוך מ-<code>assert</code>: הבדיקה עוברת רק אם הקוד שבתוכו זרק את החריגה. הוסיפו לייבוא <code>import anthropic</code>, <code>import pytest</code> ואת <code>LLMError</code>:</p>
+
+<div class="codebox">
+  <div class="label"><span>tests\test_llm.py</span></div>
+<pre><code>def test_connection_error_becomes_llm_error():
+    sdk = Mock()
+    # The SDK raises this when it cannot reach the server. Any stand-in request will do.
+    sdk.messages.create.side_effect = anthropic.APIConnectionError(request=Mock())
+    client = ClaudeClient("test-model", "Be brief.", sdk=sdk)
+
+    with pytest.raises(LLMError) as caught:
+        client.reply([{"role": "user", "content": "hello"}])
+
+    assert "Could not reach the API" in str(caught.value)
+    assert not caught.value.fatal</code></pre>
+</div>
+
+<p>הריצו את ארבעת הכלים (<code>pytest</code>, <code>ruff check</code>, <code>ruff format</code>, <code>mypy agent</code>), ושמרו עם <code>"Turn API errors into LLMError at the client boundary"</code>. הכללים שמאחורי השינוי:</p>
+
+<ul>
+  <li><strong>תופסים חריגה ספציפית, שיודעים מה לעשות איתה.</strong> אף פעם לא <code>except:</code> ריק או <code>except Exception: pass</code>. אלה בולעים גם באגים שלכם, כמו <code>KeyError</code>, והם נעלמים בלי עקבות. באג צריך להפיל את התוכנית, כדי שתראו אותו.</li>
+  <li><strong>הסדר חשוב.</strong> <code>AuthenticationError</code> היא סוג של <code>APIStatusError</code>, ולכן היא באה לפניה. בתרגיל 5 תראו מה קורה אחרת.</li>
+  <li><strong><code>raise ... from error</code></strong> שומר את החריגה המקורית בתוך החדשה (<code>__cause__</code>). המשתמש מקבל משפט ברור, ומי שחוקר מקבל את כל השרשרת.</li>
+  <li><strong>מבדילים בין מה שאפשר לנסות שוב לבין מה שלא.</strong> רשת שנפלה עשויה לחזור, אז הצ'אט ממשיך. מפתח שגוי לא יתקן את עצמו, ולכן <code>fatal=True</code> והתוכנית יוצאת.</li>
+</ul>
+
+<h2><span class="sec">3.9</span><span class="en">Logging</span></h2>
+
+<p>המשתמש רואה עכשיו "Could not reach the API". יפה בשבילו, אבל אם זה קורה למשתמש אמיתי, לכם אין שום מידע. <code>print</code> לא פותר את זה: הוא מלכלך את המסך של המשתמש, אין בו שעה, אי אפשר לכבות אותו בלי לערוך קוד, והוא נעלם כשסוגרים את החלון.</p>
+
+<p>המודול <code>logging</code> של Python פותר את כל אלה. לכל הודעה יש <strong>רמה</strong> (<span class="en">log level</span>): <code>DEBUG</code> לפרטים שעוזרים רק בחקירה, <code>INFO</code> לדברים רגילים שקרו, <code>WARNING</code> לחריג שממשיכים אחריו, <code>ERROR</code> לפעולה שנכשלה. מגדירים פעם אחת, בנקודת הכניסה, מאיזו רמה כותבים ולאן. ב-<code>config.py</code>, הוסיפו ל-<code>Settings</code> שדה אחרון, <code>log_level: str = "INFO"</code>, וב-<code>load_settings</code> את <code>log_level=os.getenv("CHAT_LOG_LEVEL", "INFO").upper()</code>. ב-<code>cli.py</code>:</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\cli.py</span></div>
+<pre><code>import logging
+...
+log = logging.getLogger(__name__)
+
+
+def setup_logging(level: str) -&gt; None:
+    """Send log records to agent.log, so the terminal stays clean for the chat."""
+    logging.basicConfig(
+        filename="agent.log",
+        encoding="utf-8",
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+...
+        messages.append({"role": "user", "content": user_text})
+        log.info("sending %d messages", len(messages))
+
+        try:
+            reply = client.reply(messages)
+        except LLMError as error:
+            # The user gets one clear sentence; the log gets the full traceback.
+            log.exception("request failed")
+...
+    settings = load_settings()  <span class="cm"># in main()</span>
+    setup_logging(settings.log_level)
+    log.info(
+        "starting: mock=%s model=%s max_turns=%d", settings.mock, settings.model, settings.max_turns
+    )</code></pre>
+</div>
+
+<p>וב-<code>llm.py</code>: <code>import logging</code> ו-<code>log = logging.getLogger(__name__)</code> בראש הקובץ, השורה <code>log.debug("mock reply to %d messages", len(messages))</code> בתחילת <code>MockClient.reply</code>, ואחרי ה-<code>try</code> ב-<code>ClaudeClient.reply</code>:</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\llm.py</span></div>
+<pre><code>        log.info(
+            "reply from %s: %d input tokens, %d output tokens",
+            self.model,
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+        )</code></pre>
+</div>
+
+<p>ארבעה הרגלים. <code>getLogger(__name__)</code> נותן לכל מודול <span class="en">logger</span> בשם שלו, ולכן בכל שורה כתוב מאיפה היא באה. <code>basicConfig</code> נקרא פעם אחת, ב-<code>main</code>: מודול מדווח, ונקודת הכניסה מחליטה לאן זה הולך. הערכים עוברים כפרמטרים (<code>"%d messages", len(messages)</code>) ולא ב-<span class="en">f-string</span>, כדי שההודעה תורכב רק אם היא באמת נכתבת. ו-<code>log.exception</code>, בתוך <code>except</code>, כותב ברמת <code>ERROR</code> עם ה-<span class="en">traceback</span> המלא. הוסיפו <code>*.log</code> ל-<code>.gitignore</code>.</p>
+
+<p><strong>רואים את זה עובד.</strong> נגרום לכישלון אמיתי, בלי כסף ובלי מפתח. שלושה משתנים ב-<span class="en">terminal</span>, שגוברים על <code>.env</code> (פרק 1, תרגיל 3): מצב אמיתי, מפתח מזויף, וכתובת שאף אחד לא מאזין בה. שום דבר לא יוצא מהמחשב.</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$env:CHAT_MOCK = "0"
+$env:ANTHROPIC_API_KEY = "not-a-real-key"
+$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:9"
+uv run python -m agent</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Chatting with claude-opus-5-5.
+Type a message and press Enter. Type '/reset' to start over, 'exit' to quit.
+
+you&gt; hello
+Could not reach the API. Check your internet connection.
+
+you&gt; exit
+Bye!</code></pre>
+</div>
+
+<p>התשובה לקחה כעשר שניות. למה? פתחו את <code>agent.log</code> ב-VS Code:</p>
+
+<div class="codebox output">
+  <div class="label"><span>agent.log (shortened)</span></div>
+<pre><code>2026-11-18 12:51:26,502 INFO agent.cli: starting: mock=False model=claude-opus-5-5 max_turns=10
+2026-11-18 12:51:27,451 INFO agent.cli: sending 1 messages
+2026-11-18 12:51:29,567 INFO anthropic._base_client: Retrying request to /v1/messages in 0.474719 seconds
+2026-11-18 12:51:32,077 INFO anthropic._base_client: Retrying request to /v1/messages in 0.800884 seconds
+2026-11-18 12:51:34,919 ERROR agent.cli: request failed
+Traceback (most recent call last):
+  ...
+httpcore2.ConnectError: [WinError 10061] No connection could be made because the target machine actively refused it
+  ...
+anthropic.APIConnectionError: Connection error.
+  ...
+  File "C:\Users\you\projects\my-agent\agent\llm.py", line 54, in reply
+    raise LLMError("Could not reach the API. Check your internet connection.") from error
+agent.llm.LLMError: Could not reach the API. Check your internet connection.</code></pre>
+</div>
+
+<p>הכול כאן. ה-SDK ניסה שלוש פעמים: שורות ה-<code>Retrying</code> הן שלו, כי גם ספריות כותבות <span class="en">logs</span>, ו-<code>basicConfig</code> אוסף גם אותן. השרשרת ש-<code>from error</code> בנה מספרת את הסיפור מלמטה למעלה: <code>LLMError</code> שלכם, שנגרמה מ-<code>APIConnectionError</code> של ה-SDK, שנגרמה מ-<code>WinError 10061</code>, המחשב סירב לחיבור. נקו: <code class="wrap">Remove-Item Env:CHAT_MOCK, Env:ANTHROPIC_API_KEY, Env:ANTHROPIC_BASE_URL</code>.</p>
+
+<div class="callout warn">
+  <span class="title">מה לא כותבים ל-log</span>
+  <p>סודות: מפתחות, סיסמאות, <span class="en">tokens</span> של התחברות. ובזהירות, תוכן של משתמשים: מה שהם כותבים לסוכן שייך להם. ה-<span class="en">log</span> שלנו רושם כמה הודעות נשלחו, לא מה כתוב בהן. נחזור לזה בפרקים 13 ו-14.</p>
+</div>
+
+<h3>סוגרים את הענף</h3>
+
+<p>עדכנו את התיעוד. ב-<code>README.md</code>: פקודת ההרצה היא <code>uv run python -m agent</code>, שני המשתנים החדשים (<code>CHAT_MAX_TURNS</code>, <code>CHAT_LOG_LEVEL</code>) נכנסים לטבלה וגם ל-<code>.env.example</code>, ופרק <code>## Checks</code> מפרט את ארבע הפקודות. ב-<code>CONTRIBUTING.md</code>, צעד 2 של <span class="en">pull request</span> הופך ל"מריצים את הבדיקות ומתקנים כל מה שהן מוצאות; תיקון באג מגיע עם בדיקה". דוגמה מלאה ב-<code>checkpoints\chapter-03</code>. אחר כך:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git add agent .gitignore .env.example
+git commit -m "Log to agent.log, with the full traceback when a request fails"
+git add README.md CONTRIBUTING.md
+git commit -m "Document the package layout and the checks"
+git switch main
+git merge refactor/package
+git push
+git branch -d refactor/package</code></pre>
+</div>
+
+<h2><span class="sec">3.10</span>לקרוא קוד של אחרים</h2>
+
+<p>ביום הראשון בצוות לא תכתבו קוד, תקראו. וגם אחר כך, תקראו הרבה יותר משתכתבו. לקרוא קוד זר מהשורה הראשונה עד האחרונה לא עובד. זה הסדר שעובד:</p>
+<ol>
+  <li><strong>מתחילים מאיך מריצים</strong>: <code>README.md</code>, ואז נקודת הכניסה. אצלכם <code>__main__.py</code>, ומשם <code>main</code>.</li>
+  <li><strong>קוראים את הבדיקות.</strong> בדיקה טובה היא דוגמת שימוש עם התוצאה הצפויה. <code>test_cli.py</code> מסביר את הצ'אט מהר יותר מ-<code>cli.py</code>.</li>
+  <li><strong>עוקבים אחרי מסלול אחד</strong>, למשל "מה קורה כשלוחצים <kbd>Enter</kbd>". ב-VS Code, <kbd>F12</kbd> (<span class="en">Go to Definition</span>) קופץ למקום שבו שם מוגדר, <kbd>Shift</kbd>+<kbd>F12</kbd> מראה איפה משתמשים בו, ו-<kbd>Alt</kbd>+<kbd>←</kbd> חוזר.</li>
+  <li><strong>שואלים את git למה.</strong> <code>git log --oneline -- agent\history.py</code> מראה את ההיסטוריה של קובץ, ו-<code>git blame agent\history.py</code> מראה איזה <span class="en">commit</span> שינה כל שורה. הודעת <span class="en">commit</span> טובה היא התשובה.</li>
+  <li><strong>מריצים ועוצרים.</strong> <span class="en">Breakpoint</span> (פרק 1) מראה את הערכים האמיתיים, ולא את מה שניחשתם.</li>
+</ol>
+
+<p>זה עובד גם על ספריות. הקוד של <code>anthropic</code> נמצא אצלכם, ב-<code>.venv\Lib\site-packages\anthropic</code>, ו-<kbd>F12</kbd> על <code>anthropic.AuthenticationError</code> ב-<code>llm.py</code> לוקח אתכם אליו. כשהתיעוד לא עונה, הקוד תמיד עונה.</p>
+
+<h2><span class="sec">3.11</span>תרגילים</h2>
+
+<p>תרגילים 1 עד 4 נעשים על ענף אחד, <code>test/edge-cases</code>, עם <span class="en">commit</span> בסוף כל תרגיל, ומאוחדים ל-<code>main</code> בסוף תרגיל 4. אחרי כל שינוי הריצו את ארבעת הכלים. פתרונות, כולל הפלטים וההיסטוריה הצפויה, נמצאים <a href="solutions/chapter-03.html">בדף נפרד</a>.</p>
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · בדיקה ל-<code>/reset</code></h3><span class="level">מודרך</span></div>
+  <ol>
+    <li><code>git switch -c test/edge-cases</code></li>
+    <li>ב-<code>tests\test_cli.py</code>, כתבו <code>test_reset_starts_a_new_conversation</code>: המשתמש כותב <code>one</code>, <code>two</code>, <code>/reset</code>, <code>three</code>, <code>exit</code>. בדקו שהודפס <code>Conversation cleared. Starting over.</code> ושהתשובה ל-<code>three</code> אומרת <code>turn 1</code>.</li>
+    <li>ודאו שהיא עוברת. אחר כך שברו את <code>/reset</code> בכוונה: ב-<code>cli.py</code> הפכו את <code>messages.clear()</code> להערה, והריצו.</li>
+    <li><code>git restore agent\cli.py</code>, ו-<span class="en">commit</span>: <code>"Test that /reset starts a new conversation"</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex1">איזה <code>turn</code> הופיע בתשובה ל-<code>three</code> כש-<code>/reset</code> היה שבור, ולמה דווקא המספר הזה?</label>
+  <textarea class="answer" id="n-ex1" data-id="c03-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c03-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · מקרי קצה ב-<code>trim_history</code></h3><span class="level">מודרך</span></div>
+  <p><code>@pytest.mark.parametrize</code> מריץ את אותה בדיקה על הרבה קלטים. הוסיפו ל-<code>tests\test_history.py</code> (עם <code>import pytest</code>):</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_history.py</span></div>
+<pre><code>@pytest.mark.parametrize("turns", [0, 1, 2, 3, 4, 5, 6])
+@pytest.mark.parametrize("max_turns", [1, 2, 3])
+def test_trimmed_history_is_short_and_starts_with_user(turns, max_turns):
+    trimmed = trim_history(make_conversation(turns), max_turns)
+    assert len(trimmed) &lt;= max_turns * 2
+    if trimmed:
+        assert trimmed[0]["role"] == "user"</code></pre>
+</div>
+  <ol>
+    <li>כתבו בעצמכם עוד שתי בדיקות. <code>test_trim_before_the_reply_arrives</code>: ארבעה תורות ועוד שאלה חמישית בלי תשובה, <code>max_turns=2</code>. התוצאה צריכה להתחיל ב-<code>user</code> ולהסתיים ב-<code>question 5</code>. ו-<code>test_zero_turns_is_an_error</code>: <code>max_turns=0</code> זורק <code>ValueError</code> (<code>pytest.raises</code>). לפני שמריצים, נחשו מה הפונקציה מחזירה היום עם <code>max_turns=0</code>.</li>
+    <li>הריצו. כמה בדיקות רצו בקובץ, וכמה נכשלו?</li>
+    <li>תקנו את <code>history.py</code>: אם החיתוך נפל בין שאלה לתשובה שלה, זרקו את התשובה היתומה. <code>max_turns</code> קטן מ-1 זורק <code>ValueError</code> עם הודעה ברורה. <span class="en">Commit</span>: <code>"Make trim_history always start with a user message"</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex2">מה החזירה הפונקציה עם <code>max_turns=0</code>, ולמה? ולמה 21 הבדיקות של <code>parametrize</code> עברו, למרות ששני באגים היו שם?</label>
+  <textarea class="answer" id="n-ex2" data-id="c03-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c03-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · הגדרה שגויה</h3><span class="level mid">בינוני</span></div>
+  <p>הריצו את הסוכן עם <code>$env:CHAT_MAX_TURNS = "ten"</code>. תקבלו <span class="en">traceback</span> של <code>ValueError</code>, שמשתמש לא אמור לראות.</p>
+  <ol>
+    <li>ב-<code>config.py</code>, הגדירו <code>ConfigError(Exception)</code>, ופונקציה <code>read_positive_int(name: str, default: int) -&gt; int</code> שקוראת משתנה סביבה וזורקת <code>ConfigError</code>, עם שם המשתנה והערך השגוי בהודעה, אם הוא לא מספר שלם או קטן מ-1. השתמשו בה ל-<code>max_turns</code>.</li>
+    <li>ב-<code>main</code>, תפסו <code>ConfigError</code>, הדפיסו הודעה ברורה, וצאו עם <code>sys.exit(1)</code>.</li>
+    <li>כתבו <code>tests\test_config.py</code>: ברירת מחדל, ערך תקין, ובדיקה אחת עם <code>parametrize</code> לחמישה ערכים שגויים, למשל <code>"ten"</code>, <code>""</code>, <code>"2.5"</code>, <code>"0"</code>, <code>"-4"</code>. רמזים: <code>monkeypatch.setenv</code>, <code>monkeypatch.delenv</code>, ו-<code>pytest.raises(ConfigError, match="CHAT_MAX_TURNS")</code>.</li>
+    <li><span class="en">Commit</span>: <code>"Report a bad CHAT_MAX_TURNS as a clear configuration error"</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex3">למה כאן התוכנית יוצאת, וכשהרשת נופלת היא ממשיכה? ולמה הבדיקות לא מושפעות מהקובץ <code>.env</code> שלכם?</label>
+  <textarea class="answer" id="n-ex3" data-id="c03-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c03-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · מפתח שנדחה, ו-log שנבדק</h3><span class="level mid">בינוני</span></div>
+  <ol>
+    <li>ב-<code>tests\test_llm.py</code>, כתבו <code>test_rejected_key_is_fatal</code>. ה-SDK המזויף זורק <code class="wrap">anthropic.AuthenticationError("invalid x-api-key", response=Mock(status_code=401), body=None)</code>. בדקו ש-<code>LLMError</code> נזרקה, שהיא <code>fatal</code>, ושה-<code>__cause__</code> שלה הוא ה-<code>AuthenticationError</code> המקורית.</li>
+    <li>כתבו <code>test_token_counts_are_logged</code> עם ה-<span class="en">fixture</span> בשם <code>caplog</code>, שתופס <span class="en">logs</span> כמו ש-<code>capsys</code> תופס הדפסות. התשובה המזויפת צריכה <code>usage=Mock(input_tokens=12, output_tokens=3)</code>. רמז: <code>caplog.set_level(logging.INFO)</code> ו-<code>caplog.text</code>.</li>
+    <li><span class="en">Commit</span>, ואז אחדו: <code>git switch main</code>, <code>git merge test/edge-cases</code>, <code>git push</code>, <code>git branch -d test/edge-cases</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex4">בלי <code>caplog.set_level</code> הבדיקה השנייה נכשלת. למה? (רמז: מי קורא ל-<code>setup_logging</code> בזמן הבדיקה?)</label>
+  <textarea class="answer" id="n-ex4" data-id="c03-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c03-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · לקרוא את ה-SDK</h3><span class="level mid">בינוני</span></div>
+  <p>ענו מתוך הקוד ב-<code>.venv\Lib\site-packages\anthropic</code>, לא מהתיעוד. התחילו ב-<kbd>F12</kbd> מ-<code>llm.py</code>. החיפוש של VS Code מדלג על <code>.venv</code> (היא ב-<code>.gitignore</code>), אז לחיפוש טקסט השתמשו ב-PowerShell, למשל <code class="wrap">Select-String -Path .venv\Lib\site-packages\anthropic\*.py -Pattern "MAX_RETRIES ="</code>.</p>
+  <ol>
+    <li>מאילו מחלקות <code>AuthenticationError</code> יורשת, עד <code>Exception</code>? באיזה קובץ הן מוגדרות?</li>
+    <li>כמה פעמים ה-SDK מנסה שוב כברירת מחדל, ואיפה זה מוגדר? אילו קודי סטטוס של HTTP גורמים לניסיון חוזר? (חפשו את <code>_should_retry</code>.)</li>
+    <li>ניסוי: ב-<code>llm.py</code>, העבירו את <code>except anthropic.APIStatusError</code> לפני <code>except anthropic.AuthenticationError</code>, והריצו את הבדיקות. מי תפס את הטעות? החזירו עם <code>git restore</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex5">התשובות שלכם, ומה הן מסבירות על עשר השניות בסעיף 3.9:</label>
+  <textarea class="answer" id="n-ex5" data-id="c03-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c03-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · <code>/history</code>, הפעם עם בדיקה קודם</h3><span class="level open">פתוח</span></div>
+  <p>בפרק 2 ראיתם ב-<span class="en">review</span> פקודת <code>/history</code> שסופרת הודעות במקום תורות. הפעם תבנו אותה נכון, בסדר הפוך מהרגיל: קודם בדיקה, ורק אחר כך קוד. לשיטה הזו קוראים <strong><span class="en">test-driven development</span></strong> (<span class="en">TDD</span>).</p>
+  <p>על ענף <code>feature/history-command</code>: כתבו ב-<code>test_cli.py</code> בדיקה ל-<code>/history</code>, הריצו, ו<strong>ודאו שהיא נכשלת מהסיבה הנכונה</strong> (ולא בגלל שגיאת הקלדה בבדיקה). רק אז ממשו ב-<code>cli.py</code>. אתם מחליטים מה בדיוק הפקודה מדפיסה, ואם המספר הוא לפני החיתוך או אחריו. עדכנו את שורת העזרה ואת טבלת הפקודות ב-<code>README.md</code>, ובסוף <span class="en">commit</span>, <code>merge</code> ו-<code>push</code>.</p>
+  <label class="answer-label" for="n-ex6">איך נכשלה הבדיקה לפני המימוש? מה החלטתם לגבי החיתוך, ואיך הבדיקה מתעדת את ההחלטה?</label>
+  <textarea class="answer" id="n-ex6" data-id="c03-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c03-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<h2><span class="sec">3.12</span>בדקו את עצמכם</h2>
+
+<p>סמנו רק מה שאתם מסוגלים להסביר בקול רם לאדם אחר, בלי להציץ בפרק.</p>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c03-chk1"><span>אני יודע/ת להסביר למה פיצלנו את <code>chat.py</code>, ומה התפקיד של <code>__init__.py</code> ושל <code>__main__.py</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c03-chk2"><span>אני יודע/ת איך <code>pytest</code> מוצא בדיקות, ולקרוא פלט של בדיקה שנכשלה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c03-chk3"><span>אני יודע/ת להסביר את ההבדל בין <span class="en">unit</span>, <span class="en">integration</span> ו-<span class="en">end-to-end</span>, עם דוגמה מהפרויקט לכל אחת.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c03-chk4"><span>אני יודע/ת מה <span class="en">mock</span> מוכיח ומה לא, ולמה אף בדיקה לא פונה ל-<span class="en">API</span> האמיתי.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c03-chk5"><span>אני יודע/ת להשתמש ב-<code>monkeypatch</code>, <code>capsys</code>, <code>caplog</code>, <code>parametrize</code> ו-<code>pytest.raises</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c03-chk6"><span>אני יודע/ת מה עושים <code>ruff check</code>, <code>ruff format</code> ו-<code>mypy</code>, ומה כל אחד מהם לא רואה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c03-chk7"><span>אני יודע/ת להסביר "מתרגמים שגיאות בגבול", ומה <code>raise ... from error</code> נותן.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c03-chk8"><span>אני יודע/ת למה <code>logging</code> ולא <code>print</code>, מה הרמות, ומה אסור לכתוב ל-<span class="en">log</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c03-chk9"><span>יש לי סדר עבודה לקריאת קוד זר, ואני יודע/ת לקפוץ לקוד של ספרייה.</span></label></li>
+</ul>
+
+<h2><span class="sec">3.13</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td><code>ModuleNotFoundError: No module named 'agent'</code> ב-<code>pytest</code></td><td><code>pytest</code> לא מחפש בתיקיית הפרויקט</td><td><code>pythonpath = ["."]</code> ב-<code>[tool.pytest.ini_options]</code> (צעד 4). ב-<code>python -m agent</code>: הריצו מתיקיית הפרויקט</td></tr>
+  <tr><td><code>collected 0 items</code>, או שבדיקה חדשה לא רצה</td><td>שם הקובץ או הפונקציה לא מתחיל ב-<code>test_</code></td><td>שנו את השם. <code>uv run pytest -v</code> מראה מה רץ</td></tr>
+  <tr><td><code>OSError: pytest: reading from stdin while output is captured!</code></td><td>בדיקה הריצה את <code>chat_loop</code> בלי להחליף את <code>input</code></td><td>קראו ל-<code>type_lines(monkeypatch, ...)</code> קודם</td></tr>
+  <tr><td><code>StopIteration</code> בבדיקה של הצ'אט</td><td>נגמרו השורות ב-<code>type_lines</code>, והלולאה עוד מחכה לקלט</td><td>סיימו את הרשימה ב-<code>"exit"</code></td></tr>
+  <tr><td>VS Code מסדר את הקוד אחרת מ-<code>ruff format</code></td><td><span class="en">formatter</span> אחר מוגדר בעורך</td><td>תוסף <span class="en">Ruff</span> כ-<span class="en">Default Formatter</span> (סעיף 3.6)</td></tr>
+  <tr><td><code>agent.log</code> מופיע ב-<code>git status</code></td><td>חסר כלל ב-<code>.gitignore</code></td><td>הוסיפו <code>*.log</code></td></tr>
+</table>
+</div>
+
+<h2><span class="sec">3.14</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>package / module</dt><dd>תיקייה עם <code>__init__.py</code> / קובץ <code>.py</code> אחד. מהן מייבאים.</dd>
+  <dt>refactoring</dt><dd>שינוי של מבנה הקוד בלי לשנות את מה שהוא עושה.</dd>
+  <dt>test / assertion</dt><dd>פונקציה שמריצה קוד ובודקת תוצאה / התנאי שנבדק (<code>assert</code>).</dd>
+  <dt>unit / integration / e2e</dt><dd>בדיקה של יחידה אחת לבד / של כמה חלקים יחד / של כל המערכת האמיתית, כולל שירותים חיצוניים.</dd>
+  <dt>regression test</dt><dd>בדיקה ששומרת שבאג שתוקן לא יחזור.</dd>
+  <dt>fixture</dt><dd>משאב ש-pytest מכין לבדיקה לפי שם הפרמטר, כמו <code>monkeypatch</code> או <code>capsys</code>.</dd>
+  <dt>test double / mock</dt><dd>רכיב מזויף שעומד במקום רכיב אמיתי בבדיקה.</dd>
+  <dt>dependency injection</dt><dd>מחלקה מקבלת מבחוץ את מה שהיא תלויה בו, ולכן אפשר להחליף אותו.</dd>
+  <dt>TDD</dt><dd>כותבים בדיקה שנכשלת, ורק אז את הקוד שמעביר אותה.</dd>
+  <dt>linter / formatter</dt><dd>כלי שמוצא בעיות בקוד בלי להריץ אותו / כלי שמסדר את צורת הקוד.</dd>
+  <dt>type hint / type checker</dt><dd>סימון של סוג הערך הצפוי / כלי (<code>mypy</code>) שבודק שהקוד מסכים עם הסימונים.</dd>
+  <dt>dev dependency</dt><dd>חבילה שצריך רק בפיתוח, כמו <code>pytest</code>, ולא בזמן ריצה.</dd>
+  <dt>exception chaining</dt><dd><code>raise ... from error</code>: חריגה חדשה ששומרת את המקורית כסיבה.</dd>
+  <dt>log level</dt><dd>חומרה של הודעת log: <code>DEBUG</code>, <code>INFO</code>, <code>WARNING</code>, <code>ERROR</code>.</dd>
+</dl>
+
+<h2><span class="sec">3.15</span>מה הלאה</h2>
+
+<p>הפרויקט בודק את עצמו בכמה שניות, ומספר לכם מה קרה כשמשהו נכשל. אבל הסתכלו שוב על ה-<span class="en">log</span> מסעיף 3.9: <code>127.0.0.1:9</code>, <code>WinError 10061</code>, "<span class="en">Retrying request to /v1/messages</span>". מה זו הכתובת הזו, מה זה <code>/v1/messages</code>, ומה בדיוק ה-SDK שולח כשהוא לא נכשל? עבדתם עם ה-<span class="en">API</span> שלושה פרקים, ועוד לא ראיתם אף בקשה.</p>
+
+<p>את זה פותח <strong>פרק 4: איך הרשת עובדת</strong>. ובפרק 5, כשהסוכן יקבל <span class="en">API</span> משלו, הבדיקות שכתבתם כאן ישמרו עליו בזמן שהוא משנה צורה.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-03</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים, בלי <code>.git</code>. ההיסטוריה הצפויה נמצאת <a href="solutions/chapter-03.html">בדף הפתרונות</a>. העתיקו אותו לתיקייה ריקה, הריצו <code>uv sync</code> ו-<code>uv run pytest</code>: 42 בדיקות צריכות לעבור.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-03.html">פתרונות לפרק 3</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

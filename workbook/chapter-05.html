@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 5 · APIs | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="05">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 5 · APIs</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 5 מתוך 21</div>
+  <h1>APIs</h1>
+  <p class="lead">איך הסוכן מפסיק להיות תוכנית שרק אתם מריצים, והופך לשירות שכל תוכנית, וכל דפדפן, יכולים לדבר איתו.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>להסביר מה זה <span class="en">API</span>, ולתכנן אחד בסגנון <span class="en">REST</span>: משאבים, <span class="en">methods</span> ו-<span class="en">status codes</span>.</li>
+    <li>לבנות שירות עם FastAPI ולהריץ אותו עם <code>uvicorn</code>.</li>
+    <li>להגדיר מה נכנס ומה יוצא עם <span class="en">schemas</span> של Pydantic, ולקבל בדיקת קלט ותיעוד בחינם.</li>
+    <li>להגן על <span class="en">endpoint</span> עם <span class="en">API key</span>, ולהסביר מה זה <span class="en">JWT</span> ומתי משתמשים בו.</li>
+    <li>לבדוק <span class="en">API</span> עם <code>TestClient</code>, ולקרוא ל-<span class="en">API</span> של מישהו אחר כמו שצריך.</li>
+    <li>להסביר מה זה <span class="en">webhook</span>, ולמה צריך לאמת אותו.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> ארבע עד חמש שעות, כולל התרגילים. <strong>מה צריך:</strong> הפרויקט מסוף פרק 4, ודפדפן. אין צורך במפתח של Anthropic: הכול רץ במצב <span class="en">mock</span>. רק דף ה-<span class="en">Swagger</span> בסעיף 5.7 צריך אינטרנט.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.1</span>הבעיה: סוכן שרק אתם יכולים לדבר איתו</h2>
+
+<p>חברה שבונה אתר שואלת: "אפשר לשים את הסוכן שלך באתר שלי?". היום התשובה היא לא. הסוכן הוא לולאה שקוראת <code>input()</code> ומדפיסה ל-<span class="en">terminal</span>. כדי לדבר איתו מתוכנית אחרת, היא הייתה צריכה לייבא את <code>agent.cli</code> ולזייף הקלדה, כמו שהבדיקות בפרק 3 עושות עם <code>monkeypatch</code>. ומי שאינו כותב Python בכלל לא יכול לדבר איתו.</p>
+
+<p>ויש עוד שתי בעיות שאתם כבר מכירים. עברית ב-<span class="en">terminal</span> מתהפכת (הבטחנו בפרק 1 ממשק שבו היא עובדת). ובסוף פרק 4 ראיתם שרת שמחליט מה לענות עם <code>if</code> על ה-<span class="en">path</span>: עשרה <span class="en">paths</span>, בדיקת קלט ומפתח יהפכו אותו לגוש שאי אפשר לתחזק.</p>
+
+<p>הפתרון לשלושתן הוא אותו דבר: לתת לסוכן <strong><span class="en">API</span></strong> (<span class="en">Application Programming Interface</span>), דלת שתוכניות אחרות נכנסות בה. בפרק 4 הייתם ה-<span class="en">client</span> של ה-<span class="en">API</span> של Anthropic. בפרק הזה תהיו ה-<span class="en">server</span>.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.2</span>המפה: ליבה אחת, כמה דלתות</h2>
+
+<div class="diagram">
+  <div class="flow">
+    <div class="layer l4">
+      <div class="name">clients</div>
+      <div class="what">דף הצ'אט בדפדפן, <code>curl.exe</code>, Swagger, תוכנית של מישהו אחר</div>
+    </div>
+    <div class="hop">&rarr;<b>HTTP + JSON</b></div>
+    <div class="layer l3">
+      <div class="name">agent/api.py (FastAPI)</div>
+      <div class="what">בודק מפתח, בודק שהקלט תקין, בוחר <span class="en">endpoint</span>, מחזיר <span class="en">status code</span></div>
+    </div>
+    <div class="hop">&rarr;</div>
+    <div class="layer l2">
+      <div class="name">agent/conversations.py</div>
+      <div class="what">הליבה: שיחות לפי מזהה, שליחה, קיצוץ היסטוריה</div>
+    </div>
+    <div class="hop">&rarr;</div>
+    <div class="layer">
+      <div class="name">ChatClient</div>
+      <div class="what"><code>MockClient</code> או <code>ClaudeClient</code></div>
+    </div>
+  </div>
+  <div class="flow steps">
+    <div class="layer l4"><div class="name">agent/cli.py</div><div class="what">ה-<span class="en">terminal</span> נשאר, ומדבר עם אותה ליבה ישירות, בלי <span class="en">HTTP</span></div></div>
+  </div>
+  <div class="caption">ה-<span class="en">API</span> הוא שכבה דקה. כל ההיגיון בליבה, כך שה-<span class="en">terminal</span> והרשת מתנהגים אותו דבר.</div>
+</div>
+
+<p>שימו לב לחלוקה. <code>api.py</code> לא יודע איך מקצצים היסטוריה, ו-<code>conversations.py</code> לא יודע מה זה <span class="en">HTTP</span>. כל אחד מהם אפשר לבדוק לבד, ואפשר להחליף אחד בלי לגעת בשני. זה מה שיאפשר בפרק 6 להעביר את השיחות לבסיס נתונים בלי לשנות את ה-<span class="en">API</span>.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.3</span>מה זה <span class="en">API</span>, ומה זה <span class="en">REST</span></h2>
+
+<p><span class="en">API</span> הוא <strong>חוזה</strong>: לאיזו כתובת שולחים, מה שולחים, ומה מקבלים בחזרה, כולל מה קורה כשמשהו לא בסדר. מי שקורא ל-<span class="en">API</span> שלכם לא רואה את הקוד שלכם, ולא אמור לראות. הוא סומך על החוזה. לכן הכלל הראשון: מותר לשנות כל דבר <em>מאחורי</em> החוזה, ואסור לשבור את החוזה עצמו בלי להודיע. שדה שנעלם מתשובה שובר את כל מי שקרא אותו.</p>
+
+<p><strong><span class="en">REST</span></strong> הוא הסגנון הנפוץ לחוזים כאלה מעל <span class="en">HTTP</span>. הוא לא תקן עם חוקים מדויקים, אלא כמה הרגלים:</p>
+<ul>
+  <li><strong>ה-<span class="en">URL</span> הוא שם עצם</strong>, משאב (<span class="en">resource</span>): <code>/conversations/42</code>, ולא <code>/getConversation?id=42</code>.</li>
+  <li><strong>ה-<span class="en">method</span> הוא הפועל</strong>: <code>GET</code> קורא, <code>POST</code> יוצר או שולח, <code>DELETE</code> מוחק (הטבלה מסעיף 4.5).</li>
+  <li><strong>ה-<span class="en">status code</span> אומר מה קרה</strong>, וה-<span class="en">body</span> ב-<span class="en">JSON</span> מוסיף פרטים.</li>
+  <li><strong>כל בקשה עומדת בפני עצמה</strong> (<span class="en">stateless</span>): השרת לא זוכר "מי דיבר איתי קודם". מה שצריך, הבקשה מביאה איתה.</li>
+</ul>
+
+<p>הנקודה האחרונה חשובה לסוכן. ב-<span class="en">terminal</span> יש שיחה אחת, והיא חיה במשתנה. בשרת מדברים איתו הרבה לקוחות בבת אחת, ולכן לכל שיחה יש <strong>מזהה</strong> (<code>conversation_id</code>), והלקוח שולח אותו בכל הודעה. זה החוזה שתבנו:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th><span class="en">Endpoint</span></th><th>מה הוא עושה</th><th>תשובות אפשריות</th></tr>
+  <tr><td><code>GET /health</code></td><td>"אני חי". בלי מפתח, כדי שגם מערכות ניטור יוכלו לשאול</td><td><code>200</code></td></tr>
+  <tr><td><code>POST /chat</code></td><td>שולח הודעה. בלי <code>conversation_id</code> נפתחת שיחה חדשה, והמזהה חוזר בתשובה</td><td><code>200</code>, <code>401</code>, <code>404</code>, <code>422</code>, <code>502</code></td></tr>
+  <tr><td><code>GET /conversations/{id}</code></td><td>ההודעות של שיחה (תרגיל 3)</td><td><code>200</code>, <code>401</code>, <code>404</code></td></tr>
+  <tr><td><code>DELETE /conversations/{id}</code></td><td>שוכח שיחה, הגרסה של <code>/reset</code> (תרגיל 4)</td><td><code>204</code>, <code>401</code>, <code>404</code></td></tr>
+</table>
+</div>
+
+<p>שני קודים חדשים כאן. <code>422 Unprocessable Entity</code>: ה-<span class="en">JSON</span> תקין, אבל התוכן לא מתאים לחוזה (שדה חסר, הודעה ריקה). <code>502 Bad Gateway</code>: השרת שלכם בסדר, אבל שירות <em>שהוא</em> תלוי בו, כאן Claude, נכשל. ההבחנה עוזרת למי שקורא: <code>4xx</code> תקנו את הבקשה, <code>502</code> לא אתם ולא אנחנו, נסו שוב בעוד רגע.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.4</span>ליבה אחת: מוציאים את השיחה מה-<span class="en">CLI</span></h2>
+
+<p>היום הרשימה <code>messages</code> חיה בתוך <code>chat_loop</code>. שרת לא יכול להשתמש בלולאה שקוראת <code>input()</code>, ולכן קודם מוציאים את השיחה למודול משלה. זה <span class="en">refactoring</span>: שינוי מבנה בלי שינוי התנהגות, והבדיקות מפרק 3 הן שיגידו אם הצלחתם. ענף חדש:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects\my-agent
+git switch main
+git pull
+git switch -c feature/api</code></pre>
+</div>
+
+<div class="codebox">
+  <div class="label"><span>agent\conversations.py</span></div>
+<pre><code>"""The core of the agent: conversations and their messages.
+
+The terminal chat and the HTTP API both use this module, so they behave the same.
+Everything lives in memory: when the process stops, every conversation is gone.
+"""
+
+import logging
+import uuid
+
+from anthropic.types import MessageParam
+
+from agent.history import trim_history
+from agent.llm import ChatClient, LLMError
+
+log = logging.getLogger(__name__)
+
+
+class ConversationNotFound(Exception):
+    """No conversation has this id (maybe the server restarted)."""
+
+
+class Conversations:
+    """Every open conversation, by id, and the one way to add a message to it."""
+
+    def __init__(self, client: ChatClient, max_turns: int) -&gt; None:
+        self.client = client
+        self.max_turns = max_turns
+        self._messages: dict[str, list[MessageParam]] = {}
+
+    def start(self) -&gt; str:
+        """Open a new, empty conversation and return its id."""
+        conversation_id = uuid.uuid4().hex
+        self._messages[conversation_id] = []
+        return conversation_id
+
+    def messages(self, conversation_id: str) -&gt; list[MessageParam]:
+        """The messages the agent still remembers in this conversation."""
+        if conversation_id not in self._messages:
+            raise ConversationNotFound(conversation_id)
+        return self._messages[conversation_id]
+
+    def send(self, conversation_id: str, text: str) -&gt; str:
+        """Add the user's message, get the model's reply, and remember both."""
+        messages = self.messages(conversation_id)
+        messages.append({"role": "user", "content": text})
+        log.info("sending %d messages", len(messages))
+        try:
+            reply = self.client.reply(messages)
+        except LLMError:
+            messages.pop()  # forget the message that got no answer
+            raise
+        messages.append({"role": "assistant", "content": reply})
+        # Keep only the last turns, so long chats do not get slow and expensive.
+        self._messages[conversation_id] = trim_history(messages, self.max_turns)
+        return reply
+
+    def reset(self, conversation_id: str) -&gt; None:
+        """Forget every message in this conversation, but keep the conversation."""
+        self.messages(conversation_id).clear()</code></pre>
+</div>
+
+<p>הקוד של <code>send</code> מוכר: הוא עבר כמעט כמו שהוא מ-<code>chat_loop</code>. מה שחדש הוא המילון <code>_messages</code>, ממזהה לרשימה, והמזהה עצמו: <code>uuid4().hex</code> הוא 32 תווים אקראיים, כך שאי אפשר לנחש מזהה של שיחה של מישהו אחר. ב-<code>cli.py</code>, מחקו את הייבוא של <code>MessageParam</code> ושל <code>trim_history</code>, ייבאו את <code>Conversations</code>, והחליפו את גוף הלולאה:</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\cli.py (the changed part of chat_loop)</span></div>
+<pre><code>    conversations = Conversations(client, settings.max_turns)
+    conversation_id = conversations.start()  # the terminal holds one conversation
+    ...
+        if user_text == "/reset":
+            # Forget the whole conversation and start a new one.
+            conversations.reset(conversation_id)
+            ...
+        if user_text == "/history":
+            # One turn is a question and its answer: two messages.
+            print(f"{len(conversations.messages(conversation_id)) // 2} turns in memory.\n")
+            continue
+
+        try:
+            reply = conversations.send(conversation_id, user_text)
+        except LLMError as error:
+            # The user gets one clear sentence; the log gets the full traceback.
+            log.exception("request failed")
+            print(f"{error}\n")
+            if error.fatal:
+                sys.exit(1)
+            continue
+
+        console.print(f"{settings.agent_name}&gt; {reply}\n", style="cyan", markup=False)</code></pre>
+</div>
+
+<p>הריצו <code>uv run pytest</code>. התוצאה, <code>42 passed</code>, היא בדיוק מה שהבטחנו בפרק 3: אף בדיקה לא השתנתה, ובכל זאת הן בדקו את המבנה החדש מקצה לקצה, כולל <code>/reset</code>, <code>/history</code> והקיצוץ. הריצו גם <code>ruff check</code> ו-<code>mypy agent scripts</code>, ושמרו: <code>git add agent</code>, <code>git commit -m "Move conversations into a core that the CLI uses"</code>.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.5</span><span class="en">FastAPI</span> ו-<code>uvicorn</code>: <span class="en">endpoint</span> ראשון</h2>
+
+<p>שתי חבילות, שני תפקידים. <strong>FastAPI</strong> היא ה-<span class="en">framework</span>: אתם כותבים פונקציות ומסמנים לאיזה <span class="en">method</span> ו-<span class="en">path</span> כל אחת עונה, והיא עושה את כל השאר. <strong><code>uvicorn</code></strong> הוא השרת: הוא מאזין על ה-<span class="en">port</span>, קורא את הבקשות, ומעביר אותן לאפליקציה. זה אותו פיצול כמו <code>HTTPServer</code> וה-<span class="en">handler</span> מפרק 4.</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv add fastapi uvicorn</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Installed 5 packages in 226ms
+ + annotated-doc==0.0.7
+ + click==8.5.1
+ + fastapi==0.163.2
+ + starlette==1.10.0
+ + uvicorn==0.54.0</code></pre>
+</div>
+
+<p>רק חמש חבילות, כי FastAPI בנוי על Pydantic, שכבר מותקן: ה-SDK של Anthropic משתמש בו. עכשיו <code>agent\api.py</code>:</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\api.py (first version)</span></div>
+<pre><code>"""The agent as an HTTP service.
+
+Run it with: uv run uvicorn agent.api:create_app --factory
+"""
+
+from fastapi import FastAPI
+
+
+def create_app() -&gt; FastAPI:
+    """Build the app. uvicorn calls this once, when the server starts."""
+    app = FastAPI(title="my-agent", version="0.5.0")
+
+    @app.get("/health")
+    def health() -&gt; dict[str, str]:
+        """Is the service up? Used by people and by monitoring."""
+        return {"status": "ok"}
+
+    return app</code></pre>
+</div>
+
+<p><code>@app.get("/health")</code> הוא כל ה-<code>if</code> של <code>echo_server.py</code>: "בקשת <code>GET</code> ל-<code>/health</code> מגיעה לפונקציה הזו". מה שהפונקציה מחזירה, FastAPI הופך ל-<span class="en">JSON</span> עם <code>200</code>. למה פונקציה שבונה את האפליקציה (<span class="en">factory</span>), ולא משתנה גלובלי? כי בסעיף הבא היא תקרא הגדרות, והבדיקות ירצו לבנות אפליקציה עם הגדרות משלהן. הדגל <code>--factory</code> אומר ל-<code>uvicorn</code> לקרוא לה:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run uvicorn agent.api:create_app --factory</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>INFO:     Started server process [83504]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)</code></pre>
+</div>
+
+<p><code>agent.api:create_app</code> פירושו "המודול <code>agent.api</code>, ובתוכו <code>create_app</code>". ברירות המחדל של <code>uvicorn</code> הן <code>127.0.0.1</code> ו-8000, בדיוק מה שלמדתם לבחור בפרק 4. בחלון שני:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>curl.exe -i http://127.0.0.1:8000/health
+curl.exe -i http://127.0.0.1:8000/nothing-here</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>HTTP/1.1 200 OK
+date: Wed, 18 Nov 2026 11:49:08 GMT
+server: uvicorn
+content-length: 15
+content-type: application/json
+
+{"status":"ok"}
+HTTP/1.1 404 Not Found
+...
+{"detail":"Not Found"}</code></pre>
+</div>
+
+<p>את ה-<code>404</code> לא כתבתם: FastAPI עונה כך לכל <span class="en">path</span> שאין לו פונקציה, ותמיד ב-<span class="en">JSON</span> עם <code>detail</code>. ב-<span class="en">terminal</span> של השרת מופיעה שורת <span class="en">access log</span> לכל בקשה. שמרו: <code>git add pyproject.toml uv.lock agent\api.py</code>, <code>git commit -m "Add a FastAPI app with GET /health"</code>.</p>
+
+<div class="callout warn">
+  <span class="title">שרת אחד על כל <span class="en">port</span>, והפעם Windows אומר לכם</span>
+  <p>בפרק 4 ראיתם ששני שרתי <code>http.server</code> עולים על אותו <span class="en">port</span> בשקט. <code>uvicorn</code> מתנהג אחרת: בדקנו, והוא מסרב לעלות, עם <code>[Errno 10048] error while attempting to bind on address ('127.0.0.1', 8000)</code>. וגם <code>echo_server.py</code> מסרב לעלות כש-<code>uvicorn</code> כבר מאזין. זה טוב: השגיאה אומרת לכם לעצור את השרת הישן (אולי <code>echo_server.py</code> שנשאר מפרק 4). <code class="wrap">Get-NetTCPConnection -LocalPort 8000 -State Listen</code> מראה מי מאזין.</p>
+</div>
+
+<p>ועוד הרגל אחד: <code>uvicorn</code> לא רואה שיניתם קוד. אחרי כל שינוי, <kbd>Ctrl</kbd>+<kbd>C</kbd> והפעלה מחדש. (יש דגל <code>--reload</code> שעושה את זה לבד, ותראו בסעיף 5.10 מה המחיר שלו כאן.)</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.6</span><span class="en">Schemas</span> עם Pydantic: <code>POST /chat</code></h2>
+
+<p>ב-<code>echo_server.py</code> קראתם את ה-<span class="en">body</span> עם <code>json.loads</code> וקיוויתם לטוב. מה אם חסר שדה? מה אם <code>message</code> הוא מספר? כל <span class="en">endpoint</span> היה צריך לבדוק את זה ביד. ב-FastAPI מתארים את הצורה פעם אחת, כ-<strong><span class="en">schema</span></strong>: מחלקה של Pydantic, עם <span class="en">type hints</span> מפרק 3. החליפו את <code>api.py</code> בגרסה הזו:</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\api.py</span></div>
+<pre><code>"""The agent as an HTTP service.
+
+Run it with: uv run uvicorn agent.api:create_app --factory
+"""
+
+import logging
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+from agent.cli import setup_logging
+from agent.config import SYSTEM_PROMPT, ConfigError, Settings, load_settings
+from agent.conversations import ConversationNotFound, Conversations
+from agent.llm import ChatClient, ClaudeClient, LLMError, MockClient
+
+log = logging.getLogger(__name__)
+
+
+<span class="hl">class ChatRequest(BaseModel):</span>
+    """What a client sends to POST /chat."""
+
+    message: str = Field(min_length=1, max_length=4000)
+    conversation_id: str | None = Field(
+        default=None, description="Leave it out to start a new conversation."
+    )
+
+
+<span class="hl">class ChatResponse(BaseModel):</span>
+    """What POST /chat sends back."""
+
+    conversation_id: str
+    reply: str
+    turns: int = Field(description="How many turns the agent remembers in this conversation.")
+
+
+def make_client(settings: Settings) -&gt; ChatClient:
+    """The mock or the real client. A server cannot ask questions, so it refuses to start."""
+    if settings.mock:
+        return MockClient()
+    if not settings.api_key:
+        raise ConfigError("ANTHROPIC_API_KEY is not set (or set CHAT_MOCK=1).")
+    return ClaudeClient(settings.model, SYSTEM_PROMPT)
+
+
+def create_app(settings: Settings | None = None, client: ChatClient | None = None) -&gt; FastAPI:
+    """Build the app. uvicorn calls it with nothing; tests pass their own settings and client."""
+    if settings is None:
+        load_dotenv()
+        settings = load_settings()
+        setup_logging(settings.log_level)
+    conversations = Conversations(client or make_client(settings), settings.max_turns)
+    app = FastAPI(title="my-agent", version="0.5.0")
+
+    @app.get("/health")
+    def health() -&gt; dict[str, str]:
+        """Is the service up? Used by people and by monitoring."""
+        return {"status": "ok"}
+
+    @app.post("/chat")
+    <span class="hl">def chat(request: ChatRequest) -&gt; ChatResponse:</span>
+        """Send one message. The reply comes back with the conversation's id."""
+        conversation_id = request.conversation_id or conversations.start()
+        try:
+            reply = conversations.send(conversation_id, request.message)
+        except ConversationNotFound:
+            raise HTTPException(status_code=404, detail="No conversation with this id.") from None
+        except LLMError as error:
+            log.exception("request failed")
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        turns = len(conversations.messages(conversation_id)) // 2
+        return ChatResponse(conversation_id=conversation_id, reply=reply, turns=turns)
+
+    return app</code></pre>
+</div>
+
+<p>השורה המסומנת האחרונה עושה שלושה דברים. הפרמטר <code>request: ChatRequest</code> אומר ל-FastAPI: קרא את ה-<span class="en">body</span> כ-<span class="en">JSON</span>, ובדוק שהוא מתאים ל-<code>ChatRequest</code>. אם לא, הפונקציה לא נקראת בכלל, והלקוח מקבל <code>422</code> עם פירוט. וה-<code>-&gt; ChatResponse</code> אומר מה יוצא: FastAPI מוודא שהתשובה בצורה הזו, ולא שולח שדות שלא הוגדרו בה. החריגות של הליבה הופכות ל-<span class="en">status codes</span> מהחוזה, וזה כל מה ש-<code>api.py</code> עושה: מתרגם בין <span class="en">HTTP</span> לבין הליבה.</p>
+
+<p>שני דברים נוספים. <code>make_client</code> לא שואל ולא מדפיס כמו בגרסה של ה-<span class="en">CLI</span>: לשרת אין מי שיענה, ולכן הגדרה חסרה עוצרת אותו מיד, בעלייה, ולא בבקשה הראשונה של לקוח. ו-<code>def chat</code> היא פונקציה רגילה ולא <code>async</code>: FastAPI מריץ אותה ב-<span class="en">thread</span> נפרד, כך ששאלה איטית ל-Claude לא תוקעת את כל שאר הלקוחות.</p>
+
+<p>צרו תיקייה <code>examples</code>, ובה (ב-VS Code, כמו בתרגיל 5 בפרק 4) שני קבצים: <code>chat-hello.json</code> עם <code>{"message": "hello"}</code>, ו-<code>chat-typo.json</code> עם <code>{"mesage": "hello"}</code>, טעות כתיב בכוונה. הפעילו מחדש את השרת, ושלחו:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>curl.exe -i http://127.0.0.1:8000/chat -H "Content-Type: application/json" --data-binary "@examples/chat-hello.json"
+curl.exe -i http://127.0.0.1:8000/chat -H "Content-Type: application/json" --data-binary "@examples/chat-typo.json"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>HTTP/1.1 200 OK
+content-type: application/json
+
+{"conversation_id":"6509f65eb3964572bee0803f238d2f4d","reply":"[mock reply, turn 1] You said: hello","turns":1}
+HTTP/1.1 422 Unprocessable Entity
+content-type: application/json
+
+{"detail":[{"type":"missing","loc":["body","message"],"msg":"Field required","input":{"mesage":"hello"}}]}</code></pre>
+</div>
+
+<p>קראו את ה-<code>422</code>: <code>loc</code> אומר איפה (ב-<span class="en">body</span>, השדה <code>message</code>), <code>msg</code> אומר מה (חסר), ו-<code>input</code> מראה מה הגיע. לקוח שקיבל את זה יודע בדיוק מה לתקן, ולא כתבתם שורה אחת של בדיקה. שמרו: <code>git add agent examples</code>, <code>git commit -m "Add POST /chat with request and response schemas"</code>.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.7</span><span class="en">Swagger</span> ו-<span class="en">OpenAPI</span>: ה-<span class="en">API</span> מתאר את עצמו</h2>
+
+<p>פתחו בדפדפן <code>http://127.0.0.1:8000/openapi.json</code>. זה תיאור מלא של ה-<span class="en">API</span> שלכם, שנוצר מהקוד: כל <span class="en">path</span>, כל <span class="en">method</span>, ה-<span class="en">schemas</span> כולל <code>minLength: 1</code> ו-<code>maxLength: 4000</code>, ואפילו ה-<span class="en">docstrings</span> כתיאורים. הפורמט נקרא <strong><span class="en">OpenAPI</span></strong>, והוא תקן: יש כלים שמייצרים ממנו <span class="en">client</span> בכל שפה, ובדיקות שמוודאות שהחוזה לא נשבר.</p>
+
+<p>עכשיו <code>http://127.0.0.1:8000/docs</code>. זה <strong><span class="en">Swagger UI</span></strong>, דף שנבנה מאותו קובץ: כל <span class="en">endpoint</span> בשורה, ולחיצה על <span class="en">Try it out</span> שולחת בקשה אמיתית לשרת שלכם, ומראה את התשובה ואת פקודת ה-<code>curl</code> המקבילה. זו הדרך הנוחה לנסות <span class="en">API</span>, וגם לשלוח עברית בלי להיאבק במירכאות של PowerShell. תעשו סיור מלא בתרגיל 1.</p>
+
+<div class="callout">
+  <span class="title">תיעוד שלא יכול לשקר</span>
+  <p>תיעוד שנכתב ביד מתיישן ביום שמישהו משנה את הקוד ושוכח את המסמך. <code>/docs</code> נבנה מהקוד בכל הפעלה, ולכן תמיד נכון. דף ה-<span class="en">Swagger</span> עצמו טוען את העיצוב שלו מאתר חיצוני (<span class="en">CDN</span>), ולכן בלי אינטרנט הוא יוצא ריק. <code>/openapi.json</code> עובד תמיד.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.8</span>אימות: מי מדבר איתי?</h2>
+
+<p>ברגע שהשרת מדבר עם Claude אמיתי, כל בקשה עולה לכם כסף. כרגע כל מי שמגיע ל-<span class="en">port</span> יכול לשלוח בקשות. <strong>אימות</strong> (<span class="en">authentication</span>) הוא התשובה לשאלה "מי אתה", ו<strong>הרשאה</strong> (<span class="en">authorization</span>) לשאלה "מה מותר לך". בפרק 4 ראיתם את שתיהן בקודים: <code>401</code> לא ברור מי אתם, <code>403</code> ברור, ואסור.</p>
+
+<h3><span class="en">API key</span></h3>
+
+<p>הדרך הפשוטה, ומה ש-Anthropic עושה מולכם: מחרוזת סודית ארוכה, שהלקוח שולח ב-<span class="en">header</span> בכל בקשה. צרו אחת:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python -c "import secrets; print(secrets.token_urlsafe(24))"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>NM1KKOWZFtK651MrGI13zAyDv8HoDB0j</code></pre>
+</div>
+
+<p>הוסיפו ל-<code>.env</code> שורה <code>AGENT_API_KEY=</code> עם הערך שלכם, ול-<code>.env.example</code> את אותה שורה ריקה, עם הערה שמסבירה איך יוצרים מפתח. ב-<code>config.py</code> הוסיפו ל-<code>Settings</code> את <code>agent_api_key: str | None = None</code>, ול-<code>load_settings</code> את <code>agent_api_key=os.getenv("AGENT_API_KEY") or None</code>. ב-<code>api.py</code> נוספים שלושה חלקים (והייבוא שלהם: <code>secrets</code>, <code>Callable</code>, <code>Annotated</code>, <code>Depends</code> ו-<code>APIKeyHeader</code>):</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\api.py (the additions)</span></div>
+<pre><code># Clients prove who they are with this header. auto_error=False: we write the 401 ourselves.
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def key_checker(expected: str) -&gt; Callable[[str | None], None]:
+    """Build the dependency that guards an endpoint: no key, or a wrong key, gets 401."""
+
+    def check(key: Annotated[str | None, Depends(api_key_header)]) -&gt; None:
+        # compare_digest takes the same time for every wrong key, so timing reveals nothing.
+        if key is None or not secrets.compare_digest(key, expected):
+            raise HTTPException(status_code=401, detail="Missing or wrong X-API-Key header.")
+
+    return check
+
+<span class="cm"># in create_app, after the settings are loaded:</span>
+    if not settings.agent_api_key:
+        # Fail closed: a server without a key would let anyone spend your API credit.
+        raise ConfigError("AGENT_API_KEY is not set. Put a long random value in .env.")
+    conversations = Conversations(client or make_client(settings), settings.max_turns)
+    require_key = Depends(key_checker(settings.agent_api_key))
+    ...
+    @app.post("/chat", <span class="hl">dependencies=[require_key]</span>)</code></pre>
+</div>
+
+<p><code>check</code> היא <strong><span class="en">dependency</span></strong>: פונקציה ש-FastAPI מריץ <em>לפני</em> ה-<span class="en">endpoint</span>. אם היא זורקת <code>401</code>, ה-<span class="en">endpoint</span> לא רץ. כך הבדיקה כתובה פעם אחת, וכל <span class="en">endpoint</span> שצריך הגנה מוסיף <code>dependencies=[require_key]</code>. <code>/health</code> נשאר פתוח בכוונה. ושימו לב ל"<span class="en">fail closed</span>": בלי מפתח בהגדרות, השרת לא עולה. האלטרנטיבה, "אין מפתח, אז אין בדיקה", היא הדרך שבה שרתים נשארים פתוחים לעולם בטעות. הפעילו מחדש ושלחו בלי מפתח, ואז עם:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>curl.exe -i http://127.0.0.1:8000/chat -H "Content-Type: application/json" --data-binary "@examples/chat-hello.json"
+$env:AGENT_API_KEY = "NM1KKOWZFtK651MrGI13zAyDv8HoDB0j"   <span class="cm"># your key, for this window only</span>
+curl.exe http://127.0.0.1:8000/chat -H "Content-Type: application/json" -H "X-API-Key: $env:AGENT_API_KEY" --data-binary "@examples/chat-hello.json"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>HTTP/1.1 401 Unauthorized
+...
+{"detail":"Missing or wrong X-API-Key header."}
+{"conversation_id":"8119b64f391142ff8ef28f3c8fcb0998","reply":"[mock reply, turn 1] You said: hello","turns":1}</code></pre>
+</div>
+
+<p>ב-<code>/docs</code> הופיע כפתור <span class="en">Authorize</span> ומנעול ליד <code>/chat</code>: FastAPI יודע שה-<span class="en">endpoint</span> דורש מפתח, ו-<span class="en">Swagger</span> מאפשר להזין אותו פעם אחת. שמרו: <code>git add agent .env.example</code>, <code>git commit -m "Require an API key on POST /chat"</code>.</p>
+
+<h3>מבט ראשון על <span class="en">JWT</span></h3>
+
+<p><span class="en">API key</span> מזהה <em>תוכנית</em>: הוא ארוך-טווח, ויש מעט כאלה. כשיש הרבה <em>אנשים</em> שמתחברים עם סיסמה, נפוץ אחר: <strong><span class="en">JWT</span></strong> (<span class="en">JSON Web Token</span>). אחרי <span class="en">login</span>, השרת נותן ללקוח <span class="en">token</span> בן שלושה חלקים, מופרדים בנקודות:</p>
+
+<div class="codebox output">
+  <div class="label"><span>a real JWT (HS256)</span></div>
+<pre><code>eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJkYW5hIiwiZXhwIjoxNzk1MDAwMDAwfQ.13fhYUzbiJQiaKt9AdSa8zCf8ftCKy9-Nk2gr8FEtjU</code></pre>
+</div>
+
+<p><span class="en">header</span>, <span class="en">payload</span> ו-<span class="en">signature</span>. שני הראשונים הם <span class="en">JSON</span> בקידוד <span class="en">base64</span>, לא בהצפנה. נסו:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python -c "import base64; print(base64.urlsafe_b64decode('eyJzdWIiOiJkYW5hIiwiZXhwIjoxNzk1MDAwMDAwfQ=='))"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>b'{"sub":"dana","exp":1795000000}'</code></pre>
+</div>
+
+<p>כל אחד יכול לקרוא שזה <code>dana</code> ומתי ה-<span class="en">token</span> פג (<code>exp</code>, שניות מ-1970). מה שאי אפשר לעשות בלי הסוד של השרת הוא לשנות את זה: החלק השלישי הוא חתימה על שני הראשונים, ושרת שמקבל <span class="en">token</span> בודק אותה ואת <code>exp</code> לפני שהוא מאמין לו. מכאן שלושה כללים: לא שמים ב-<span class="en">JWT</span> שום דבר סודי, הוא נוסע רק ב-<code>https</code> (ב-<code>Authorization: Bearer ...</code>, כמו המפתח בפרק 4), והוא קצר-חיים. ולא כותבים בעצמכם קוד שבודק חתימות: משתמשים בספרייה מוכרת, כי טעויות כאן הן פרצות אבטחה. בחוברת הסוכן נשאר עם <span class="en">API key</span>, כי הלקוחות שלו הם תוכניות. נחזור לאבטחה בפרק 14.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.9</span>לקרוא ל-<span class="en">API</span> של אחרים, ו-<span class="en">webhooks</span></h2>
+
+<p>הסוכן קורא ל-<span class="en">API</span> של Anthropic דרך SDK, שעושה בשבילכם את העבודה. כשאין SDK, כותבים את הקריאה בעצמכם, ותעשו את זה בתרגיל 5. מה שה-SDK עשה בשקט, ראיתם בפרק 4, ועכשיו זה עליכם:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>הרגל</th><th>למה</th></tr>
+  <tr><td>תמיד <span class="en">timeout</span></td><td>בלעדיו, שרת שלא עונה תוקע אתכם לנצח (תרגיל 2 בפרק 4)</td></tr>
+  <tr><td>לבדוק את ה-<span class="en">status code</span> לפני שקוראים את ה-<span class="en">body</span></td><td>גם שגיאה מגיעה כ-<span class="en">JSON</span> תקין, רק עם תוכן אחר</td></tr>
+  <tr><td>להבדיל בין "אין תשובה" לבין "תשובה עם שגיאה"</td><td>הראשון הוא רשת (<span class="en">DNS</span>, חיבור), השני הוא הבקשה או השרת. תיקון אחר לכל אחד</td></tr>
+  <tr><td>לנסות שוב רק כשזה בטוח</td><td><code>429</code> ו-<code>5xx</code>, עם המתנה שגדלה. לא <code>400</code> ולא <code>401</code>. ו-<code>POST</code> רק אם השרת מבטיח שכפילות לא תזיק (פרק 11)</td></tr>
+  <tr><td>מפתחות ממשתני סביבה</td><td>פרק 1. וגם לא מדפיסים אותם ל-<span class="en">log</span></td></tr>
+</table>
+</div>
+
+<h3><span class="en">Webhooks</span>: ה-<span class="en">API</span> שקורא לכם</h3>
+
+<p>נניח שהסוכן היה מחכה לאישור תשלום משירות חיצוני. אפשר לשאול אותו כל דקה "נו, אושר?" (<span class="en">polling</span>): בזבזני, ותמיד באיחור. ההפך הוא <strong><span class="en">webhook</span></strong>: נותנים לשירות <span class="en">URL</span> שלכם, והוא שולח אליו <code>POST</code> ברגע שמשהו קורה. כלומר אתם כותבים <span class="en">endpoint</span>, והשירות האחר הוא ה-<span class="en">client</span>. ארבעה דברים שכל מי שמקבל <span class="en">webhooks</span> צריך לדעת:</p>
+<ul>
+  <li><strong>כל אחד יכול לשלוח <code>POST</code> לכתובת שלכם.</strong> לכן השולח חותם על ה-<span class="en">body</span> בסוד משותף (<span class="en">HMAC</span>), ושולח את החתימה ב-<span class="en">header</span>. אתם מחשבים אותה מחדש ומשווים, עם <code>hmac.compare_digest</code>, בדיוק כמו המפתח בסעיף 5.8.</li>
+  <li><strong>עונים מהר, עם <code>2xx</code>.</strong> עבודה ארוכה עושים אחר כך (פרק 12). שולח שלא קיבל תשובה בזמן מניח שנכשלתם.</li>
+  <li><strong>אותו אירוע עלול להגיע פעמיים</strong>, כי השולח מנסה שוב. לכל אירוע יש מזהה, ומי שכבר טיפל בו מתעלם (<span class="en">idempotency</span>, פרק 11).</li>
+  <li><strong>צריך כתובת שהשולח מגיע אליה.</strong> <code>127.0.0.1</code> לא מספיק, ולכן <span class="en">webhooks</span> מגיעים לשרתים אמיתיים (פרק 10).</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.10</span>דוגמה מודרכת: דף צ'אט בעברית, ובדיקות ל-<span class="en">API</span></h2>
+
+<p>ההבטחה מפרק 1: ממשק שבו עברית נראית נכון. זה יהיה קובץ <span class="en">HTML</span> אחד, שהשרת מגיש. בלי <span class="en">framework</span>, בלי שלב בנייה, ובלי שום דבר מהאינטרנט, כך שהוא עובד גם בלי חיבור.</p>
+
+<div class="step">
+  <h3><span class="step-num">1</span>הדף</h3>
+  <p>צרו <code>agent\static\chat.html</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\static\chat.html</span></div>
+<pre><code>&lt;!doctype html&gt;
+&lt;html lang="he" dir="rtl"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;my-agent&lt;/title&gt;
+&lt;style&gt;
+  body { font-family: "Segoe UI", Arial, sans-serif; max-width: 720px; margin: 0 auto; padding: 16px; }
+  #log { border: 1px solid #ccc; border-radius: 8px; padding: 8px; height: 60vh; overflow-y: auto; }
+  .msg { margin: 6px 0; padding: 6px 10px; border-radius: 8px; white-space: pre-wrap; }
+  .user { background: #e4f1f2; }
+  .agent { background: #f4f2ec; }
+  .error { background: #fdf3dc; color: #9a5b00; }
+  form { display: flex; gap: 8px; margin-top: 8px; }
+  #text { flex: 1; font: inherit; padding: 6px; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;h1&gt;my-agent&lt;/h1&gt;
+&lt;label&gt;מפתח API: &lt;input id="key" type="password" dir="ltr" autocomplete="off"&gt;&lt;/label&gt;
+&lt;div id="log"&gt;&lt;/div&gt;
+&lt;form id="form"&gt;
+  &lt;input id="text" dir="auto" autocomplete="off" placeholder="כתבו הודעה ולחצו Enter"&gt;
+  &lt;button&gt;שליחה&lt;/button&gt;
+&lt;/form&gt;
+&lt;script&gt;
+  // The conversation id lives only in this variable: reload the page and it is gone.
+  let conversationId = null;
+  const keyInput = document.getElementById("key");
+  try { keyInput.value = localStorage.getItem("agent-key") || ""; } catch (e) { /* no storage */ }
+
+  function show(text, kind) {
+    const div = document.createElement("div");
+    div.className = "msg " + kind;
+    div.dir = "auto";          // each message picks its own direction: Hebrew RTL, English LTR
+    div.textContent = text;    // textContent, never innerHTML: a reply is text, not HTML
+    const log = document.getElementById("log");
+    log.appendChild(div);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  document.getElementById("form").addEventListener("submit", async (event) =&gt; {
+    event.preventDefault();    // stay on the page instead of the browser's own form submit
+    const input = document.getElementById("text");
+    const message = input.value.trim();
+    if (!message) return;
+    input.value = "";
+    show(message, "user");
+    try { localStorage.setItem("agent-key", keyInput.value); } catch (e) { /* no storage */ }
+
+    let response;
+    try {
+      response = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": keyInput.value },
+        body: JSON.stringify({ message: message, conversation_id: conversationId }),
+      });
+    } catch (error) {          // no HTTP answer at all: the server is not running (chapter 4)
+      show("השרת לא עונה. האם uvicorn רץ?", "error");
+      return;
+    }
+    const data = await response.json();
+    if (response.ok) {
+      conversationId = data.conversation_id;
+      show(data.reply, "agent");
+    } else {
+      show(`שגיאה ${response.status}: ${JSON.stringify(data.detail)}`, "error");
+    }
+  });
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre>
+</div>
+  <p>שלושה דברים עושים את העברית נכונה. <code>&lt;meta charset="utf-8"&gt;</code> אומר לדפדפן לקרוא את הבתים כ-<span class="en">UTF-8</span>. <code>dir="rtl"</code> על <code>&lt;html&gt;</code> הופך את כל הדף לימין-לשמאל. ו-<code>dir="auto"</code> על כל הודעה נותן לה לבחור כיוון לפי האות החזקה הראשונה בה, כך שהודעה באנגלית נשארת משמאל לימין. ה-<span class="en">JavaScript</span> עושה מה ש-<code>curl.exe</code> עשה: <code>fetch</code> שולח <code>POST</code> עם אותם <span class="en">headers</span> ואותו <span class="en">JSON</span>. המפתח נשמר ב-<code>localStorage</code> של הדפדפן, כדי שלא תדביקו אותו בכל פעם. זה בסדר בדף שרק אתם משתמשים בו. באתר ציבורי, משתמשים מתחברים עם סיסמה ומקבלים <span class="en">token</span>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>מגישים אותו</h3>
+  <p>ב-<code>api.py</code>, הוסיפו <code>from pathlib import Path</code> ו-<code>from fastapi.responses import FileResponse</code>, קבוע אחרי <code>log</code>, ו-<span class="en">endpoint</span> לפני <code>return app</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\api.py</span></div>
+<pre><code>CHAT_PAGE = Path(__file__).parent / "static" / "chat.html"
+...
+    @app.get("/", include_in_schema=False)
+    def chat_page() -&gt; FileResponse:
+        """The web chat page. It is not part of the API, so Swagger does not list it."""
+        return FileResponse(CHAT_PAGE)</code></pre>
+</div>
+  <p><code>Path(__file__).parent</code> היא התיקייה של <code>api.py</code>, ולא תיקיית העבודה. כך הדף נמצא מכל מקום שממנו מריצים (פרק 1, נתיבים יחסיים).</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>מדברים עם הסוכן בעברית</h3>
+  <p>הפעילו מחדש את השרת, ופתחו <code>http://127.0.0.1:8000/</code>. הדביקו את המפתח, וכתבו "שלום, מה שלומך?", אחר כך משפט באנגלית, ואחר כך משפט מעורב, כמו "ומה עם מספרים: 42 ו-HTTP?". העברית מימין, האנגלית משמאל, ו-<code>turn</code> בתשובות עולה, כי הדף שולח את <code>conversation_id</code>. שנו תו אחד במפתח ושלחו שוב: <code>שגיאה 401</code>. ב-<span class="en">access log</span> של השרת תראו גם <code>GET /favicon.ico</code> עם <code>404</code>: הדפדפן מחפש אייקון ללשונית, ואין. זה בסדר.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>מרגישים את הבעיה של פרק 6</h3>
+  <p>שלחו בדף שתי הודעות. ב-<span class="en">terminal</span> של השרת, <kbd>Ctrl</kbd>+<kbd>C</kbd>, והפעילו אותו שוב. חזרו לדף (בלי לרענן) ושלחו הודעה שלישית. בדף מופיעה שורה צהובה: "שגיאה 404", ואחריה <code>"No conversation with this id."</code>.</p>
+  <p>הדף עדיין זוכר את המזהה, אבל השרת שכח הכול: המילון <code>_messages</code> חי בזיכרון של התהליך, ותהליך חדש מתחיל ריק. כל עדכון גרסה, כל קריסה, ואפילו <code>--reload</code> אחרי כל שמירה של קובץ, מוחקים את כל השיחות של כל המשתמשים. רעננו את הדף כדי להתחיל מחדש. את התיקון האמיתי תבנו בפרק 6.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>בדיקות, בלי שרת</h3>
+  <p>עד עכשיו בדקתם ביד. FastAPI מגיע עם <code>TestClient</code>, שקורא לאפליקציה ישירות, בלי <span class="en">port</span> ובלי רשת, ומחזיר תשובה כמו של <code>curl.exe</code>. הוא צריך את החבילה <code>httpx2</code>. היא כבר מותקנת, כי ה-SDK של Anthropic משתמש בה, אבל הבדיקות לא צריכות לסמוך על זה: <code>uv add --dev httpx2</code> רושם אותה במפורש. צרו <code>tests\test_api.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_api.py (the start of it)</span></div>
+<pre><code>"""Tests for the HTTP API. TestClient calls the app directly: no server, no port, no network."""
+
+import pytest
+from fastapi.testclient import TestClient
+
+from agent.api import create_app
+from agent.config import ConfigError, Settings
+from agent.llm import LLMError, MockClient
+
+KEY = "test-key"
+SETTINGS = Settings(
+    model="test-model", mock=True, agent_name="agent", max_turns=2, api_key=None, agent_api_key=KEY
+)
+AUTH = {"X-API-Key": KEY}
+
+
+@pytest.fixture
+def client():
+    """A fresh app, with fresh conversations, for every test."""
+    return TestClient(create_app(SETTINGS, MockClient()))
+
+
+def test_chat_continues_a_conversation(client):
+    first = client.post("/chat", json={"message": "one"}, headers=AUTH).json()
+    second = client.post(
+        "/chat",
+        json={"message": "שתיים", "conversation_id": first["conversation_id"]},
+        headers=AUTH,
+    ).json()
+    assert second["conversation_id"] == first["conversation_id"]
+    assert second["reply"] == "[mock reply, turn 2] You said: שתיים"
+
+
+@pytest.mark.parametrize("body", [{}, {"message": ""}, {"mesage": "hello"}, {"message": 42}])
+def test_a_bad_body_is_422(client, body):
+    response = client.post("/chat", json=body, headers=AUTH)
+    assert response.status_code == 422</code></pre>
+</div>
+  <p>כאן משתלם ה-<span class="en">factory</span>: הבדיקות בונות אפליקציה עם הגדרות ו-<span class="en">client</span> משלהן, בלי <code>.env</code>, ובלי סיכוי להגיע ל-Claude. כתבו בעצמכם, באותה צורה, בדיקות ל-<code>GET /health</code>, לשיחה חדשה, ל-<code>401</code> בלי מפתח ועם מפתח שגוי, ל-<code>404</code> על מזהה לא קיים, ל-<code>502</code> (עם <code>BrokenClient</code> כמו ב-<code>test_cli.py</code>), לשרת שמסרב לעלות בלי <code>agent_api_key</code>, ולדף ב-<code>/</code>. הקובץ המלא ב-<code>checkpoints\chapter-05</code>.</p>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest (shortened)</span></div>
+<pre><code>.......................................................                  [100%]
+55 passed in 5.56s</code></pre>
+</div>
+  <p>הריצו את ארבעת הכלים מפרק 3 (<code>mypy agent scripts</code> בודק גם את <code>api.py</code>), ושמרו בשני <span class="en">commits</span>: <code>"Serve a web chat page where Hebrew reads right"</code>, ואחריו <code>"Test the API with FastAPI's TestClient"</code>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.11</span>תרגילים</h2>
+
+<p>כל התרגילים על הענף <code>feature/api</code>. בתרגילים שמשנים קוד, הריצו בסוף את ארבעת הכלים ו-<span class="en">commit</span>. השרת על 8000, ואחרי כל שינוי מפעילים אותו מחדש. פתרונות, כולל הפלטים, נמצאים <a href="solutions/chapter-05.html">בדף נפרד</a>.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · סיור ב-<span class="en">Swagger</span></h3><span class="level">מודרך</span></div>
+  <ol>
+    <li>פתחו את <code>/docs</code>. לחצו <span class="en">Authorize</span> והזינו את המפתח.</li>
+    <li>ב-<code>POST /chat</code>, <span class="en">Try it out</span>, ושלחו הודעה בעברית. העתיקו את <code>conversation_id</code> מהתשובה ושלחו הודעה שנייה איתו.</li>
+    <li>מצאו את פקודת ה-<code>curl</code> ש-<span class="en">Swagger</span> מציג, ואת ה-<span class="en">schemas</span> בתחתית הדף.</li>
+  </ol>
+  <label class="answer-label" for="n-ex1">איזה <span class="en">header</span> הוסיף <span class="en">Swagger</span> לבקשה אחרי <span class="en">Authorize</span>? אילו מגבלות על <code>message</code> מופיעות ב-<code>ChatRequest</code>, ומאיפה הן הגיעו?</label>
+  <textarea class="answer" id="n-ex1" data-id="c05-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c05-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · טבלת <span class="en">status codes</span></h3><span class="level">מודרך</span></div>
+  <p>גרמו לשרת להחזיר כל אחד מהקודים האלה, עם <code>curl.exe</code> או ב-<code>/docs</code>, ורשמו לכל אחד את הבקשה ואת ה-<code>detail</code>: <code>200</code>, <code>401</code>, <code>404</code> (שתי דרכים שונות), <code>405</code>, <code>422</code> ו-<code>502</code>. רמז ל-<code>502</code>: הפעילו את השרת במצב אמיתי עם מפתח מזויף ו-<code>ANTHROPIC_BASE_URL</code> של <code>http://127.0.0.1:9</code>, כמו בתרגיל 3 בפרק 4, ונקו את המשתנים בסוף.</p>
+  <label class="answer-label" for="n-ex2">מה ההבדל בין שתי הדרכים לקבל <code>404</code>? ולמה <code>502</code> ולא <code>500</code>?</label>
+  <textarea class="answer" id="n-ex2" data-id="c05-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c05-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · <code>GET /conversations/{id}</code></h3><span class="level mid">בינוני</span></div>
+  <p>הוסיפו <span class="en">endpoint</span> שמחזיר את ההודעות שהסוכן זוכר בשיחה. הגדירו שני <span class="en">schemas</span>: <code>Message</code> עם <code>role</code> (רק <code>"user"</code> או <code>"assistant"</code>, רמז: <code>Literal</code>) ו-<code>content</code>, ו-<code>ConversationOut</code> עם <code>conversation_id</code> ו-<code>messages: list[Message]</code>. ה-<span class="en">path</span> הוא <code>"/conversations/{conversation_id}"</code>, ו-FastAPI מעביר את החלק שבסוגריים לפרמטר באותו שם. דרשו מפתח, והחזירו <code>404</code> למזהה לא קיים. כתבו שלוש בדיקות: שיחה קיימת, מזהה לא קיים, ובלי מפתח. <span class="en">Commit</span>: <code>"Add GET /conversations/{id}"</code>.</p>
+  <label class="answer-label" for="n-ex3">איך בניתם <code>Message</code> מתוך <code>MessageParam</code> כך ש-<code>mypy</code> מרוצה? מה היה קורה אם ה-<span class="en">endpoint</span> היה מחזיר ישר את הרשימה מהליבה?</label>
+  <textarea class="answer" id="n-ex3" data-id="c05-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c05-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · <code>DELETE /conversations/{id}</code></h3><span class="level mid">בינוני</span></div>
+  <p>ה-<code>/reset</code> של ה-<span class="en">API</span>. הוסיפו ל-<code>Conversations</code> מתודה <code>delete</code>, ו-<span class="en">endpoint</span> שמחזיר <code>204 No Content</code> (רמז: <code>status_code=204</code> ב-<span class="en">decorator</span>, והפונקציה מחזירה <code>None</code>). בדיקה: אחרי מחיקה, <code>GET</code> על אותו מזהה מחזיר <code>404</code>. ומה מחזירה מחיקה שנייה? הוסיפו את זה לבדיקה. <span class="en">Commit</span>: <code>"Add DELETE /conversations/{id}"</code>.</p>
+  <label class="answer-label" for="n-ex4">בפרק 4 אמרנו ש-<code>DELETE</code> הוא <span class="en">idempotent</span>. האם המחיקה השנייה סותרת את זה?</label>
+  <textarea class="answer" id="n-ex4" data-id="c05-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c05-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · <code>scripts\ask.py</code>: <span class="en">client</span> משלכם</h3><span class="level mid">בינוני</span></div>
+  <p>כתבו סקריפט שמקבל הודעה (ו-<code>--conversation</code> אופציונלי), שולח אותה ל-<code>POST /chat</code>, ומדפיס את התשובה ואת המזהה. השתמשו רק בספרייה הסטנדרטית: <code>urllib.request</code> ו-<code>json</code>. המפתח מ-<code>AGENT_API_KEY</code> (עם <code>load_dotenv</code>), הכתובת מ-<code>AGENT_URL</code> עם ברירת מחדל. ממשו את ההרגלים מסעיף 5.9: <span class="en">timeout</span>, והודעה ברורה ושונה כשהשרת לא רץ (<code>URLError</code>) וכשהוא ענה בשגיאה (<code>HTTPError</code>, עם ה-<code>detail</code>). בדקו את שלושת המקרים, ו-<span class="en">commit</span>.</p>
+  <label class="answer-label" for="n-ex5">מה הדפיס הסקריפט בכל אחד משלושת המקרים, ובאיזה <span class="en">exit code</span>?</label>
+  <textarea class="answer" id="n-ex5" data-id="c05-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c05-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · דף שלא שוכח (עד כמה שאפשר)</h3><span class="level open">פתוח</span></div>
+  <p>היום, רענון של הדף מתחיל שיחה חדשה, והפעלה מחדש של השרת נותנת <code>שגיאה 404</code> מבלבלת. שפרו את הדף: אחרי רענון הוא ממשיך את אותה שיחה ומציג את ההודעות שלה (רמז: <code>sessionStorage</code>, ו-<code>GET /conversations/{id}</code> מתרגיל 3), וכשהשרת כבר לא מכיר את השיחה, הוא אומר למשתמש מה קרה במילים פשוטות ומתחיל שיחה חדשה. בדקו את שני המקרים בדפדפן. בסוף, עדכנו את <code>README.md</code> (איך מריצים את השרת, ה-<span class="en">endpoints</span>, <code>AGENT_API_KEY</code> ו-<code>AGENT_URL</code> בטבלת המשתנים, הקבצים החדשים), <span class="en">commit</span>, ואחדו: <code>git switch main</code>, <code>git merge feature/api</code>, <code>git push</code>, <code>git branch -d feature/api</code>.</p>
+  <label class="answer-label" for="n-ex6">מה הדף עדיין לא יכול להציל, גם אחרי השיפור? ומה הייתם שומרים, ואיפה, כדי שכן יוכל?</label>
+  <textarea class="answer" id="n-ex6" data-id="c05-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c05-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.12</span>בדקו את עצמכם</h2>
+
+<p>סמנו רק מה שאתם מסוגלים להסביר בקול רם לאדם אחר, בלי להציץ בפרק.</p>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c05-chk1"><span>אני יודע/ת להסביר מה זה <span class="en">API</span> כחוזה, ומה מותר לשנות בלי לשבור לקוחות.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c05-chk2"><span>אני יודע/ת לתכנן <span class="en">endpoints</span> בסגנון <span class="en">REST</span>, ולבחור <span class="en">status code</span> לכל תוצאה, כולל <code>422</code> ו-<code>502</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c05-chk3"><span>אני יודע/ת מה התפקיד של FastAPI ומה התפקיד של <code>uvicorn</code>, ולמה <code>create_app</code> היא <span class="en">factory</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c05-chk4"><span>אני יודע/ת מה <span class="en">schema</span> של Pydantic נותן: בדיקת קלט, צורת פלט ותיעוד ב-<code>/openapi.json</code> וב-<code>/docs</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c05-chk5"><span>אני יודע/ת להסביר איך <span class="en">API key</span> נבדק, מה זה "<span class="en">fail closed</span>", ומה ההבדל בינו לבין <span class="en">JWT</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c05-chk6"><span>אני יודע/ת למה הליבה נפרדת מה-<span class="en">API</span> ומה-<span class="en">CLI</span>, ולמה השיחות נעלמות בהפעלה מחדש.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c05-chk7"><span>אני יודע/ת מה זה <span class="en">webhook</span>, ולמה מאמתים חתימה ומצפים לכפילויות.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c05-chk8"><span>אני יודע/ת אילו שלושה דברים גורמים לעברית להופיע נכון בדף.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.13</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td><code>[Errno 10048] error while attempting to bind on address</code></td><td>משהו כבר מאזין על 8000: <code>uvicorn</code> קודם, או <code>echo_server.py</code> מפרק 4</td><td><code>Get-NetTCPConnection -LocalPort 8000 -State Listen</code>, ועצרו אותו עם <kbd>Ctrl</kbd>+<kbd>C</kbd> בחלון שלו</td></tr>
+  <tr><td><code>ConfigError: AGENT_API_KEY is not set</code> בסוף <span class="en">traceback</span> בעלייה</td><td>אין מפתח ב-<code>.env</code>, והשרת לא עולה בלעדיו (<span class="en">fail closed</span>)</td><td>צרו מפתח (סעיף 5.8) והוסיפו אותו ל-<code>.env</code></td></tr>
+  <tr><td><code>ModuleNotFoundError: No module named 'agent'</code></td><td>הרצתם את <code>uvicorn</code> מחוץ לתיקיית הפרויקט</td><td><code>cd ~\projects\my-agent</code> והריצו שוב</td></tr>
+  <tr><td><code>401</code> למרות שהמפתח נכון</td><td>שיניתם את <code>.env</code> בלי להפעיל מחדש את השרת, או שבדף נשמר מפתח ישן, או רווח מיותר</td><td>הפעילו מחדש, והדביקו את המפתח שוב</td></tr>
+  <tr><td><code>422</code> עם <code>"Input should be a valid dictionary"</code></td><td>שלחתם בלי <code>-H "Content-Type: application/json"</code>, ו-<code>curl</code> שלח את הגוף כטופס</td><td>הוסיפו את ה-<span class="en">header</span></td></tr>
+  <tr><td><code>404</code> על שיחה שהייתה קיימת</td><td>השרת הופעל מחדש, והשיחות היו בזיכרון</td><td>התחילו שיחה חדשה. פרק 6 פותר את זה</td></tr>
+  <tr><td><code>/docs</code> מציג דף ריק</td><td>אין אינטרנט, ו-<span class="en">Swagger UI</span> נטען מ-<span class="en">CDN</span></td><td>השתמשו ב-<code>/openapi.json</code>, בדף הצ'אט, או ב-<code>curl.exe</code></td></tr>
+  <tr><td>הדף אומר "השרת לא עונה" כשהשרת רץ</td><td>פתחתם את <code>chat.html</code> בלחיצה כפולה, כקובץ, ולא דרך השרת</td><td>פתחו <code>http://127.0.0.1:8000/</code></td></tr>
+  <tr><td>עברית בפלט של <code>curl.exe</code> משובשת או הפוכה</td><td>ה-<span class="en">terminal</span>, לא השרת. ה-<span class="en">JSON</span> עצמו תקין, ב-<span class="en">UTF-8</span></td><td>בדקו עברית בדף, ב-<code>/docs</code> או בבדיקות</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.14</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>API</dt><dd>חוזה שבו תוכנית אחת מדברת עם אחרת: כתובות, קלט, פלט ושגיאות.</dd>
+  <dt>REST</dt><dd>סגנון ל-<span class="en">APIs</span> מעל <span class="en">HTTP</span>: משאבים ב-<span class="en">URL</span>, פעולות ב-<span class="en">method</span>, תוצאות ב-<span class="en">status code</span>.</dd>
+  <dt>endpoint</dt><dd>צירוף של <span class="en">method</span> ו-<span class="en">path</span> שה-<span class="en">API</span> עונה עליו, כמו <code>POST /chat</code>.</dd>
+  <dt>stateless</dt><dd>כל בקשה מביאה איתה את כל מה שצריך. השרת לא זוכר את הבקשה הקודמת.</dd>
+  <dt>ASGI server</dt><dd>התוכנית שמאזינה ל-<span class="en">port</span> ומעבירה בקשות לאפליקציה Python. כאן: <code>uvicorn</code>.</dd>
+  <dt>schema</dt><dd>תיאור של צורת הנתונים: אילו שדות, מאיזה סוג, באילו מגבלות.</dd>
+  <dt>OpenAPI</dt><dd>פורמט תקני לתיאור <span class="en">API</span>. FastAPI מייצר אותו ב-<code>/openapi.json</code>.</dd>
+  <dt>Swagger UI</dt><dd>דף שנבנה מתיאור <span class="en">OpenAPI</span>, ומאפשר לנסות כל <span class="en">endpoint</span>.</dd>
+  <dt>authentication / authorization</dt><dd>מי אתם / מה מותר לכם.</dd>
+  <dt>API key</dt><dd>מחרוזת סודית ארוכת-טווח שמזהה תוכנית לקוח.</dd>
+  <dt>JWT</dt><dd><span class="en">token</span> חתום שמכיל פרטים קריאים (מי, עד מתי). החתימה מונעת שינוי, לא קריאה.</dd>
+  <dt>dependency</dt><dd>ב-FastAPI: פונקציה שרצה לפני <span class="en">endpoint</span>, למשל בדיקת מפתח.</dd>
+  <dt>webhook</dt><dd><span class="en">endpoint</span> שלכם ששירות אחר קורא לו כשמשהו קורה אצלו.</dd>
+  <dt>HMAC</dt><dd>חתימה על הודעה בעזרת סוד משותף. מוכיחה מי שלח ושלא שינו אותה.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">5.15</span>מה הלאה</h2>
+
+<p>לסוכן יש עכשיו <span class="en">API</span> עם חוזה, מפתח, תיעוד ובדיקות, ודף שבו עברית נראית נכון. אבל ראיתם בצעד 4 ובתרגיל 6 את החולשה: כל השיחות חיות במילון אחד, בזיכרון של תהליך אחד. הפעלה מחדש, עדכון גרסה או קריסה, וכולן נעלמות, לכל המשתמשים. ואם תרצו להריץ שני תהליכים של השרת כדי לשרת יותר משתמשים, כל אחד מהם יכיר רק חצי מהשיחות.</p>
+
+<p>הפתרון הוא לשמור את השיחות מחוץ לתהליך, במקום שנועד בדיוק לזה. ב<strong>פרק 6: בסיסי נתונים</strong>, <code>Conversations</code> יקבל מימוש שכותב ל-SQLite, וה-<code>conversation_id</code> שכבר נמצא בכל בקשה ותשובה יהיה המפתח של הטבלה. ה-<span class="en">API</span>, הדף וה-<span class="en">CLI</span> לא ישתנו, וזו בדיוק הסיבה שהפרדתם ביניהם.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-05</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים, בלי <code>.git</code>. <code>uv run pytest</code> מדווח על 59 בדיקות שעוברות, ו-<code>ruff</code> ו-<code>mypy agent scripts</code> נקיים.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-05.html">פתרונות לפרק 5</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

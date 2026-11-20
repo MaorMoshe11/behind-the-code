@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 8 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-08.html">→ חזרה לפרק 8</a>
+    <span>פתרונות לפרק 8</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 8 · <span class="en">Containers</span></h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. הפלטים כאן הם מה שהתקבל באמת כשהתרגילים נעשו; המזהים, הזמנים והגדלים אצלכם יהיו אחרים. הקוד המלא נמצא ב-<code>checkpoints\chapter-08</code>.</p>
+</header>
+
+<h2><span class="sec">1</span>מה יש בתוך ה-<span class="en">image</span></h2>
+<div class="codebox output">
+  <div class="label"><span>docker history my-agent (shortened)</span></div>
+<pre><code>CREATED BY                                      SIZE
+CMD ["uvicorn" "agent.api:create_app" "--fac…   0B
+EXPOSE [8000/tcp]                               0B
+ENV PATH=/app/.venv/bin:/usr/local/bin:/usr/…   0B
+COPY . . # buildkit                             295kB
+RUN /bin/sh -c uv sync --locked --no-dev # b…   75.2MB
+COPY pyproject.toml uv.lock ./ # buildkit       242kB
+WORKDIR /app                                    8.19kB
+COPY /uv /bin/uv # buildkit                     57.7MB
+CMD ["python3"]                                 0B
+RUN /bin/sh -c set -eux;   savedAptMark="$(a…   40.5MB
+ENV PYTHON_VERSION=3.13.18                      0B
+...</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>docker run --rm my-agent ls -a, then python --version</span></div>
+<pre><code>.
+..
+.dockerignore
+.env.example
+.gitignore
+.venv
+CONTRIBUTING.md
+Dockerfile
+README.md
+agent
+alembic.ini
+compose.yaml
+examples
+migrations
+pyproject.toml
+scripts
+uv.lock
+Python 3.13.18</code></pre>
+</div>
+<p>השורות העליונות הן ה-<code>Dockerfile</code> שלכם, מלמטה למעלה; מתחת ל-<code>CMD ["python3"]</code> מתחילות השכבות של <code>python:3.13-slim</code>, שמישהו אחר בנה. <code>CMD</code>, <code>ENV</code> ו-<code>EXPOSE</code> שוקלות אפס: הן רק הגדרות.</p>
+<p><strong>השכבה הגדולה ביותר</strong> שלכם היא <code>uv sync</code>, 75 MB: 32 החבילות, ובראשן <code>pydantic-core</code>, <code>sqlalchemy</code> ו-<code>psycopg-binary</code>. מפתיע יותר: <code>uv</code> עצמו שוקל 58 MB, והוא לא נחוץ אחרי הבנייה. אפשר להיפטר ממנו עם <span class="en">multi-stage build</span>, שבו שלב אחד בונה ושלב שני מעתיק רק את התוצאה; זו אופטימיזציה, לא צורך, ונשאיר אותה. הקוד שלכם הוא 295 KB מתוך 350 MB.</p>
+<p><strong>מה חסר, ולמה זה טוב:</strong> <code>.env</code> (מפתחות), <code>agent.db</code> ו-<code>agent.log</code> (שיחות של אנשים), <code>.git</code> (כל ההיסטוריה, כולל כל סוד שאי פעם נכנס בטעות), ה-<code>.venv</code> של Windows (ה-<code>.venv</code> שברשימה נבנה בתוך ה-<span class="en">image</span>, ל-Linux), ו-<code>tests</code>. כל אחד מהם היה עובר עם ה-<span class="en">image</span> לכל <span class="en">registry</span> ולכל שרת.</p>
+<p><strong>Python:</strong> במחשב שלי <code>uv run python --version</code> הדפיס <code>Python 3.12.13</code>, וב-<span class="en">image</span> <code>3.13.18</code>. הבדיקות רצו על 3.12 והשירות על 3.13, וזה עבד, כי <code>requires-python = "&gt;=3.12"</code> והקוד לא תלוי בגרסה. אבל זה בדיוק סוג ההבדל שכדאי לצמצם: בפרק 9 הבדיקות ירוצו על אותה גרסה שבנתה את ה-<span class="en">image</span>.</p>
+
+<h2><span class="sec">2</span><code>down</code> ו-<code>down -v</code></h2>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>     3
+ Volume my-agent_pgdata Removing
+ Volume my-agent_pgdata Removed
+ Container my-agent-api-1 Started
+     0</code></pre>
+</div>
+<p><code>docker volume ls</code> בין שתי הפקודות לא הראה <code>my-agent_pgdata</code>. <code>down -v</code> מחק את ה-<span class="en">containers</span>, את הרשת ואת ה-<span class="en">volume</span>. ב-<code>up</code> הבא, Docker יצר <span class="en">volume</span> ריק, Postgres אתחל בסיס נתונים חדש (<code>initdb</code>, ולכן ההפעלה הזו איטית יותר), יצר את <code>agent</code> לפי <code>POSTGRES_DB</code>, ו-<code>migrate</code> בנה את הטבלאות מאפס. <code>agent_test</code> נעלם יחד עם כל השאר: צריך <code>createdb</code> שוב.</p>
+<p><strong>מתי בכוונה:</strong> כשרוצים להתחיל נקי בפיתוח; כשבודקים שה-<span class="en">migrations</span> בונים בסיס נתונים ריק; אחרי שינוי <code>POSTGRES_PASSWORD</code>, שחל רק על <span class="en">volume</span> ריק. <strong>מתי אף פעם:</strong> על שרת עם נתונים. <code>-v</code> אחת מוחקת הכול, בלי שאלה ובלי סל מחזור.</p>
+
+<h2><span class="sec">3</span>למדוד את ה-<span class="en">cache</span></h2>
+<div class="table-wrap">
+<table>
+  <tr><th>בנייה</th><th>מה רץ</th><th>זמן אצלי</th></tr>
+  <tr><td>הסדר הנכון, אחרי הערה ב-<code>cli.py</code></td><td>רק <code>COPY . .</code>; <code>uv sync</code> <code>CACHED</code></td><td>14 שניות</td></tr>
+  <tr><td>הסדר ההפוך, אחרי הערה ב-<code>cli.py</code></td><td><code>COPY . .</code>, ואז <code>uv sync</code> מחדש: <code>Installed 32 packages</code></td><td>1 דקה ו-24 שניות</td></tr>
+</table>
+</div>
+<div class="codebox">
+  <div class="label"><span>Dockerfile, the wrong order (do not keep)</span></div>
+<pre><code>WORKDIR /app
+COPY . .
+RUN uv sync --locked --no-dev</code></pre>
+</div>
+<p>במחשב עמוס ואיטי ההבדל היה פי שש; בשרת בנייה שמוריד חבילות מאפס בכל פעם, הוא גדול יותר. וזה רק פרויקט קטן. <strong>אחרי <code>uv add</code></strong> משתנים <code>pyproject.toml</code> ו-<code>uv.lock</code>, ולכן שכבת ה-<code>COPY</code> שלהם ו-<code>uv sync</code> שאחריה רצים מחדש. זה בדיוק מה שצריך: החבילות באמת השתנו. ה-<span class="en">cache</span> לא חוסך עבודה שצריך לעשות; הוא חוסך עבודה שכבר נעשתה.</p>
+
+<h2><span class="sec">4</span>לשבור בכוונה</h2>
+<div class="codebox output">
+  <div class="label"><span>step 1: docker compose up -d, ps -a, logs migrate (shortened)</span></div>
+<pre><code>service "migrate" didn't complete successfully: exit 1
+SERVICE   STATUS
+api       Created
+db        Up 29 seconds (healthy)
+migrate   Exited (1) 9 seconds ago
+migrate-1  | sqlalchemy.exc.OperationalError: (psycopg.OperationalError) connection failed: connection to server at "172.19.0.2", port 5432 failed: FATAL:  password authentication failed for user "agent"</code></pre>
+</div>
+<p><code>api</code> נוצר ולא הופעל: <code>Created</code>. זה בדיוק מה שרצינו. שירות שעולה מול מבנה ישן היה נופל באמצע בקשות, או גרוע מזה, כותב נתונים במבנה הלא נכון. כאן הכישלון קרה לפני שמשתמש אחד ראה משהו, והלוג אומר בדיוק מה. (הכתובת <code>172.19.0.2</code> היא הכתובת של <code>db</code> ברשת הפנימית; השם <code>db</code> תורגם אליה.)</p>
+<div class="codebox output">
+  <div class="label"><span>step 2: db stopped, then started again</span></div>
+<pre><code>Traceback (most recent call last):
+  File "...\scripts\ask.py", line 50, in main
+    detail = json.load(error).get("detail")
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+{"status":"ok"}
+ Container my-agent-db-1 Started
+[mock reply, turn 1] You said: is anyone there
+(conversation 7116d1864b0a4fdf99ed58d67b3721ed, turns: 1)</code></pre>
+</div>
+<p>ה-<span class="en">API</span> החזיר 500, וב-<code>docker compose logs api</code> יש <code>terminating connection due to administrator command</code>. אבל <code>/health</code> ענה <code>{"status":"ok"}</code>: הוא בודק רק שהתהליך חי, לא שהוא יכול לעבוד. מערכת שמחליטה לפי <code>/health</code> אם לשלוח לשירות משתמשים, הייתה ממשיכה לשלוח אותם לשירות שכל בקשה אליו נכשלת. בפרק 10 תפרידו בין "חי" (<span class="en">liveness</span>) ל"מוכן" (<span class="en">readiness</span>). אחרי ש-<code>db</code> חזר, ההודעה הבאה עברה: SQLAlchemy זיהה שהחיבורים הישנים מתים וזרק אותם.</p>
+<p><strong>הבאג ב-<code>ask.py</code>:</strong> הוא הניח שגוף כל תשובת שגיאה הוא <span class="en">JSON</span>. שגיאות ש-FastAPI כותב בעצמו (401, 404, 422) הן <span class="en">JSON</span>, אבל חריגה שאף אחד לא תפס הופכת ל-500 עם הטקסט <code>Internal Server Error</code>. עד היום לא ראיתם 500 כזה. התיקון:</p>
+<div class="codebox">
+  <div class="label"><span>scripts\ask.py</span></div>
+<pre><code>    except urllib.error.HTTPError as error:
+        <span class="hl"># The server answered, with an error status (4xx or 5xx). Its body usually says why
+        # in JSON; a crash inside the server (500) answers in plain text.
+        body = error.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(body).get("detail")
+        except json.JSONDecodeError:
+            detail = body</span>
+        sys.exit(f"The API answered {error.code}: {detail}")</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output: db stopped, then a wrong key</span></div>
+<pre><code>The API answered 500: Internal Server Error
+The API answered 401: Missing or wrong X-API-Key header.</code></pre>
+</div>
+<p><code>git commit -am "ask.py: show the status of an error that is not JSON"</code>. לקוח שקורס על שגיאה של השרת מסתיר את השגיאה האמיתית: ראיתם <code>JSONDecodeError</code> ולא 500.</p>
+
+<h2><span class="sec">5</span>שני לקוחות, בסיס נתונים אחד</h2>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Running in MOCK mode - answers are fake, nothing is sent to the API.
+Type a message and press Enter. Commands: /reset, /history, exit.
+
+Continuing "hello from a container" (1 turn).
+
+you&gt; and hello from the terminal
+agent&gt; [mock reply, turn 2] You said: and hello from the terminal
+you&gt; Bye!
+[{"conversation_id":"e6d2b0676e184ae3ba6ba3d7c9f7f0f7","title":"hello from a container"}]</code></pre>
+</div>
+<p><code>--continue</code> המשיך את השיחה ש-<code>ask.py</code> פתח דרך ה-<span class="en">API</span>, כי היא החדשה ביותר <em>ב-Postgres</em>. ה-<span class="en">CLI</span> וה-<span class="en">API</span> הם שני תהליכים, במקומות שונים, על בסיס נתונים אחד.</p>
+<p><strong><code>127.0.0.1</code> מול <code>db</code>:</strong> ה-<span class="en">CLI</span> רץ ב-Windows ומגיע ל-Postgres דרך הפורט שפורסם, <code>127.0.0.1:5432</code>. ה-<span class="en">API</span> רץ ברשת של compose, שם <code>db</code> הוא שם של מחשב אחר, ו-<code>127.0.0.1</code> הוא ה-<span class="en">container</span> של ה-<span class="en">API</span> עצמו. אותו בסיס נתונים, שתי כתובות, לפי איפה עומדים.</p>
+<p><strong>SQLite מול Postgres:</strong> SQLite הוא קובץ, ומי שקורא אותו צריך לעמוד ליד הקובץ: <span class="en">container</span> לא רואה את <code>agent.db</code>, ושני שרתים לא יכולים לחלוק אותו. Postgres הוא שרת: כל מי שיש לו כתובת וסיסמה מתחבר, מכמה מקומות, באותו זמן. זה מה שמאפשר להריץ שני עותקים של ה-<span class="en">API</span> (פרק 10) ושירות נוסף (פרק 11).</p>
+
+<h2><span class="sec">6</span>להעביר את השיחות ל-Postgres</h2>
+<div class="codebox">
+  <div class="label"><span>scripts\copy_conversations.py</span></div>
+<pre><code>"""Copy every conversation and message from one database into another, empty one.
+
+For example, from the SQLite file into the Postgres of docker compose:
+    uv run python scripts/copy_conversations.py sqlite:///agent.db \
+        postgresql+psycopg://agent:agent@127.0.0.1:5432/agent
+Both databases must be at the same migration (run `alembic upgrade head` on both first).
+"""
+
+import argparse
+import sys
+
+from sqlalchemy import Connection, MetaData, create_engine, func, insert, select, text
+
+
+def revision(connection: Connection) -&gt; str | None:
+    """Where the database is in the migration chain."""
+    found = connection.scalar(text("SELECT version_num FROM alembic_version"))
+    return str(found) if found is not None else None
+
+
+def copy(source_url: str, target_url: str) -&gt; tuple[int, int]:
+    """Copy the rows; return how many conversations and messages were copied."""
+    source = create_engine(source_url)
+    target = create_engine(target_url)
+    tables = MetaData()
+    tables.reflect(target, only=["conversations", "messages"])  # the tables as they really are
+    conversations = tables.tables["conversations"]
+    messages = tables.tables["messages"]
+
+    with source.connect() as reading, target.begin() as writing:  # one transaction
+        if revision(reading) != revision(writing):
+            sys.exit("The databases are at different migrations. Run alembic upgrade head on both.")
+        if writing.scalar(select(func.count()).select_from(conversations)):
+            sys.exit("The target already has conversations. Copy only into an empty database.")
+        conversation_rows = [dict(row._mapping) for row in reading.execute(select(conversations))]
+        message_rows = [dict(row._mapping) for row in reading.execute(select(messages))]
+        if conversation_rows:
+            writing.execute(insert(conversations), conversation_rows)
+        if message_rows:
+            writing.execute(insert(messages), message_rows)
+        <span class="hl">if message_rows and writing.dialect.name == "postgresql":
+            # Postgres numbers new messages from a sequence. The copied rows brought their own
+            # ids and did not move it, so the next new message would get id 1 again.
+            writing.execute(
+                text(
+                    "SELECT setval(pg_get_serial_sequence('messages', 'id'), MAX(id)) FROM messages"
+                )
+            )</span>
+    source.dispose()
+    target.dispose()
+    return len(conversation_rows), len(message_rows)
+
+
+def main() -&gt; None:
+    parser = argparse.ArgumentParser(description="Copy conversations between databases.")
+    parser.add_argument("source", help="where to read, e.g. sqlite:///agent.db")
+    parser.add_argument("target", help="where to write: migrated and empty")
+    args = parser.parse_args()
+    conversation_count, message_count = copy(args.source, args.target)
+    print(f"Copied {conversation_count} conversations and {message_count} messages.")
+
+
+if __name__ == "__main__":
+    main()</code></pre>
+</div>
+<p>הגרסה הראשונה הייתה בלי החלק המסומן. ההעתקה עברה, ו-<code>/conversations</code> הציג את שלוש השיחות. ההודעה החדשה נכשלה:</p>
+<div class="codebox output">
+  <div class="label"><span>first version: copy twice, then POST /chat (shortened)</span></div>
+<pre><code>Copied 3 conversations and 8 messages.
+The target already has conversations. Copy only into an empty database.
+Internal Server Error
+api-1  | (psycopg.errors.UniqueViolation) duplicate key value violates unique constraint "messages_pkey"
+api-1  | DETAIL:  Key (id)=(1) already exists.</code></pre>
+</div>
+<p>ב-SQLite, <span class="en">id</span> חדש הוא "הגדול ביותר בטבלה ועוד אחד", ולכן העתקה עם <span class="en">ids</span> לא שוברת דבר. ב-Postgres, עמודת <code>SERIAL</code> לוקחת את הבא מ-<span class="en">sequence</span>, מונה נפרד שזז רק כשהוא נותן מספר. ההעתקה הכניסה 1 עד 8 בלי לשאול אותו, והוא עדיין עמד על 1. <code>setval</code> מזיז אותו ל-8, בתוך אותה <span class="en">transaction</span>. בדיקות על SQLite בלבד לא היו מוצאות את זה לעולם: עוד סיבה להריץ על אותו בסיס נתונים שבשרת. אחרי <code>down -v</code>, <code>up -d</code> והעתקה עם התיקון:</p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Copied 3 conversations and 8 messages.
+{"conversation_id":"ce7509d0d1e343b58a832238c28e40b3","reply":"[mock reply, turn 1] You said: hello","turns":1}
+ id |   role    |              left
+----+-----------+--------------------------------
+ 10 | assistant | [mock reply, turn 1] You said:
+  9 | user      | hello
+  8 | assistant | [mock reply, turn 1] You said:
+(3 rows)
+(3, 8)</code></pre>
+</div>
+<p>השורה האחרונה היא <code>agent.db</code>: שלוש שיחות ושמונה הודעות, כמו לפני. העתקה לא מזיזה. מעכשיו יש שני עותקים שיתפצלו, וזו החלטה שלכם איזה מהם חי. החלטות נוספות שכדאי להבין: היעד חייב להיות ריק, כי העתקה חלקית פעמיים הייתה נכשלת על <span class="en">ids</span> כפולים או, גרוע מזה, מכפילה; ושתי השורות של <code>alembic_version</code> חייבות להיות שוות, כי אחרת העמודות לא תואמות. ה-<code>sys.exit</code> בתוך ה-<code>with</code> מבטל את ה-<span class="en">transaction</span>.</p>
+<p>ב-<code>README.md</code> נוסף הסעיף <span class="en">Run with Docker</span> (שלושת השירותים, הפקודות, <code>down -v</code>, ש-<code>agent.db</code> לא בשימוש, והסקריפט), פסקה על <code>TEST_DATABASE_URL</code> בסעיף ה-<span class="en">Migrations</span>, שורות בטבלת המשתנים, הקבצים החדשים בתרשים, ו-<code>Docker Desktop</code> ב-<span class="en">Requirements</span>. ב-<code>.env.example</code>: <code>DATABASE_URL</code> של Postgres, בהערה. ההיסטוריה של הענף, לפני המיזוג (<span class="en">fast-forward</span>):</p>
+<div class="codebox output">
+  <div class="label"><span>git log --oneline (newest first)</span></div>
+<pre><code>Document Docker, Postgres and the copy script
+Add a script that copies conversations between databases
+ask.py: show the status of an error that is not JSON
+Run the migration tests on Postgres too, when it is given
+API version 0.8.0
+Run the API and Postgres with docker compose
+Add a Dockerfile for the API
+Add the Postgres driver</code></pre>
+</div>
+<p>בסוף, מתיקייה נקייה: <code>uv sync</code>, <code>uv run pytest</code> מדווח <code>71 passed, 3 skipped</code>, ועם <code>TEST_DATABASE_URL</code> <code>74 passed</code>. <code>ruff check</code>, <code>ruff format --check</code> ו-<code>mypy agent scripts</code> נקיים, ו-<code>docker compose up --build -d</code> מרים את השירות. בסוף יום: <code>docker compose stop</code>, ו-Docker Desktop נסגר מהאייקון.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-08.html">→ חזרה לפרק 8</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

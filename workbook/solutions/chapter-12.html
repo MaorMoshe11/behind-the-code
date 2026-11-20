@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 12 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-12.html">→ חזרה לפרק 12</a>
+    <span>פתרונות לפרק 12</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 12 · <span class="en">Messaging</span> ו-<span class="en">pipelines</span></h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. הפלטים כאן הם מה שהתקבל באמת כשהתרגילים נעשו; המזהים, ה-<span class="en">partitions</span> והזמנים אצלכם יהיו אחרים. הקוד המלא נמצא ב-<code>checkpoints\chapter-12</code>.</p>
+</header>
+
+<h2><span class="sec">1</span>הודעה רעילה</h2>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>2026-11-18 19:14:08,528 ERROR worker: dead letter: offset 0: not JSON: Expecting value: line 1 column 1 (char 0)
+error:not JSON: Expecting value: line 1 column 1 (char 0)	﻿hello, I am not JSON
+Processed a total of 1 messages</code></pre>
+</div>
+<p>ה-<span class="en">worker</span> לא הצליח לקרוא JSON, העביר את ההודעה כמו שהיא ל-<code>chat-events-dlq</code> עם כותרת <code>error</code> שמסבירה למה, אישר אותה, והמשיך. (לפני <code>hello</code> יש תו בלתי נראה: PowerShell 5.1 מוסיף <span class="en">BOM</span> לטקסט שהוא מעביר לתוכנה אחרת, קרוב משפחה של בעיית הקידוד מפרק 2. כאן זה רק הופך הודעה שבורה לשבורה עוד יותר.)</p>
+<p><strong>בלי DLQ:</strong> הודעה שבורה תישבר בכל ניסיון. אם ה-<span class="en">worker</span> זורק שגיאה בלי <span class="en">commit</span>, אחרי הפעלה מחדש הוא יקבל אותה שוב, וייפול שוב, לנצח. כל האירועים שאחריה באותה <span class="en">partition</span> לא יטופלו, וה-<span class="en">lag</span> רק יגדל. להודעה כזו קוראים <span class="en">poison message</span>. וגם אסור פשוט לדלג עליה בשקט: אולי היא סימן לבאג אצל מי ששלח. ה-DLQ שומר אותה למי שיבדוק.</p>
+
+<h2><span class="sec">2</span>מפתחות ומחיצות</h2>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>(conversation 9570e9020e954627b8f708c770e8317c, turns: 1)
+(conversation f1367a24ec7a45b99a3c477469a8c23b, turns: 1)
+(conversation 694976b9af48407aa39a2d9f02c7423f, turns: 1)
+(conversation 8db5824d2a8543b5925953987d02ceda, turns: 1)
+(conversation ab4bfec315c043df8bbacc909aa3c7c6, turns: 3)
+2026-11-18 19:29:41,801 INFO worker: partition 2 offset 9: message.created 9570e9020e954627b8f708c770e8317c
+2026-11-18 19:29:42,269 INFO worker: partition 2 offset 10: message.created f1367a24ec7a45b99a3c477469a8c23b
+2026-11-18 19:29:42,793 INFO worker: partition 0 offset 0: message.created 694976b9af48407aa39a2d9f02c7423f
+2026-11-18 19:29:43,398 INFO worker: partition 1 offset 1: message.created 8db5824d2a8543b5925953987d02ceda
+2026-11-18 19:29:43,944 INFO worker: partition 2 offset 11: message.created ab4bfec315c043df8bbacc909aa3c7c6</code></pre>
+</div>
+<p>ארבע השיחות החדשות התחלקו בין שלוש ה-<span class="en">partitions</span> לפי <span class="en">hash</span> של המפתח: אי אפשר לבחור, אבל מפתח זהה תמיד מגיע לאותה <span class="en">partition</span>, ולכן השיחה הקיימת המשיכה ב-<span class="en">partition</span> שבה היו כל ההודעות הקודמות שלה. ב-<span class="en">partition</span> 1 ה-<span class="en">offset</span> הראשון הוא 1, כי <span class="en">offset</span> 0 שם הוא ההודעה הרעילה מתרגיל 1: היא נשלחה בלי מפתח, ו-Kafka בחר לה <span class="en">partition</span> בעצמו. ה-<span class="en">offset</span> שלה נשאר תפוס לתמיד, גם אחרי שעברה ל-DLQ.</p>
+<p><strong>בלי מפתח</strong> אירועים של שיחה אחת היו מתפזרים בין <span class="en">partitions</span>, ושני צרכנים היו יכולים לטפל בהם במקביל ובסדר אחר. <code>conversation.deleted</code> היה יכול להיות מטופל לפני <code>message.created</code> של אותה שיחה, וה-<span class="en">worker</span> היה יוצר שורת סטטיסטיקה לשיחה שכבר נמחקה, שלא תימחק לעולם.</p>
+
+<h2><span class="sec">3</span>שני <span class="en">workers</span>, ואז ארבעה</h2>
+<div class="codebox output">
+  <div class="label"><span>--scale worker=2: describe, then two messages (shortened)</span></div>
+<pre><code>GROUP           TOPIC           PARTITION  CURRENT-OFFSET  LOG-END-OFFSET  LAG  CONSUMER-ID
+usage-worker    chat-events     0          1               1               0    rdkafka-416d0389-...
+usage-worker    chat-events     1          2               2               0    rdkafka-416d0389-...
+usage-worker    chat-events     2          12              12              0    rdkafka-f5349c51-...
+worker-1  | 2026-11-18 19:30:23,231 INFO worker: partition 0 offset 1: message.created 694976b9af48407aa39a2d9f02c7423f
+worker-2  | 2026-11-18 19:30:23,731 INFO worker: partition 2 offset 12: message.created 9570e9020e954627b8f708c770e8317c</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>--scale worker=4: describe --members</span></div>
+<pre><code>GROUP           CONSUMER-ID                                  HOST            CLIENT-ID       #PARTITIONS
+usage-worker    rdkafka-f5349c51-ccfb-4ca8-a4a5-d6458fa7980f /172.19.0.8     rdkafka         0
+usage-worker    rdkafka-416d0389-863f-42f8-bb05-b406609c3c5d /172.19.0.7     rdkafka         1
+usage-worker    rdkafka-6247f5a7-c5d0-4cdf-abd7-142935971e62 /172.19.0.9     rdkafka         1
+usage-worker    rdkafka-10d44b61-e3b0-4011-ba17-53ad6ecacd24 /172.19.0.10    rdkafka         1</code></pre>
+</div>
+<p>עם שניים, Kafka חילק מחדש (<span class="en">rebalance</span>): אחד קיבל שתי <span class="en">partitions</span>, השני אחת, וכל אירוע טופל בדיוק אצל מי שמחזיק את ה-<span class="en">partition</span> שלו. עם ארבעה, אחד קיבל אפס: הוא רץ, מחובר, ולא עושה כלום. <span class="en">Partition</span> אחת נקראת בתוך קבוצה בידי צרכן אחד בלבד, כי זו הדרך לשמור על הסדר. לכן מספר ה-<span class="en">partitions</span> הוא התקרה של המקביליות בקבוצה, ובוחרים אותו מראש עם מרווח (להוסיף <span class="en">partitions</span> אחר כך אפשר, אבל זה משנה לאן כל מפתח הולך, ושובר את הסדר של מפתחות קיימים לתקופת המעבר). ובשקט: שני ה-<span class="en">workers</span> כתבו לאותו קובץ SQLite ב-<span class="en">volume</span> משותף, וזה עבד כי הכתיבות קטנות; בשירות אמיתי היו כותבים ל-Postgres.</p>
+
+<h2><span class="sec">4</span>הצעד השלישי נכשל</h2>
+<div class="codebox">
+  <div class="label"><span>tests\test_saga.py</span></div>
+<pre><code>def test_a_failure_after_the_notes_were_deleted_restores_them(world, monkeypatch):
+    service, notes, conversations, conversation_id = world
+
+    def broken_delete(conversation_id):
+        raise RuntimeError("the chat's database is down")
+
+    monkeypatch.setattr(conversations, "delete", broken_delete)
+    with pytest.raises(RuntimeError):
+        run_saga("delete", delete_conversation(conversations, notes, conversation_id))
+    <span class="cm"># Both compensations ran: the notes are back (new notes: new ids), and so is the chat.</span>
+    assert [note["text"] for note in service.notes] == ["buy milk", "call Dana"]
+    assert [note["id"] for note in service.notes] == ["n3", "n4"]
+    assert conversations.title(conversation_id) == "hello"</code></pre>
+</div>
+<p>ה-<span class="en">fixture</span> <code>world</code> בונה שיחה עם תור אחד ושתי הערות (<code>n1</code>, <code>n2</code>) בשירות המזויף <code>FakeNotesService</code>, שנמצא בראש הקובץ. הבדיקה עוברת. כדי לראות שהיא בודקת משהו, הוצאתי זמנית את <code>restore_notes</code> מהצעד השני:</p>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest tests/test_saga.py -q, without the compensation (shortened)</span></div>
+<pre><code>E       AssertionError: assert [] == ['buy milk', 'call Dana']
+WARNING  agent.saga:saga.py:33 saga delete: step 'delete the conversation' failed; compensating
+1 failed, 4 passed in 5.48s</code></pre>
+</div>
+<p><strong>הסדר:</strong> קודם שחזור ההערות (הצעד השני), אחר כך החזרת השיחה מהארכיון (הראשון): מהחדש לישן, כך שכל תיקון רואה את העולם כפי שהיה אחרי הצעד שלו. <strong>המזהים השתנו</strong> כי השחזור הוא פעולה חדשה, <code>POST</code>, ולא ביטול של המחיקה: שירות ההערות לא שמר את הישנות. מי שהחזיק מזהה של הערה (קישור, או בפרק 18 סוכן שזכר <code>note_id</code>) יקבל 404. אם זה חשוב, שירות ההערות צריך מחיקה רכה (<code>deleted_at</code>) ופעולת <code>undelete</code> אמיתית. <strong>המפתח נגזר מהמזהה הישן</strong> כדי שהשחזור עצמו יהיה <span class="en">idempotent</span>: אם הוא נכשל באמצע ומנסים שוב, ההערות ששוחזרו כבר מקבלות את עצמן בחזרה (200) ולא נוצרות פעמיים. מפתח אקראי היה חדש בכל ניסיון.</p>
+
+<h2><span class="sec">5</span><span class="en">Backfill</span></h2>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>wrote reports\usage-2026-11-15.csv (0 rows)
+wrote reports\usage-2026-11-16.csv (0 rows)
+wrote reports\usage-2026-11-17.csv (0 rows)
+wrote reports\usage-2026-11-18.csv (5 rows)
+wrote reports\usage-2026-11-18.csv (5 rows)
+
+Name                 Length
+----                 ------
+usage-2026-11-15.csv     29
+usage-2026-11-16.csv     29
+usage-2026-11-17.csv     29
+usage-2026-11-18.csv    227</code></pre>
+</div>
+<p>ארבעה קבצים, אחד ליום. שם הקובץ נקבע רק מהיום, ו-<code>write_report</code> כותבת לקובץ צדדי ומחליפה, ולכן ההרצה השנייה של ה-18 החליפה את הראשונה בתוכן זהה. ימים בלי שיחות קיבלו קובץ עם כותרת בלבד (29 בתים): "אין שימוש" הוא תוצאה, שונה מ"הדוח לא רץ".</p>
+<p><strong>אילו היא הוסיפה שורות:</strong> כל הרצה חוזרת, אוטומטית (<span class="en">retries</span> של Airflow אחרי משימה שנכשלה באמצע) או ידנית (<span class="en">backfill</span> אחרי תיקון באג), הייתה מכפילה את הנתונים של היום. ו-<span class="en">backfill</span> הוא בדיוק הרגע שבו מריצים ימים שכבר רצו. לכן הכלל: משימה ב-<span class="en">pipeline</span> כותבת "את התוצאה של היום X", ולא "עוד שורות". ב-<code>try_in_docker.sh</code> עם תאריך משלכם, Airflow מדווח על היום שלפני התאריך, כמו בפרק.</p>
+
+<h2><span class="sec">6</span>תכנון <span class="en">outbox</span></h2>
+<p>הסעיף ב-<code>checkpoints\chapter-12\docs\architecture.md</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>docs\architecture.md (the new section)</span></div>
+<pre><code>## Plan: an outbox for the events (not built yet)
+
+1. Migration: a table `outbox` (id, topic, key, payload JSON, created_at, sent_at NULL).
+2. `Conversations.send()` and the delete saga's last step add the event row in the same
+   transaction as the messages: the event exists if and only if the change was committed.
+3. A relay process (like the worker: same image, `python -m agent.relay`) reads unsent rows
+   oldest first, publishes each with `acks=all`, waits for the confirmation, then sets
+   `sent_at`. If it dies between the two, the row is published again: consumers must stay
+   idempotent (they are: `event_id`).
+4. A job deletes sent rows older than a week. Kafka's own transactions do not replace this:
+   they cover Kafka writes only, not the chat's Postgres.</code></pre>
+</div>
+<p><strong>ההבטחה:</strong> <span class="en">at least once</span>. האירוע לא יאבד, כי הוא שמור ב-Postgres יחד עם השינוי, אבל הוא עלול להישלח פעמיים, אם ה-<span class="en">relay</span> נופל בין השליחה לסימון. ה-<span class="en">worker</span> כבר מוכן לזה: הוא זוכר כל <code>event_id</code>, ואירוע שנשלח פעמיים נספר פעם אחת. זה הסיבה שבונים צרכנים <span class="en">idempotent</span> מהיום הראשון: כל שיפור באמינות של הצד השולח מוסיף כפילויות, לא מוריד אותן.</p>
+<p><strong>מחיקה ב-<span class="en">choreography</span>?</strong> אפשר: הצ'אט מפרסם <code>conversation.deleted</code>, ושירות ההערות מוחק כשהוא שומע. זה עובד יפה כשהצעד הבא לא יכול להיכשל מסיבה עסקית, וכל מה שחסר הוא שהשירות יהיה למעלה: האירוע יחכה לו. אבל כאן רצינו "הכול או כלום" מול המשתמש, עם תשובה ברורה עכשיו ותיקון כשמשהו נכשל, וזה קל יותר לכתוב, לבדוק ולקרוא כשהזרימה במקום אחד. תשובה סבירה אחרת: מחיקה רכה מיד, והודעה שמוחקת את ההערות מאוחר יותר; זה מוותר על התשובה המיידית ומרוויח שהמחיקה לעולם לא נכשלת בגלל שירות ההערות. שתיהן טובות אם הנימוק כתוב.</p>
+
+<h2><span class="sec">7</span>ההיסטוריה ב-git</h2>
+<div class="codebox output">
+  <div class="label"><span>the commits of this chapter, newest first</span></div>
+<pre><code>Plan an outbox for the events (ex. 6)
+Wire Kafka and the worker into CI and deploy; version 0.12.0
+A nightly usage report: plain-Python tasks, and an Airflow DAG that runs them
+Delete a conversation and its notes as a saga, with compensations
+Notes service 0.2.0: delete every note of a conversation
+Idempotent worker: an event delivered twice is applied once
+Add the usage worker, and Kafka with its topics to compose
+Publish chat events to Kafka, when KAFKA_BOOTSTRAP_SERVERS is set</code></pre>
+</div>
+<p>הכול על <code>feature/events</code>, מוזג ל-<code>main</code>, עם התגית <code>v0.12.0</code> על "<span class="en">Wire Kafka and the worker</span>". בגרסה הזו <code>IMAGE_TAG</code> ו-<code>NOTES_IMAGE_TAG</code> עודכנו באותו <span class="en">commit</span>; אם אתם מעדיפים <span class="en">commit</span> נפרד לכל <span class="en">deploy</span>, כמו בפרק 11, זה טוב באותה מידה. הבדיקה של תרגיל 4 נכנסה עם ה-<span class="en">saga</span>. תרגיל 6 נכנס אחרי ה-<span class="en">release</span>, ולכן אין לו שורה ב-<code>CHANGELOG.md</code> (מסמך תכנון, לא שינוי בקוד).</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-12.html">→ חזרה לפרק 12</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

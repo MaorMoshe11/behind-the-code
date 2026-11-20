@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 7 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-07.html">→ חזרה לפרק 7</a>
+    <span>פתרונות לפרק 7</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 7 · <span class="en">Migrations</span></h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. הפלטים כאן הם מה שהתקבל באמת כשהתרגילים נעשו; המזהים, הזמנים והמספרים אצלכם יהיו אחרים. הקוד המלא נמצא ב-<code>checkpoints\chapter-07</code>.</p>
+</header>
+
+<h2><span class="sec">0</span>הבדיקה מצעד 6 בדוגמה המודרכת</h2>
+<div class="codebox">
+  <div class="label"><span>tests\test_conversations.py (at the end)</span></div>
+<pre><code>def test_the_first_message_names_the_conversation():
+    conversations = Conversations(MockClient(), 10, make_engine("sqlite://"))
+    conversation_id = conversations.start()
+    conversations.send(conversation_id, "plan a trip to the north " * 4)
+    conversations.send(conversation_id, "and back")
+    assert conversations.title(conversation_id) == ("plan a trip to the north " * 4)[:50]</code></pre>
+</div>
+<p>ההודעה ארוכה מ-50 תווים בכוונה, כדי לבדוק את החיתוך, וההודעה השנייה בודקת שהכותרת לא מתחלפת. ב-<code>test_cli.py</code>: <code>"0 turns saved in this conversation."</code>, <code>"2 turns saved in this conversation."</code>, ו-<code>'Continuing "one" (2 turns).'</code>. כדאי להוסיף גם <code>/history</code> אחרי ההודעה הראשונה, ולבדוק <code>"1 turn saved in this conversation."</code>: זה המקרה שהנוסח הישן שבר.</p>
+
+<h2><span class="sec">1</span>לקרוא את השרשרת, ואת ה-<span class="en">SQL</span> של Postgres</h2>
+<div class="codebox output">
+  <div class="label"><span>uv run alembic history; uv run alembic current (shortened)</span></div>
+<pre><code>0002 -&gt; 0003 (head), every conversation has a title
+0001 -&gt; 0002, add a title to conversations
+&lt;base&gt; -&gt; 0001, baseline: the tables from chapter 6
+0003 (head)</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>uv run alembic upgrade 0002:0003 --sql (shortened)</span></div>
+<pre><code>-- Running upgrade 0002 -&gt; 0003
+
+UPDATE conversations SET title=(SELECT substr(messages.content, 1, 50) AS substr_1
+FROM messages
+WHERE messages.conversation_id = conversations.id AND messages.role = 'user' ORDER BY messages.id
+ LIMIT 1 OFFSET 0) WHERE conversations.title IS NULL;
+
+UPDATE conversations SET title='New conversation' WHERE conversations.title IS NULL;
+
+FAILED: This operation cannot proceed in --sql mode; batch mode with dialect sqlite requires a live database connection with which to reflect the table "conversations". ...</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>DATABASE_URL=postgresql+psycopg://..., uv run alembic upgrade head --sql (shortened)</span></div>
+<pre><code>BEGIN;
+...
+CREATE TABLE messages (
+    id SERIAL NOT NULL,
+    ...
+    created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+...
+-- Running upgrade 0002 -&gt; 0003
+
+UPDATE conversations SET title=(SELECT substr(messages.content, 1, 50) AS substr_1
+...
+ LIMIT 1) WHERE conversations.title IS NULL;
+
+UPDATE conversations SET title='New conversation' WHERE conversations.title IS NULL;
+
+ALTER TABLE conversations ALTER COLUMN title SET NOT NULL;
+
+UPDATE alembic_version SET version_num='0003' WHERE alembic_version.version_num = '0002';
+
+COMMIT;</code></pre>
+</div>
+<p><strong>למה נכשל רק ב-SQLite:</strong> ב-SQLite, <span class="en">batch mode</span> בונה טבלה חדשה, ולשם כך הוא צריך לקרוא מבסיס הנתונים את המבנה המדויק של הטבלה הקיימת. ב-<code>--sql</code> אין חיבור, אז אין ממה לקרוא. ב-Postgres אין צורך להעתיק: יש <code>ALTER COLUMN ... SET NOT NULL</code> אמיתי.</p>
+<p><strong>הבדלים:</strong> <code>SERIAL</code> במקום <code>INTEGER</code> למספר רץ; <code>TIMESTAMP WITHOUT TIME ZONE</code> במקום <code>DATETIME</code>; <code>LIMIT 1</code> בלי <code>OFFSET 0</code>; <code>BEGIN</code> ו-<code>COMMIT</code> סביב הכול, כי ב-Postgres גם פקודות מבנה רצות בתוך <span class="en">transaction</span>. השורות של ה-<span class="en">backfill</span> כמעט זהות: זה התשלום על כתיבתן כביטויים של SQLAlchemy ולא כמחרוזת. שימו לב גם שלא הותקן שום דרייבר של Postgres: במצב <span class="en">offline</span> SQLAlchemy צריך רק את ה-<span class="en">dialect</span>. בפרק 8 תצטרכו את <code>psycopg</code>.</p>
+
+<h2><span class="sec">2</span><span class="en">downgrade</span> הוא לא "בטל"</h2>
+<div class="codebox output">
+  <div class="label"><span>output, on copy.db (shortened)</span></div>
+<pre><code>INFO  [alembic.runtime.migration] Running downgrade 0003 -&gt; 0002, every conversation has a title
+INFO  [alembic.runtime.migration] Running downgrade 0002 -&gt; 0001, add a title to conversations
+INFO  [alembic.runtime.migration] Running upgrade 0001 -&gt; 0002, add a title to conversations
+INFO  [alembic.runtime.migration] Running upgrade 0002 -&gt; 0003, every conversation has a title
+('hello',)
+('remember the milk',)
+('good morning',)
+('old code says hi',)
+INFO  [alembic.runtime.migration] Running downgrade 0003 -&gt; 0002, every conversation has a title
+INFO  [alembic.runtime.migration] Running downgrade 0002 -&gt; 0001, add a title to conversations
+INFO  [alembic.runtime.migration] Running downgrade 0001 -&gt; , baseline: the tables from chapter 6
+OperationalError (SQLITE_ERROR): no such table: conversations</code></pre>
+</div>
+<p>הכותרות חזרו, כי ה-<span class="en">backfill</span> חישב אותן מחדש מההודעות. אבל זה מזל של הדוגמה: אילו היה כאן מידע שאין לו מקור אחר, הוא היה נעלם עם העמודה. ו-<code>base</code> הריץ את ה-<code>downgrade()</code> של ה-<span class="en">baseline</span>, כלומר <code>drop_table</code>: כל השיחות נמחקו, בלי שאלה. בשרת: לא מורידים. מחזירים את הקוד הקודם (המבנה תואם לו), ואם ה-<span class="en">migration</span> עצמו שגוי, כותבים <span class="en">migration</span> מתקן. אם נתונים כבר נפגעו, משחזרים מגיבוי.</p>
+
+<h2><span class="sec">3</span>בדיקה ל-<span class="en">backfill</span></h2>
+<div class="codebox">
+  <div class="label"><span>tests\test_migrations.py (add text to the sqlalchemy import)</span></div>
+<pre><code>def test_the_backfill_names_old_conversations(tmp_path):
+    url = f"sqlite:///{tmp_path / 'test.db'}"
+    upgrade(url, "0001")  # the tables as they were in chapter 6, before titles
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO conversations (id, created_at) VALUES "
+                "('chat', '2026-11-18 10:00'), ('empty', '2026-11-18 11:00')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO messages (conversation_id, role, content, created_at) VALUES "
+                "('chat', 'user', :first, '2026-11-18 10:00'), "
+                "('chat', 'assistant', 'a reply', '2026-11-18 10:00'), "
+                "('chat', 'user', 'the second question', '2026-11-18 10:01')"
+            ),
+            {"first": "a very long first question " * 3},
+        )
+    engine.dispose()
+
+    upgrade(url)  # 0002 and 0003 run on rows that were already there
+    engine = create_engine(url)
+    with engine.connect() as connection:
+        titles = dict(connection.execute(text("SELECT id, title FROM conversations")).all())
+    engine.dispose()
+    assert titles == {"chat": ("a very long first question " * 3)[:50], "empty": "New conversation"}</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest tests\test_migrations.py, with the "New conversation" line deleted (shortened)</span></div>
+<pre><code>E       sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: _alembic_tmp_conversations.title
+1 failed, 2 passed</code></pre>
+</div>
+<p><strong>למה <span class="en">SQL</span> ישיר:</strong> הבדיקה צריכה שורות במבנה של 0001, כמו ב-<code>agent.db</code> שלכם לפני הפרק. <code>Conversations</code> ו-<code>ConversationRow</code> מתארים את המבנה של <em>היום</em>, עם <code>title</code> ו-<code>user_id</code>, ולא היו עובדים מול טבלה של 0001. מאותה סיבה ה-<span class="en">migrations</span> עצמם לא מייבאים אותם. השיחה <code>empty</code> היא המקרה ששבר את הניסיון: בלי הודעות, ה-<span class="en">subquery</span> מחזיר <code>NULL</code>, וההעתקה לטבלה עם <code>NOT NULL</code> נכשלת.</p>
+
+<h2><span class="sec">4</span>שני <span class="en">migrations</span>, שני ענפים</h2>
+<div class="codebox output">
+  <div class="label"><span>git merge main, uv run alembic heads, uv run pytest (shortened)</span></div>
+<pre><code>Auto-merging agent/db.py
+Merge made by the 'ort' strategy.
+ agent/db.py                                        |  2 +-
+ .../0004_index_conversations_by_created_at.py      | 37 ++++++++++++++++++++++
+UserWarning: Revision 0004 is present more than once
+0004 (head)
+0004 (head)
+FAILED tests/test_migrations.py::test_the_migrations_build_the_tables_of_the_code
+FAILED tests/test_migrations.py::test_every_migration_can_be_undone - alembic...
+FAILED tests/test_migrations.py::test_the_backfill_names_old_conversations - ...
+5 failed, 64 passed, 5 warnings</code></pre>
+</div>
+<p>git מיזג בלי שום קונפליקט: שני קבצים שונים, ושינויים בשורות שונות של <code>db.py</code>. Alembic רואה שני <span class="en">migrations</span> עם אותו מספר ואותו אב, כלומר שני ראשים. <code>upgrade head</code> נכשל עם <code>Multiple head revisions are present for given argument 'head'</code>, וזה מה שהפיל את הבדיקות. עם מזהים אקראיים (ברירת המחדל של Alembic) המספרים לא היו מתנגשים, אבל השרשרת הייתה מתפצלת בדיוק באותה צורה. אחרי התיקון:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git mv migrations\versions\0004_add_user_id_to_conversations.py migrations\versions\0005_add_user_id_to_conversations.py
+<span class="cm"># in the file: Revision ID: 0005, Revises: 0004, revision = "0005", down_revision = "0004"</span>
+uv run alembic heads
+uv run alembic upgrade head</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>0005 (head)
+INFO  [alembic.runtime.migration] Running upgrade 0003 -&gt; 0004, index conversations by created_at
+INFO  [alembic.runtime.migration] Running upgrade 0004 -&gt; 0005, add user_id to conversations</code></pre>
+</div>
+<p><strong>למה <code>downgrade -1</code> לפני המיזוג:</strong> <code>agent.db</code> שלכם היה רשום כ-"0004", ואחרי המיזוג המספר הזה היה מתאר גם את ה-<span class="en">migration</span> של העמית. אחרי שינוי המספר, בסיס הנתונים היה "ב-0004" של העמית, בלי האינדקס שלו ועם העמודה שלכם. הורדה בזמן שהמספר עוד חד-משמעי מחזירה את בסיס הנתונים ל-0003, ואז שני ה-<span class="en">migrations</span> רצים בסדר החדש. זה גם הכלל הכללי: <span class="en">migration</span> שעוד לא יצא מהמחשב שלכם מותר לשנות, אחרי שהורדתם אותו.</p>
+
+<h2><span class="sec">5</span>רשימת השיחות ב-<span class="en">API</span></h2>
+<div class="codebox">
+  <div class="label"><span>agent\conversations.py</span></div>
+<pre><code>    def newest(self, limit: int = 50) -&gt; list[tuple[str, str]]:
+        """(id, title) of the newest conversations, newest first."""
+        with self.sessions() as session:
+            rows = session.execute(
+                select(ConversationRow.id, ConversationRow.title)
+                .order_by(ConversationRow.created_at.desc())
+                .limit(limit)
+            )
+            return [(row.id, row.title) for row in rows]</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>agent\api.py (the additions)</span></div>
+<pre><code>class ConversationSummary(BaseModel):
+    """One line in the list of conversations."""
+
+    conversation_id: str
+    title: str
+...
+    @app.get("/conversations", dependencies=[require_key])
+    def list_conversations() -&gt; list[ConversationSummary]:
+        """The newest conversations, newest first, with their titles."""
+        return [
+            ConversationSummary(conversation_id=conversation_id, title=title)
+            for conversation_id, title in conversations.newest()
+        ]</code></pre>
+</div>
+<p>וב-<code>get_conversation</code>: <code>title = conversations.title(conversation_id)</code> בתוך אותו <code>try</code>, ו-<code>title=title</code> ב-<code>ConversationOut</code>. הבדיקות:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_api.py</span></div>
+<pre><code>def test_list_shows_the_newest_conversations_first(client):
+    client.post("/chat", json={"message": "first chat"}, headers=AUTH)
+    client.post("/chat", json={"message": "second chat"}, headers=AUTH)
+    response = client.get("/conversations", headers=AUTH)
+    assert response.status_code == 200
+    assert [c["title"] for c in response.json()] == ["second chat", "first chat"]
+
+
+def test_list_needs_the_key(client):
+    assert client.get("/conversations").status_code == 401</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>the API on a migrated agent.db: POST /chat, then GET /conversations</span></div>
+<pre><code>[{'conversation_id': '2cbe847e52ba4eebbcdd5630e869b59c', 'title': 'hello from the api'}]</code></pre>
+</div>
+<p><strong>למה <code>str</code>:</strong> מאז 0003 בסיס הנתונים עצמו מבטיח שאין שיחה בלי כותרת, ו-<code>Mapped[str]</code> אומר את זה ל-mypy. לפני 0003, השיחה שהקוד הישן יצר הייתה מגיעה עם <code>None</code>, ו-Pydantic היה דוחה את התשובה כולה: שגיאת 500 על כל הרשימה, בגלל שורה אחת. זה עוד נימוק לסדר של 7.6: קודם מבטיחים את הנתונים, ורק אחר כך בונים עליהם.</p>
+
+<h2><span class="sec">6</span>תוכנית ל-<code>user_id</code></h2>
+<p>אין תשובה יחידה. דוגמה לתוכנית סבירה:</p>
+<ol>
+  <li><strong><span class="en">Expand</span> (נעשה, 0005):</strong> עמודה ריקה. קוד ישן וחדש עובדים.</li>
+  <li><strong>קוד:</strong> השרת מזהה משתמש לפי המפתח: טבלה קטנה של מפתחות ובעליהם (עוד <span class="en">migration</span> של <span class="en">expand</span>), או בינתיים שם קבוע מ-<code>.env</code>. ה-<span class="en">terminal</span> כותב <code>"local"</code>. כל שיחה חדשה נשמרת עם <code>user_id</code>. הקוד עדיין לא <em>דורש</em> אותו בקריאה, כי יש שורות ישנות בלי. יוצא לשרת לבד; מחכים שאין תהליך ישן.</li>
+  <li><strong><span class="en">Migrate</span>:</strong> <span class="en">migration</span> שממלא את השורות הריקות. אם יש רק משתמש אחד אמיתי, את השם שלו; אחרת ערך מפורש כמו <code>"unknown"</code>, ולא ניחוש.</li>
+  <li><strong>קוד:</strong> גרסה שמסננת לפי <code>user_id</code> (כל אחד רואה רק את השיחות שלו, וזו כבר שאלה של אבטחה, פרק 14), ושמניחה שהערך קיים.</li>
+  <li><strong><span class="en">Contract</span>:</strong> <code>NOT NULL</code>, ואינדקס על <code>user_id</code> אם מסננים לפיו.</li>
+</ol>
+<p><strong>חזרה אחורה:</strong> אחרי שלבים 1 עד 3, החזרת הקוד הקודם בטוחה, כי הוא מתעלם מהעמודה. אחרי 5, קוד ישן ייפול כמו בסוף 7.6, ולכן 5 רץ רק כשאין שום כוונה לחזור לגרסה שלפני 2. <code>downgrade</code> של 3 לא יודע אילו שורות היו ריקות, ולכן <code>downgrade()</code> שלו יכול להיות <code>pass</code> עם הערה שמסבירה למה.</p>
+
+<p>ההיסטוריה הצפויה של הפרק, מהישן לחדש (הסדר ב-<code>git log --oneline</code> הפוך):</p>
+<div class="codebox output">
+  <div class="label"><span>the chapter 7 commits</span></div>
+<pre><code>Add Alembic and a baseline migration
+Check the migrations at startup instead of create_all
+Add a title to conversations, with a backfill
+Make the title required: migrate the old rows, then contract
+Test the title backfill
+Add user_id to conversations (expand step)
+Index conversations by created_at                          (teammate branch, merged first)
+Merge branch 'main' into feature/user-id
+Renumber the user_id migration after the created_at index
+List conversations with their titles in the API
+Document migrations in the README</code></pre>
+</div>
+<p>בסוף, מתיקייה נקייה: <code>uv sync</code>, <code>uv run alembic upgrade head</code> בונה בסיס נתונים חדש ב-0005, <code>uv run pytest</code> מדווח <code>71 passed</code> ולא משאיר קובץ <code>.db</code>, ו-<code>ruff check</code>, <code>ruff format --check</code> ו-<code>mypy agent scripts</code> נקיים.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-07.html">→ חזרה לפרק 7</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

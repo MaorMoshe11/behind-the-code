@@ -1,0 +1,16 @@
+# Secrets and private settings: never commit these
+.env
+
+# The virtual environment is rebuilt from uv.lock with `uv sync`
+.venv/
+
+# Files Python generates while running
+__pycache__/
+*.pyc
+
+# Log files the agent writes while it runs
+*.log
+
+# Editor settings that belong to one person
+.vscode/
+.idea/

@@ -1,0 +1,849 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 7 · Migrations | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="07">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 7 · Migrations</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 7 מתוך 21</div>
+  <h1><span class="en">Migrations</span></h1>
+  <p class="lead">איך משנים מבנה של טבלה שכבר מלאה בשיחות של אנשים, בלי למחוק דבר, בלי לעצור את העולם, ועם דרך חזרה.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>להסביר מה זה <span class="en">migration</span>, ולמה בסיס נתונים עם נתונים לא "נבנה מחדש".</li>
+    <li>לעבוד עם Alembic: <code>revision</code>, <code>upgrade</code>, <code>downgrade</code>, <code>current</code>, <code>history</code> ו-<code>stamp</code>.</li>
+    <li>להכניס בסיס נתונים קיים לשליטה של Alembic, ולהחליט מי יוצר טבלאות: האפליקציה, הבדיקות, או אף אחד מהם.</li>
+    <li>לכתוב <span class="en">backfill</span> שממלא ערך לשורות ישנות, ולהריץ <span class="en">downgrade</span> אמיתי.</li>
+    <li>לשנות מבנה בשלבים בטוחים (<span class="en">expand, migrate, contract</span>) כשקוד ישן עדיין רץ.</li>
+    <li>לזהות ולתקן שני <span class="en">migrations</span> שנכתבו במקביל בשני ענפים.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> שלוש עד ארבע שעות, כולל התרגילים. <strong>מה צריך:</strong> הפרויקט מסוף פרק 6, וקובץ <code>agent.db</code> עם כמה שיחות. אין צורך בשרת בסיס נתונים, ואין צורך במפתח: הכול במצב <span class="en">mock</span>.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.1</span>הבעיה: הטבלה כבר מלאה</h2>
+
+<p>בצעד 7 של הדוגמה המודרכת בפרק 6 הוספתם עמודה <code>title</code> למחלקה <code>ConversationRow</code>, הבדיקות עברו, והסוכן נפל:</p>
+
+<div class="codebox output">
+  <div class="label"><span>output (the end of the traceback)</span></div>
+<pre><code>sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) table conversations has no column named title
+[SQL: INSERT INTO conversations (id, title, created_at) VALUES (?, ?, ?)]</code></pre>
+</div>
+
+<p>הקוד מתאר טבלה אחת, והקובץ מכיל טבלה אחרת. <code>create_all</code> יודע ליצור טבלה שחסרה, ולא נוגע בטבלה שקיימת. יש שלוש דרכים "פשוטות" לצאת מזה, וכל אחת נשברת:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה עושים</th><th>למה זה לא עובד בצוות ובשרת</th></tr>
+  <tr><td>מוחקים את <code>agent.db</code> ומתחילים מחדש</td><td>בשרת, הקובץ הוא השיחות של כל המשתמשים</td></tr>
+  <tr><td>פותחים <span class="en">shell</span> וכותבים <code>ALTER TABLE</code> ביד</td><td>מי זוכר שעשה את זה? על איזה מחשב? עמית שימשוך את הקוד מחר ייפול באותה שגיאה, ושרת ה-<span class="en">staging</span> נשכח</td></tr>
+  <tr><td>הקוד בודק בהפעלה "יש עמודה? אם לא, תוסיף"</td><td>אחרי עשרה שינויים זו ערימה של תנאים, ואי אפשר לחזור אחורה</td></tr>
+</table>
+</div>
+
+<p>מה שצריך הוא מה ש-git נתן לקוד: כל שינוי במבנה כתוב כקוד, יש לו מספר וסדר, הוא נכנס ל-git ועובר <span class="en">review</span>, והוא רץ <em>פעם אחת</em> על כל בסיס נתונים, שזוכר בעצמו אילו שינויים כבר עברו עליו. לשינוי כזה קוראים <strong><span class="en">migration</span></strong> (הגירה של המבנה), ולמבנה עצמו, הטבלאות והעמודות, קוראים <strong><span class="en">schema</span></strong>.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.2</span>המפה: שרשרת של שינויים</h2>
+
+<div class="diagram">
+  <div class="flow">
+    <div class="layer l4">
+      <div class="name">0001 baseline</div>
+      <div class="what">שתי הטבלאות מפרק 6</div>
+    </div>
+    <div class="hop">&rarr;<b>upgrade</b></div>
+    <div class="layer l4">
+      <div class="name">0002 title</div>
+      <div class="what">עמודה חדשה, ומילוי השורות הישנות</div>
+    </div>
+    <div class="hop">&rarr;<b>upgrade</b></div>
+    <div class="layer l4">
+      <div class="name">0003 required</div>
+      <div class="what">לכל שיחה חייבת להיות כותרת</div>
+    </div>
+  </div>
+  <div class="flow steps">
+    <div class="layer l3">
+      <div class="name">migrations/versions/</div>
+      <div class="what">קובץ Python לכל שינוי, עם <code>upgrade()</code> ו-<code>downgrade()</code>. ב-git, כמו כל קוד</div>
+    </div>
+    <div class="layer">
+      <div class="name">agent.db: alembic_version</div>
+      <div class="what">טבלה עם שורה אחת: איפה בשרשרת בסיס הנתונים הזה נמצא. <code>downgrade</code> הולך אחורה</div>
+    </div>
+  </div>
+  <div class="caption">כל <span class="en">migration</span> יודע מי קודם לו. Alembic קורא את <code>alembic_version</code>, ומריץ רק את מה שעוד לא רץ, לפי הסדר.</div>
+</div>
+
+<p>אותה שרשרת רצה על המחשב שלכם, של עמית, על <span class="en">staging</span> ועל השרת האמיתי. כל אחד מהם יכול להיות בנקודה אחרת, וכל אחד מגיע לסוף באותה דרך בדיוק.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.3</span><span class="en">Alembic</span> בעמוד אחד</h2>
+
+<p><strong>Alembic</strong> הוא כלי ה-<span class="en">migrations</span> של SQLAlchemy, מאותו כותב. הוא מבין את המחלקות שלכם, ולכן יכול גם <em>להציע</em> <span class="en">migration</span>: הוא משווה את בסיס הנתונים למחלקות, וכותב טיוטה של ההבדלים. לזה קוראים <strong><span class="en">autogenerate</span></strong>. הפקודות:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>פקודה</th><th>מה היא עושה</th></tr>
+  <tr><td><code>alembic init migrations</code></td><td>יוצרת את התיקייה <code>migrations</code> ואת <code>alembic.ini</code>. פעם אחת בחיי הפרויקט</td></tr>
+  <tr><td><code>alembic revision --autogenerate -m "..."</code></td><td>כותבת קובץ <span class="en">migration</span> חדש מתוך ההבדל בין בסיס הנתונים למחלקות. לא מריצה אותו</td></tr>
+  <tr><td><code>alembic upgrade head</code></td><td>מריצה את כל מה שעוד לא רץ, עד הסוף (<code>head</code>)</td></tr>
+  <tr><td><code>alembic downgrade -1</code></td><td>מריצה את ה-<code>downgrade()</code> של האחרון. אפשר גם לתת מספר: <code>downgrade 0001</code></td></tr>
+  <tr><td><code>alembic current</code> / <code>history</code></td><td>איפה בסיס הנתונים נמצא / כל השרשרת</td></tr>
+  <tr><td><code>alembic stamp 0001</code></td><td>רושמת ב-<code>alembic_version</code> "אני ב-0001", <em>בלי להריץ כלום</em>. לבסיס נתונים שכבר נמצא שם</td></tr>
+  <tr><td><code>alembic upgrade head --sql</code></td><td>מדפיסה את ה-<span class="en">SQL</span> במקום להריץ אותו. בלי חיבור לבסיס הנתונים</td></tr>
+</table>
+</div>
+
+<div class="callout warn">
+  <span class="title"><span class="en">autogenerate</span> כותב טיוטה, לא <span class="en">migration</span></span>
+  <p>הוא רואה עמודות, <span class="en">types</span> ואינדקסים. הוא לא יודע מה <em>הכוונה</em>: שינוי שם של עמודה נראה לו כמו "מחק עמודה, הוסף עמודה", כלומר מחיקה של כל הנתונים בה. והוא לא כותב <span class="en">backfill</span>. כלל: כל קובץ שנוצר נקרא שורה אחרי שורה לפני שמריצים אותו, כמו קוד של עמית ב-<span class="en">pull request</span>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.4</span>מי יוצר את הטבלאות מעכשיו</h2>
+
+<p>עד היום <code>make_engine</code> קרא ל-<code>create_all</code> בכל הפעלה. אם גם הוא וגם Alembic יוצרים טבלאות, יש שני מקורות אמת, ובסוף הם לא יסכימו. ההחלטה של הפרויקט:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מי</th><th>איך הוא מקבל טבלאות</th><th>למה</th></tr>
+  <tr><td>בסיס נתונים אמיתי (קובץ, ובפרק 8 Postgres)</td><td>רק <code>alembic upgrade head</code>, כפקודה נפרדת לפני ההפעלה. הסוכן והשרת <strong>בודקים</strong> שהוא מעודכן, ומסרבים לעלות אם לא</td><td>שינוי מבנה הוא פעולה מכוונת, עם גיבוי, לא תופעת לוואי של הפעלה</td></tr>
+  <tr><td>הבדיקות, בסיס נתונים בזיכרון</td><td><code>create_all</code>, ישר מהמחלקות</td><td>בסיס נתונים חדש וריק, שנעלם בסוף הבדיקה: אין מה להעביר. ומהיר</td></tr>
+  <tr><td>בדיקה שצריכה קובץ</td><td>פונקציה <code>upgrade(url)</code> שמריצה את ה-<span class="en">migrations</span></td><td>כמו <code>agent.db</code> אמיתי</td></tr>
+  <tr><td>השומר</td><td><code>tests/test_migrations.py</code>: מריץ את כל השרשרת ומשווה למחלקות</td><td>אם שכחתם <span class="en">migration</span>, בדיקה נכשלת</td></tr>
+</table>
+</div>
+
+<p>השורה האחרונה היא מה שהיה חסר בפרק 6: שם הבדיקות היו ירוקות, כי כל אחת בנתה טבלאות מהמחלקות. עכשיו יש בדיקה שבונה אותן מה-<span class="en">migrations</span>, כמו בשרת.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.5</span>דוגמה מודרכת: <code>agent.db</code> עובר ל-Alembic</h2>
+
+<div class="step">
+  <h3><span class="step-num">1</span>ענף, נתונים, וגיבוי</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects\my-agent
+git switch main
+git pull
+git switch -c feature/migrations
+uv run python -m sqlite3 agent.db "SELECT (SELECT COUNT(*) FROM conversations), (SELECT COUNT(*) FROM messages);"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>(3, 10)</code></pre>
+</div>
+  <p>שלוש שיחות ועשר הודעות אצלי; אצלכם מספרים אחרים. אם יצא <code>(0, 0)</code> או שאין קובץ, הריצו <code>uv run python -m agent</code> שלוש פעמים, עם הודעה או שתיים בכל פעם. הפרק עובד רק אם יש מה לאבד. זכרו את המספרים: אחרי כל צעד תבדקו שהם לא השתנו.</p>
+  <p>וגיבוי, לפני כל דבר אחר. עצרו את השרת אם הוא רץ, ו:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>Copy-Item agent.db agent-before-ch7.db</code></pre>
+</div>
+  <p>השם מסתיים ב-<code>.db</code>, ולכן <code>.gitignore</code> מפרק 6 כבר מסתיר אותו. בשרת אמיתי גיבוי לפני <span class="en">migration</span> הוא לא המלצה, הוא חלק מהתהליך.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>מתקינים, ומחברים את Alembic לפרויקט</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv add alembic
+uv run alembic init migrations</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code> + alembic==1.20.1
+ + mako==1.4.3
+ + markupsafe==3.0.4
+Creating directory ...\my-agent\migrations ...  done
+Generating ...\my-agent\alembic.ini ...  done
+Generating ...\my-agent\migrations\env.py ...  done
+Please edit configuration/connection/logging settings in ...\alembic.ini before proceeding.</code></pre>
+</div>
+  <p>שני שינויים ב-<code>alembic.ini</code>. הראשון: מחקו את השורה <code>sqlalchemy.url = driver://user:pass@localhost/dbname</code> וכתבו במקומה הערה. כתובת בסיס הנתונים כבר מגיעה מ-<code>DATABASE_URL</code>, ושני מקומות לאותו ערך הם מתכון לבלבול. השני: מצאו את הבלוק שמתחיל ב-<code># hooks = ruff</code> עם <code>ruff.type = module</code>, והחליפו את ארבע השורות שלו בשבע אלה, בלי <code>#</code>:</p>
+<div class="codebox">
+  <div class="label"><span>alembic.ini</span></div>
+<pre><code># (no sqlalchemy.url here: migrations/env.py reads DATABASE_URL, like the agent)
+...
+hooks = ruff_format, ruff
+ruff.type = module
+ruff.module = ruff
+ruff.options = check --fix REVISION_SCRIPT_FILENAME
+ruff_format.type = module
+ruff_format.module = ruff
+ruff_format.options = format REVISION_SCRIPT_FILENAME</code></pre>
+</div>
+  <p>כך כל קובץ ש-Alembic כותב עובר <code>ruff format</code> ו-<code>ruff check --fix</code> מיד, ו-<code>ruff check</code> מפרק 3 נשאר נקי. ב-<code>agent\config.py</code>, הוציאו את ברירת המחדל לקבוע, כדי ששני המקומות ישתמשו באותו ערך:</p>
+<div class="codebox">
+  <div class="label"><span>agent\config.py (the changes)</span></div>
+<pre><code><span class="hl"># Where conversations are stored when DATABASE_URL is not set: a file in the working folder.
+DEFAULT_DATABASE_URL = "sqlite:///agent.db"</span>
+...
+        database_url=os.getenv("DATABASE_URL", <span class="hl">DEFAULT_DATABASE_URL</span>),</code></pre>
+</div>
+  <p>ועכשיו הקובץ החשוב: <code>migrations\env.py</code> רץ בכל פקודה של Alembic, ואומר לו לאיזה בסיס נתונים להתחבר ואילו מחלקות מתארות אותו. החליפו את כולו:</p>
+<div class="codebox">
+  <div class="label"><span>migrations\env.py</span></div>
+<pre><code>"""Alembic runs this file for every command. It says which database, and which tables."""
+
+import os
+from logging.config import fileConfig
+
+from alembic import context
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, pool
+
+from agent.config import DEFAULT_DATABASE_URL
+from agent.db import Base
+
+config = context.config
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)  # the logging settings at the end of alembic.ini
+
+# The tables as the code describes them. autogenerate compares the database to these.
+target_metadata = Base.metadata
+
+# Code that runs migrations (like the tests) passes the URL in; otherwise the same
+# DATABASE_URL as the agent, from the terminal or from .env.
+load_dotenv()
+url = config.attributes.get("url") or os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
+
+
+def run_migrations_offline() -&gt; None:
+    """--sql: print the SQL instead of running it. No connection is made."""
+    context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
+    with context.begin_transaction():
+        context.run_migrations()
+
+
+def run_migrations_online() -&gt; None:
+    """Connect, and run the migrations inside a transaction."""
+    engine = create_engine(url, poolclass=pool.NullPool)
+    with engine.connect() as connection:
+        # render_as_batch: on SQLite, autogenerate writes changes that copy the table (7.7).
+        context.configure(
+            connection=connection, target_metadata=target_metadata, render_as_batch=True
+        )
+        with context.begin_transaction():
+            context.run_migrations()
+
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()</code></pre>
+</div>
+  <p>שימו לב שה-<span class="en">engine</span> כאן הוא לא <code>make_engine</code>: Alembic מקבל חיבור נקי משלו, בלי ה-<code>PRAGMA foreign_keys</code>. ב-7.7 תראו למה זה חשוב.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>ה-<span class="en">baseline</span>: <span class="en">migration</span> שמתאר את מה שכבר קיים</h3>
+  <p>השרשרת צריכה התחלה: <span class="en">migration</span> ראשון שיוצר את שתי הטבלאות בדיוק כמו ש-<code>create_all</code> יצר אותן. כדי ש-<span class="en">autogenerate</span> יראה "הכול חסר", מריצים אותו מול בסיס נתונים <em>ריק</em>, לא מול <code>agent.db</code>. האפשרות <code>--rev-id</code> קובעת את המזהה; בלעדיה Alembic מגריל מזהה כמו <code>3f2a1c9e8b7d</code>. מספרים קל יותר לקרוא, ותרגיל 4 יראה את המחיר שלהם.</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$env:DATABASE_URL = "sqlite:///empty.db"
+uv run alembic revision --autogenerate -m "baseline: the tables from chapter 6" --rev-id 0001
+Remove-Item Env:DATABASE_URL
+Remove-Item empty.db</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>INFO  [alembic.autogenerate.compare.tables] Detected added table 'conversations'
+INFO  [alembic.autogenerate.compare.tables] Detected added table 'messages'
+INFO  [alembic.autogenerate.compare.constraints] Detected added index 'ix_messages_conversation_id' on '('conversation_id',)'
+Generating ...\migrations\versions\0001_baseline_the_tables_from_chapter_6.py ...  done
+Running post write hook 'ruff_format' ...
+Running post write hook 'ruff' ...
+Found 6 errors (6 fixed, 0 remaining).</code></pre>
+</div>
+  <p>פתחו את הקובץ. בראשו <code>revision = "0001"</code> ו-<code>down_revision = None</code>: זו החוליה הראשונה. <code>upgrade()</code> מכיל שתי <code>op.create_table</code> ו-<code>create_index</code>, ו-<code>downgrade()</code> מוחק אותן בסדר הפוך: קודם <code>messages</code>, כי ה-<span class="en">foreign key</span> שלה מצביע על <code>conversations</code>. השוו לפלט של <code>CREATE TABLE</code> בצעד 5 של פרק 6: אותן עמודות, אותם <span class="en">types</span>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>בסיס נתונים קיים: <code>stamp</code>, לא <code>upgrade</code></h3>
+  <p>הטבע הוא להריץ עכשיו <code>upgrade</code>. נסו, על <code>agent.db</code> האמיתי. זה בטוח, כי הפקודה הראשונה תיכשל:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run alembic upgrade head</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>INFO  [alembic.runtime.migration] Running upgrade  -&gt; 0001, baseline: the tables from chapter 6
+sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) table conversations already exists</code></pre>
+</div>
+  <p>Alembic פתח טבלה <code>alembic_version</code> ריקה, ראה שאין בה כלום, והסיק "בסיס נתונים ריק, נתחיל מ-0001". אבל הטבלאות כבר כאן. מה שצריך הוא לומר לו "בסיס הנתונים הזה כבר ב-0001", בלי להריץ דבר:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run alembic stamp 0001
+uv run alembic current
+uv run python -m sqlite3 agent.db "SELECT (SELECT COUNT(*) FROM conversations), (SELECT COUNT(*) FROM messages);"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>INFO  [alembic.runtime.migration] Running stamp_revision  -&gt; 0001
+0001 (head)
+(3, 10)</code></pre>
+</div>
+  <p>זה כל המעבר: <span class="en">baseline</span> שמתאר את המצב, ו-<code>stamp</code> על כל בסיס נתונים שכבר נמצא בו. בסיס נתונים חדש, כמו אצל עמית שמשכפל את הפרויקט מחר, יקבל את אותן טבלאות מ-<code>upgrade head</code>. ה-<code>stamp</code> נעשה פעם אחת לכל בסיס נתונים ישן, ולעולם לא על בסיס נתונים שלא בדקתם שהוא באמת במצב הזה. שמרו: <code>git add alembic.ini migrations pyproject.toml uv.lock agent\config.py</code>, <code>git commit -m "Add Alembic and a baseline migration"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span><code>create_all</code> פונה את מקומו</h3>
+  <p>ב-<code>agent\db.py</code>, הוסיפו את ה-<span class="en">imports</span>, ואת החלק הזה מעל <code>make_engine</code>, והחליפו את <code>make_engine</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\db.py (the additions)</span></div>
+<pre><code>import logging
+from pathlib import Path
+
+from alembic import command
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from alembic.util.exc import CommandError
+
+log = logging.getLogger(__name__)
+MIGRATIONS = Path(__file__).parent.parent / "migrations"
+
+...
+
+class DatabaseNotReady(Exception):
+    """The database is missing migrations that this code needs."""
+
+
+def alembic_config(url: str) -&gt; Config:
+    """What the alembic command reads from alembic.ini, for the database at `url`."""
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS))
+    config.attributes["url"] = url  # migrations/env.py reads it from here
+    return config
+
+
+def upgrade(url: str, revision: str = "head") -&gt; None:
+    """Run the migrations on the database at `url`, like `alembic upgrade head`."""
+    command.upgrade(alembic_config(url), revision)
+
+
+def check_schema(engine: Engine) -&gt; None:
+    """Refuse to work with a database that is behind the code."""
+    scripts = ScriptDirectory(str(MIGRATIONS))
+    head = scripts.get_current_head()
+    with engine.connect() as connection:
+        current = MigrationContext.configure(connection).get_current_revision()
+    if current == head:
+        return
+    if current is None:
+        raise DatabaseNotReady(
+            "The database has no migration history. A new database: run "
+            "`uv run alembic upgrade head`. One from before migrations: see `alembic stamp`."
+        )
+    try:
+        scripts.get_revision(current)
+    except CommandError:
+        # A revision we do not know: newer code has already migrated this database.
+        # That is fine (the old code must keep working during a deploy), but say so.
+        log.warning("database is at %s, newer than this code (%s)", current, head)
+        return
+    raise DatabaseNotReady(
+        f"The database is at revision {current}, the code needs {head}. "
+        "Run `uv run alembic upgrade head`."
+    )
+
+
+def make_engine(url: str) -&gt; Engine:
+    """Connect to the database at `url`, and make sure its tables match the code."""
+    <span class="hl">in_memory = url in ("sqlite://", "sqlite:///:memory:")</span>
+    if in_memory:
+        # An in-memory database lives inside one connection, so everyone shares that one.
+        engine = create_engine(url, poolclass=StaticPool, connect_args={"check_same_thread": False})
+    else:
+        engine = create_engine(url)
+    if engine.dialect.name == "sqlite":
+        event.listen(engine, "connect", turn_on_foreign_keys)
+    <span class="hl">if in_memory:
+        # A new, empty database that disappears with the process (the tests): nothing to
+        # migrate, so the tables come straight from the classes above.
+        Base.metadata.create_all(engine)
+    else:
+        check_schema(engine)</span>
+    return engine</code></pre>
+</div>
+  <p>זו טבלת 7.4 בקוד. <code>check_schema</code> בודקת בכיוון אחד בלבד, בכוונה: בסיס נתונים <em>מאחורי</em> הקוד הוא תקלה, כי הקוד יחפש עמודות שאין. בסיס נתונים <em>לפני</em> הקוד, במספר שהקוד לא מכיר, מקבל רק אזהרה ביומן. בסעיף 7.6 תראו למה: בזמן עדכון גרסה, קוד ישן ובסיס נתונים חדש חיים יחד. ב-<code>cli.py</code>, ייבאו את <code>DatabaseNotReady</code>, העבירו את שורת ה-<code>print</code> הראשונה של <code>chat_loop</code> אל <em>אחרי</em> יצירת <code>conversations</code>, ועטפו את הקריאה ב-<code>main</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\cli.py, the end of main</span></div>
+<pre><code>    try:
+        chat_loop(client, settings, resume=args.resume)
+    except DatabaseNotReady as error:
+        print(f"Database error: {error}")
+        sys.exit(1)</code></pre>
+</div>
+  <p><code>api.py</code> לא משתנה: <code>create_app</code> נכשל עם החריגה, ו-uvicorn מסרב לעלות, כמו עם <code>ConfigError</code> בפרק 5. הריצו <code>uv run pytest</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>E           agent.db.DatabaseNotReady: The database has no migration history. A new database: run `uv run alembic upgrade head`. One from before migrations: see `alembic stamp`.
+FAILED tests/test_cli.py::test_continue_picks_up_the_last_conversation - agen...
+FAILED tests/test_conversations.py::test_a_conversation_survives_a_restart - ...
+2 failed, 63 passed</code></pre>
+</div>
+  <p>שתי הבדיקות שעובדות עם קובץ ב-<code>tmp_path</code> קיבלו קובץ ריק, בלי טבלאות. בדיוק כמו מי שמשכפל את הפרויקט מחר. התיקון: <code>upgrade(url)</code> לפני <code>make_engine</code>. ב-<code>test_conversations.py</code> (וייבאו <code>upgrade</code> מ-<code>agent.db</code>):</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_conversations.py</span></div>
+<pre><code>    url = f"sqlite:///{tmp_path / 'test.db'}"  # pytest gives every test its own empty folder
+    <span class="hl">upgrade(url)  # a file database gets its tables from the migrations, like agent.db</span></code></pre>
+</div>
+  <p>וב-<code>test_cli.py</code>, אחרי <code>settings = replace(...)</code>: <code>upgrade(settings.database_url)</code>. עכשיו השומר. צרו <code>tests\test_migrations.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_migrations.py</span></div>
+<pre><code>"""The migrations must build exactly the tables that the code describes, and undo cleanly."""
+
+from alembic import command
+from alembic.autogenerate import compare_metadata
+from alembic.runtime.migration import MigrationContext
+from sqlalchemy import create_engine, inspect
+
+from agent.db import Base, alembic_config, upgrade
+
+
+def differences(url):
+    """What autogenerate would still write: the gap between the database and the classes."""
+    engine = create_engine(url)
+    with engine.connect() as connection:
+        found = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+    engine.dispose()
+    return found
+
+
+def table_names(url):
+    engine = create_engine(url)
+    names = set(inspect(engine).get_table_names())
+    engine.dispose()
+    return names
+
+
+def test_the_migrations_build_the_tables_of_the_code(tmp_path):
+    url = f"sqlite:///{tmp_path / 'test.db'}"
+    upgrade(url)
+    assert differences(url) == []
+
+
+def test_every_migration_can_be_undone(tmp_path):
+    url = f"sqlite:///{tmp_path / 'test.db'}"
+    upgrade(url)
+    command.downgrade(alembic_config(url), "base")  # every downgrade(), newest first
+    assert table_names(url) == {"alembic_version"}
+    upgrade(url)  # and up again, on a database that has been down
+    assert differences(url) == []</code></pre>
+</div>
+  <p><code>compare_metadata</code> הוא הלב של <span class="en">autogenerate</span>: רשימת ההבדלים. רשימה ריקה פירושה שהשרשרת והמחלקות מסכימות. <code>uv run pytest</code>: <code>67 passed</code>, ואף קובץ <code>.db</code> חדש בתיקייה. הריצו את הסוכן עם <code>--continue</code> וודאו שהשיחה האחרונה שלכם שם. שמרו: <code>git add agent tests</code>, <code>git commit -m "Check the migrations at startup instead of create_all"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">6</span>הכותרת, הפעם כמו שצריך</h3>
+  <p>הוסיפו ל-<code>ConversationRow</code>, מתחת ל-<code>id</code>, את אותה שורה מפרק 6: <code>title: Mapped[str | None] = mapped_column(String(200))</code>. הריצו <code>uv run pytest</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>E       sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) table conversations has no column named title
+E       AssertionError: assert [('add_column...versations&gt;))] == []
+FAILED tests/test_migrations.py::test_the_migrations_build_the_tables_of_the_code
+4 failed, 63 passed</code></pre>
+</div>
+  <p>זו השגיאה מפרק 6, אבל הפעם הבדיקות תפסו אותה, לפני שהגיעה לשרת. עכשיו ה-<span class="en">migration</span>, מול <code>agent.db</code> שלכם (שנמצא ב-0001):</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run alembic revision --autogenerate -m "add a title to conversations" --rev-id 0002</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>INFO  [alembic.autogenerate.compare.tables] Detected added column 'conversations.title'
+Generating ...\migrations\versions\0002_add_a_title_to_conversations.py ...  done</code></pre>
+</div>
+  <p>הטיוטה מוסיפה עמודה ריקה. אבל שיחות ישנות בלי כותרת הן בדיוק הבעיה. הוסיפו <span class="en">backfill</span>: מילוי של העמודה החדשה בשורות שכבר קיימות, מתוך נתונים שכבר יש. כותרת היא תחילת ההודעה הראשונה של המשתמש. החלק החדש מסומן:</p>
+<div class="codebox">
+  <div class="label"><span>migrations\versions\0002_add_a_title_to_conversations.py (from the imports down)</span></div>
+<pre><code>import sqlalchemy as sa
+from alembic import op
+
+# revision identifiers, used by Alembic.
+revision: str = "0002"
+down_revision: str | Sequence[str] | None = "0001"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+<span class="hl"># The tables as they are at this revision, not as agent/db.py says today.
+conversations = sa.table("conversations", sa.column("id", sa.String), sa.column("title", sa.String))
+messages = sa.table(
+    "messages",
+    sa.column("id", sa.Integer),
+    sa.column("conversation_id", sa.String),
+    sa.column("role", sa.String),
+    sa.column("content", sa.Text),
+)</span>
+
+
+def upgrade() -&gt; None:
+    """Upgrade schema."""
+    # ### commands auto generated by Alembic - please adjust! ###
+    with op.batch_alter_table("conversations", schema=None) as batch_op:
+        batch_op.add_column(sa.Column("title", sa.String(length=200), nullable=True))
+
+    # ### end Alembic commands ###
+
+    <span class="hl"># Backfill: every existing conversation gets the start of its first user message.
+    first_message = (
+        sa.select(sa.func.substr(messages.c.content, 1, 50))
+        .where(messages.c.conversation_id == conversations.c.id, messages.c.role == "user")
+        .order_by(messages.c.id)
+        .limit(1)
+        .scalar_subquery()
+    )
+    op.execute(conversations.update().values(title=first_message))</span>
+
+
+def downgrade() -&gt; None:
+    """Downgrade schema."""
+    # ### commands auto generated by Alembic - please adjust! ###
+    with op.batch_alter_table("conversations", schema=None) as batch_op:
+        batch_op.drop_column("title")
+
+    # ### end Alembic commands ###</code></pre>
+</div>
+  <p>שתי החלטות שכדאי להבין. <strong>ה-<span class="en">migration</span> לא מייבא את <code>ConversationRow</code>.</strong> המחלקה תשתנה בעוד חודש, וה-<span class="en">migration</span> הזה חייב לעבוד גם אז, על בסיס נתונים שעדיין ב-0001. לכן הוא מתאר לעצמו את הטבלאות כפי שהן <em>ברגע הזה</em>, עם <code>sa.table</code>. <strong>ה-<span class="en">SQL</span> נבנה מביטויים, לא נכתב כמחרוזת</strong>, כדי ש-SQLAlchemy יכתוב אותו נכון גם ל-Postgres בפרק 8 (תרגיל 1 מראה את זה). הריצו ובדקו:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run alembic upgrade head
+uv run python -m sqlite3 agent.db "SELECT id, title FROM conversations;"
+uv run python -m sqlite3 agent.db "SELECT (SELECT COUNT(*) FROM conversations), (SELECT COUNT(*) FROM messages);"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>INFO  [alembic.runtime.migration] Running upgrade 0001 -&gt; 0002, add a title to conversations
+('d740e0f006ff4d56b390f42bb8b0e17a', 'hello')
+('ef2889cec0cb43d3b84480c4775821a9', 'remember the milk')
+('ccaa8ee19bfb4f14b9c11456cb145bb8', 'good morning')
+(3, 10)</code></pre>
+</div>
+  <p>לשיחות הישנות יש כותרות, ואף שורה לא אבדה. נשאר שהקוד יכתוב כותרת לשיחות חדשות. ב-<code>agent\conversations.py</code>, הוסיפו <code>update</code> ל-<span class="en">import</span> מ-<code>sqlalchemy</code>, קבוע, מתודה, ושלוש שורות ב-<code>send</code>, בתוך אותה <span class="en">transaction</span> של שתי ההודעות:</p>
+<div class="codebox">
+  <div class="label"><span>agent\conversations.py (the additions)</span></div>
+<pre><code>TITLE_LENGTH = 50  # a title is the start of the first message
+...
+    def title(self, conversation_id: str) -&gt; str | None:
+        """The conversation's title: the start of its first message."""
+        with self.sessions() as session:
+            row = session.get(ConversationRow, conversation_id)
+            if row is None:
+                raise ConversationNotFound(conversation_id)
+            return row.title
+...
+            if not history:  # the first message names the conversation
+                session.execute(
+                    update(ConversationRow)
+                    .where(ConversationRow.id == conversation_id)
+                    .values(title=text[:TITLE_LENGTH])
+                )</code></pre>
+</div>
+  <p>ב-<code>cli.py</code>, בהמשך שיחה, הדפיסו את הכותרת: <code>print(f'Continuing "{title}" ({count_turns(turns)}).\n')</code>, אחרי <code>title = conversations.title(conversation_id)</code>. הפונקציה הקטנה <code>count_turns</code> מחזירה <code>"1 turn"</code> או <code>"N turns"</code>, ו-<code>/history</code> משתמש בה גם: <code>2 turns saved in this conversation.</code> במקום ה-<code>1 turns in memory.</code> הישן, שגם היה שגוי ביחיד וגם כבר לא נכון, כי מפרק 6 הכול נשמר. עדכנו את שתי הבדיקות ב-<code>test_cli.py</code> לנוסח החדש, והוסיפו ל-<code>test_conversations.py</code> בדיקה שההודעה הראשונה נותנת כותרת (הקוד בדף הפתרונות). <code>uv run pytest</code>: <code>68 passed</code>. שמרו: <code>git add agent tests migrations</code>, <code>git commit -m "Add a title to conversations, with a backfill"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">7</span><span class="en">Downgrade</span>, באמת</h3>
+  <p>דרך חזרה שלא ניסיתם היא לא דרך חזרה. הורידו את 0002, ובדקו מה נשאר:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run alembic downgrade -1
+uv run alembic current
+uv run python -m sqlite3 agent.db "SELECT * FROM conversations LIMIT 1;"
+uv run python -m sqlite3 agent.db "SELECT (SELECT COUNT(*) FROM conversations), (SELECT COUNT(*) FROM messages);"
+uv run python -m agent</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>INFO  [alembic.runtime.migration] Running downgrade 0002 -&gt; 0001, add a title to conversations
+0001
+('d740e0f006ff4d56b390f42bb8b0e17a', '2026-11-18 13:34:03.043899')
+(3, 10)
+Running in MOCK mode - answers are fake, nothing is sent to the API.
+Database error: The database is at revision 0001, the code needs 0002. Run `uv run alembic upgrade head`.</code></pre>
+</div>
+  <p>העמודה נעלמה, ואיתה הכותרות. השיחות וההודעות נשארו. והקוד, שמצפה ל-0002, מסרב לעבוד מול בסיס נתונים מאחוריו, במקום ליפול באמצע שיחה. החזירו: <code>uv run alembic upgrade head</code>. ה-<span class="en">backfill</span> רץ שוב והכותרות חזרו, כי הן נגזרות מההודעות. נתון שאי אפשר לגזור, כמו כותרת שמשתמש כתב בעצמו, לא היה חוזר. <code>downgrade</code> הוא לא "בטל": הוא עוד שינוי, שיכול למחוק.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.6</span>קוד ישן, מבנה חדש: <span class="en">expand, migrate, contract</span></h2>
+
+<p>בשרת אמיתי, עדכון גרסה לא קורה ברגע אחד. מריצים את ה-<span class="en">migration</span>, ואז מחליפים את התהליכים אחד-אחד; לכמה דקות, ולפעמים לשעות, קוד ישן וקוד חדש רצים יחד מול אותו בסיס נתונים. ואם הגרסה החדשה נכשלת, מחזירים את הקוד הישן, ובסיס הנתונים נשאר חדש. לכן כל שינוי מבנה חייב לעבוד <strong>עם שתי הגרסאות</strong> של הקוד. בדקו את זה על 0002. ה-<code>main</code> שלכם הוא הקוד מפרק 6:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git switch main
+uv run python -m agent              <span class="cm"># send: old code says hi, then exit</span>
+git switch feature/migrations
+uv run python -m agent --continue   <span class="cm"># then exit</span></code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>you&gt; old code says hi
+agent&gt; [mock reply, turn 1] You said: old code says hi
+...
+Continuing "None" (1 turn).</code></pre>
+</div>
+
+<p>(<code>uv run</code> מסנכרן את הסביבה לפי הענף: ב-<code>main</code> אין Alembic, והוא מוסר וחוזר. זה צפוי.) הקוד הישן עבד מול העמודה החדשה: הוא פשוט לא יודע עליה. הוספה של עמודה שמותר לה להיות ריקה היא שינוי <strong>תואם לאחור</strong> (<span class="en">backward compatible</span>). אבל הוא השאיר שיחה בלי כותרת, והקוד החדש הדפיס <code>"None"</code>. הדרישה הבאה טבעית: לכל שיחה <em>חייבת</em> להיות כותרת, <code>NOT NULL</code>. אם תעשו את זה בצעד אחד, כל שרת עם קוד ישן ייפול בניסיון הראשון ליצור שיחה. לכן עושים את זה בארבעה צעדים:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>שלב</th><th>מה קורה</th><th>אצלנו</th><th>איזה קוד יכול לרוץ</th></tr>
+  <tr><td>1. <span class="en">Expand</span></td><td>מוסיפים, ולא מחייבים ולא מוחקים</td><td>0002: עמודה ריקה מותרת, <span class="en">backfill</span></td><td>ישן וחדש</td></tr>
+  <tr><td>2. קוד</td><td>גרסה שתמיד כותבת את הערך, ועובדת גם על המבנה של שלב 1</td><td><code>start()</code> כותב <code>"New conversation"</code>, <code>send()</code> מחליף</td><td>ישן וחדש. מחכים שהישן ייעלם</td></tr>
+  <tr><td>3. <span class="en">Migrate</span></td><td>ממלאים את מה שהקוד הישן השאיר בינתיים</td><td>0003: <span class="en">backfill</span> שני, רק לשורות בלי כותרת</td><td>רק חדש</td></tr>
+  <tr><td>4. <span class="en">Contract</span></td><td>מחייבים, או מוחקים את הישן</td><td>0003: <code>NOT NULL</code></td><td>רק חדש</td></tr>
+</table>
+</div>
+
+<p>אותה תבנית לכל שינוי שובר: שינוי שם של עמודה הוא "הוסף חדשה, כתוב לשתיהן, העתק, קרא מהחדשה, מחק את הישנה", בכמה גרסאות. כאן, בפרויקט של אדם אחד, שלבים 2 עד 4 נכנסים ל-<span class="en">commit</span> אחד. בשרת, שלב 2 יוצא לבד, ו-0003 רץ רק אחרי שאין תהליך אחד של קוד ישן. ב-<code>agent\db.py</code>: <code>title: Mapped[str] = mapped_column(String(200))</code>. ב-<code>conversations.py</code>: <code>NEW_TITLE = "New conversation"  # until the first message arrives</code>, <code>session.add(ConversationRow(id=conversation_id, title=NEW_TITLE))</code> ב-<code>start</code>, ו-<code>-&gt; str</code> ב-<code>title</code>. ואז:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run alembic revision --autogenerate -m "every conversation has a title" --rev-id 0003
+Copy-Item agent.db try.db
+$env:DATABASE_URL = "sqlite:///try.db"
+uv run alembic upgrade head
+uv run python -m sqlite3 try.db "SELECT name FROM sqlite_master WHERE type = 'table';"
+Remove-Item Env:DATABASE_URL
+Remove-Item try.db</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>INFO  [alembic.autogenerate.compare.constraints] Detected NOT NULL on column 'conversations.title'
+INFO  [alembic.runtime.migration] Running upgrade 0002 -&gt; 0003, every conversation has a title
+sqlite3.IntegrityError: NOT NULL constraint failed: _alembic_tmp_conversations.title
+('messages',)
+('alembic_version',)
+('conversations',)
+('_alembic_tmp_conversations',)</code></pre>
+</div>
+
+<p>הטיוטה עשתה רק את שלב 4, ונכשלה על השורה שהקוד הישן השאיר. ויותר גרוע: היא השאירה מאחור טבלה <code>_alembic_tmp_conversations</code>, וההרצה הבאה תיכשל על "already exists" (סעיף 7.7 מסביר). לכן ניסיתם על עותק. הוסיפו את שלב 3 בראש <code>upgrade()</code> של 0003, עם אותן הגדרות <code>sa.table</code> כמו ב-0002 (מעתיקים, לא מייבאים: כל <span class="en">migration</span> עומד בפני עצמו):</p>
+
+<div class="codebox">
+  <div class="label"><span>migrations\versions\0003_every_conversation_has_a_title.py, upgrade()</span></div>
+<pre><code>def upgrade() -&gt; None:
+    """Upgrade schema."""
+    <span class="hl"># Migrate: rows written by old code since 0002 have no title. Give them one.
+    first_message = (
+        sa.select(sa.func.substr(messages.c.content, 1, 50))
+        .where(messages.c.conversation_id == conversations.c.id, messages.c.role == "user")
+        .order_by(messages.c.id)
+        .limit(1)
+        .scalar_subquery()
+    )
+    missing = conversations.c.title.is_(None)
+    op.execute(conversations.update().where(missing).values(title=first_message))
+    op.execute(conversations.update().where(missing).values(title="New conversation"))
+
+    # Contract: from now on the database itself refuses a conversation without a title.</span>
+    # ### commands auto generated by Alembic - please adjust! ###
+    with op.batch_alter_table("conversations", schema=None) as batch_op:
+        batch_op.alter_column("title", existing_type=sa.VARCHAR(length=200), nullable=False)
+
+    # ### end Alembic commands ###</code></pre>
+</div>
+
+<p>השורה השנייה תופסת שיחה בלי אף הודעה, שבה ה-<span class="en">subquery</span> מחזיר <code>NULL</code>. הריצו <code>uv run alembic upgrade head</code> על <code>agent.db</code>, ובדקו כותרות ומספרים: <code>'old code says hi'</code> קיבלה כותרת, ו-<code>(4, 12)</code>. <code>uv run pytest</code>: <code>68 passed</code>. שמרו (<code>git add agent migrations</code>, <code>git commit -m "Make the title required: migrate the old rows, then contract"</code>), ועכשיו ראו מה היה קורה לשרת עם קוד ישן אילו קפצתם ישר לשלב 4:</p>
+
+<div class="codebox output">
+  <div class="label"><span>git switch main, uv run python -m agent, one message (the end of the traceback)</span></div>
+<pre><code>sqlalchemy.exc.IntegrityError: (sqlite3.IntegrityError) NOT NULL constraint failed: conversations.title
+[SQL: INSERT INTO conversations (id, created_at) VALUES (?, ?)]</code></pre>
+</div>
+
+<p>זו התקלה שהסדר מונע. חזרו: <code>git switch feature/migrations</code>.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.7</span><span class="en">SQLite</span>, <span class="en">batch mode</span>, ומה ישתנה ב-Postgres</h2>
+
+<p>למה Alembic כתב <code>with op.batch_alter_table(...)</code> ולא פקודה פשוטה? כי SQLite יודע מעט מאוד <code>ALTER TABLE</code>. על המחשב הזה (SQLite 3.50): <code>ADD COLUMN</code> ו-<code>DROP COLUMN</code> עובדים, אבל שינוי של עמודה קיימת לא קיים בשפה:</p>
+
+<div class="codebox output">
+  <div class="label"><span>op.alter_column(..., nullable=False) without batch mode, on SQLite</span></div>
+<pre><code>sqlite3.OperationalError: near "ALTER": syntax error
+[SQL: ALTER TABLE t ALTER COLUMN title SET NOT NULL]</code></pre>
+</div>
+
+<p><strong><span class="en">Batch mode</span></strong> עוקף את זה: הוא יוצר טבלה חדשה בשם <code>_alembic_tmp_conversations</code> במבנה החדש, מעתיק אליה את כל השורות, מוחק את הישנה ומשנה לחדשה את השם. זה גם ההסבר לשני דברים שראיתם. ההעתקה נכשלה על שורה עם <code>NULL</code> כי הטבלה החדשה כבר הייתה <code>NOT NULL</code>. וטבלת העזר נשארה, כי Alembic מודיע <code>Will assume non-transactional DDL</code>: עם הדרייבר של Python ל-SQLite, פקודות מבנה לא מתבטלות כשמשהו נכשל באמצע. מכאן שלושה כללים: גיבוי לפני כל <span class="en">migration</span>, ניסיון על עותק כשיש ספק, ו-<span class="en">foreign keys</span> כבויים בזמן ה-<span class="en">migration</span>, אחרת מחיקת הטבלה הישנה הייתה נחסמת בגלל <code>messages</code>. זו הסיבה ש-<code>env.py</code> לא משתמש ב-<code>make_engine</code>.</p>
+
+<p>ב-Postgres, שאליו הפרויקט עובר בפרק 8, הכול פשוט יותר: <code>batch_alter_table</code> כותב שם <code>ALTER TABLE conversations ALTER COLUMN title SET NOT NULL</code> ישירות, בלי העתקה, וכל <span class="en">migration</span> רץ בתוך <span class="en">transaction</span> אמיתית: כישלון באמצע מבטל הכול. אותם קבצים עובדים בשני המקומות, כל עוד לא כותבים בהם <span class="en">SQL</span> שרק SQLite מבין. תרגיל 1 מראה את ה-<span class="en">SQL</span> של Postgres בלי להתקין אותו.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.8</span><span class="en">Migrations</span> ב-git ובצוות</h2>
+
+<ul>
+  <li><strong><span class="en">Migration</span> שרץ במקום אחר לא נערך יותר.</strong> אם 0002 כבר רץ על השרת, שינוי בקובץ לא ישפיע שם: <code>alembic_version</code> אומר שהוא כבר רץ. טעות מתקנים ב-<span class="en">migration</span> חדש. מותר לערוך רק מה שעוד לא יצא מהמחשב שלכם (ואז <code>downgrade</code> מקומי, עריכה, <code>upgrade</code>).</li>
+  <li><strong>ה-<span class="en">migration</span> וקוד שמשתמש בו נכנסים לאותו <span class="en">pull request</span>,</strong> והבודק קורא את ה-<span class="en">migration</span> ראשון: האם הוא נועל טבלה גדולה? מוחק? תואם לקוד הישן?</li>
+  <li><strong>שני ענפים, שני <span class="en">migrations</span>.</strong> git ימזג אותם בלי קונפליקט, כי אלה שני קבצים שונים. אבל לשניהם אותו <code>down_revision</code>, והשרשרת התפצלה לשני ראשים (<span class="en">heads</span>). git לא רואה את זה; Alembic ו-<code>test_migrations.py</code> כן. תרגיל 4.</li>
+  <li><strong>הסדר בעדכון גרסה:</strong> גיבוי, <code>alembic upgrade head</code>, ואז הקוד החדש. בגלל <span class="en">expand, migrate, contract</span>, הקוד הישן ממשיך לעבוד בין שני הצעדים.</li>
+  <li><strong><span class="en">Rollback</span></strong> של קוד הוא כמעט תמיד בטוח, כי המבנה החדש תואם לקוד הישן. <code>downgrade</code> בשרת הוא צעד אחרון: הוא עלול למחוק נתונים, ולכן צוותים רבים מעדיפים לתקן קדימה, עם <span class="en">migration</span> חדש. גיבוי הוא הדרך החזרה האמיתית.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.9</span>תרגילים</h2>
+
+<p>תרגילים 1 עד 3 על <code>feature/migrations</code>. לפני כל <span class="en">commit</span> הריצו את ארבעת הכלים (<code>pytest</code>, <code>ruff check</code>, <code>ruff format --check</code>, <code>mypy agent scripts</code>). פתרונות, כולל הפלטים, <a href="solutions/chapter-07.html">בדף נפרד</a>.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · לקרוא את השרשרת, ואת ה-<span class="en">SQL</span> של Postgres</h3><span class="level">מודרך</span></div>
+  <ol>
+    <li>הריצו <code>uv run alembic history</code> ו-<code>uv run alembic current</code>.</li>
+    <li>הדפיסו את ה-<span class="en">SQL</span> של 0002 ו-0003 בשביל SQLite: <code>uv run alembic upgrade 0001:0002 --sql</code>. נסו גם <code>0002:0003</code>, וקראו את השגיאה.</li>
+    <li>ועכשיו בשביל Postgres, בלי Postgres: <code>$env:DATABASE_URL = "postgresql+psycopg://user:pass@localhost/agent"</code>, ואז <code>uv run alembic upgrade head --sql</code>. בסוף, <code>Remove-Item Env:DATABASE_URL</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex1">למה <code>0002:0003 --sql</code> נכשל על SQLite ועבד על Postgres? מצאו שני הבדלים בין ה-<span class="en">SQL</span> של Postgres לזה של SQLite.</label>
+  <textarea class="answer" id="n-ex1" data-id="c07-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c07-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · <span class="en">downgrade</span> הוא לא "בטל"</h3><span class="level">מודרך</span></div>
+  <p>על עותק בלבד: <code>Copy-Item agent.db copy.db</code> ו-<code>$env:DATABASE_URL = "sqlite:///copy.db"</code>. הורידו ל-<code>0001</code>, העלו ל-<code>head</code>, והסתכלו בכותרות. אחר כך <code>uv run alembic downgrade base</code>, וספרו שיחות. בסוף, <code>Remove-Item Env:DATABASE_URL</code> ו-<code>Remove-Item copy.db</code>.</p>
+  <label class="answer-label" for="n-ex2">מה חזר אחרי ההורדה וההעלאה, ולמה? מה קרה אחרי <code>base</code>? מה הייתם עושים בשרת במקום <code>downgrade</code>?</label>
+  <textarea class="answer" id="n-ex2" data-id="c07-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c07-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · בדיקה ל-<span class="en">backfill</span></h3><span class="level mid">בינוני</span></div>
+  <p>כתבו ב-<code>test_migrations.py</code> את <code>test_the_backfill_names_old_conversations</code>: <code>upgrade(url, "0001")</code> על קובץ ב-<code>tmp_path</code>; הכניסו ב-<span class="en">SQL</span> ישיר (<code>text(...)</code>) שיחה עם שתי הודעות משתמש שהראשונה בהן ארוכה מ-50 תווים, ושיחה בלי הודעות; <code>upgrade(url)</code>; ובדקו את שתי הכותרות. אחר כך שברו בכוונה את 0003: מחקו את השורה של <code>"New conversation"</code>. מה קרה? החזירו.</p>
+  <label class="answer-label" for="n-ex3">למה הבדיקה מכניסה שורות ב-<span class="en">SQL</span> ולא דרך <code>Conversations</code>? ומה הייתה ההודעה כשהשורה נמחקה?</label>
+  <textarea class="answer" id="n-ex3" data-id="c07-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c07-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · שני <span class="en">migrations</span>, שני ענפים</h3><span class="level mid">בינוני</span></div>
+  <p>אחדו קודם: <code>git switch main</code>, <code>git merge feature/migrations</code>. עכשיו שני אנשים, ושניהם אתם:</p>
+  <ol>
+    <li><strong>אתם:</strong> <code>git switch -c feature/user-id</code>. הוסיפו ל-<code>ConversationRow</code> מתחת ל-<code>id</code>: הערה <code># Who the conversation belongs to. Empty for now: the "expand" step (chapter 7).</code> ו-<code>user_id: Mapped[str | None] = mapped_column(String(64))</code>. <span class="en">migration</span> עם <code>--rev-id 0004</code>, <code>upgrade head</code>, <span class="en">commit</span>.</li>
+    <li><strong>העמית:</strong> <code>git switch main</code>, <code>git switch -c teammate/created-at-index</code>. הוסיפו <code>index=True</code> ל-<code>created_at</code> של <code>ConversationRow</code> (ש-<code>latest()</code> ממיין לפיו). לעמית יש בסיס נתונים משלו: <code>$env:DATABASE_URL = "sqlite:///teammate.db"</code>, <code>upgrade head</code>, ואז <span class="en">migration</span> עם <code>--rev-id 0004</code>. נקו את המשתנה והקובץ, <span class="en">commit</span>, ומזגו ל-<code>main</code>: ה-<span class="en">pull request</span> שלו נכנס ראשון.</li>
+    <li><strong>אתם שוב:</strong> <code>git switch feature/user-id</code>, <code>uv run alembic downgrade -1</code> (הורידו את <em>שלכם</em> מבסיס הנתונים, כל עוד יש לו מספר ברור), <code>git merge main</code>. הריצו <code>uv run alembic heads</code> ו-<code>uv run pytest</code>.</li>
+    <li>תקנו: שנו את השם של הקובץ שלכם ל-<code>0005_...</code> (<code>git mv</code>), ובתוכו <code>Revision ID</code>, <code>Revises</code>, <code>revision = "0005"</code> ו-<code>down_revision = "0004"</code>. <code>upgrade head</code>, <code>pytest</code>, <span class="en">commit</span>, ומזגו ל-<code>main</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex4">מה אמרו <code>git merge</code>, <code>alembic heads</code> ו-<code>pytest</code>? למה הייתם צריכים <code>downgrade -1</code> לפני המיזוג?</label>
+  <textarea class="answer" id="n-ex4" data-id="c07-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c07-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · רשימת השיחות ב-<span class="en">API</span></h3><span class="level mid">בינוני</span></div>
+  <p>בענף <code>feature/conversation-list</code>: הוסיפו ל-<code>Conversations</code> מתודה <code>newest(limit=50)</code> שמחזירה <code>(id, title)</code> מהחדשה לישנה; ל-<code>api.py</code> שדה <code>title</code> ב-<code>ConversationOut</code>, <span class="en">schema</span> חדש <code>ConversationSummary</code>, ו-<code>GET /conversations</code> (עם מפתח) שמחזיר את הרשימה; ו-<code>version="0.7.0"</code>. כתבו ב-<code>test_api.py</code> בדיקה לסדר ובדיקה ל-401, והוסיפו לבדיקה של <code>GET /conversations/{id}</code> בדיקה של הכותרת.</p>
+  <label class="answer-label" for="n-ex5">למה הקוד ב-<code>api.py</code> יכול להניח ש-<code>title</code> הוא <code>str</code> ולא <code>str | None</code>? מה היה קורה אילו התרגיל הזה היה לפני 0003?</label>
+  <textarea class="answer" id="n-ex5" data-id="c07-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c07-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · תוכנית ל-<code>user_id</code></h3><span class="level open">פתוח</span></div>
+  <p>בתרגיל 4 עשיתם רק את שלב ה-<span class="en">expand</span> של <code>user_id</code>. כתבו תוכנית לשאר, כאילו השרת משרת אנשים כל הזמן: מאיפה הקוד יודע מי המשתמש (רמז: למי שייך ה-<code>X-API-Key</code>, ומה עם ה-<span class="en">terminal</span>)? מה ממלאים לשיחות הישנות? אילו גרסאות קוד, אילו <span class="en">migrations</span>, ובאיזה סדר, עד <code>NOT NULL</code>? מה עושים אם צריך לחזור אחורה בכל שלב? אין צורך לממש. בסוף, עדכנו את <code>README.md</code> (התקנה עם <code>alembic upgrade head</code>, סעיף <span class="en">Migrations</span>, <code>stamp 0001</code> לבסיס נתונים ישן, <code>GET /conversations</code>, הקבצים החדשים), <span class="en">commit</span>, ואחדו: <code>git switch main</code>, <code>git merge feature/conversation-list</code>, <code>git push</code>, ומחקו את הענפים.</p>
+  <label class="answer-label" for="n-ex6">התוכנית שלכם, שלב אחרי שלב:</label>
+  <textarea class="answer" id="n-ex6" data-id="c07-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c07-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.10</span>בדקו את עצמכם</h2>
+
+<p>סמנו רק מה שאתם מסוגלים להסביר בקול רם לאדם אחר, בלי להציץ בפרק.</p>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c07-chk1"><span>אני יודע/ת להסביר מה <span class="en">migration</span> ומה תפקיד הטבלה <code>alembic_version</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c07-chk2"><span>אני יודע/ת מתי מריצים <code>stamp</code> ולא <code>upgrade</code>, ומה קורה אם מתבלבלים.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c07-chk3"><span>אני יודע/ת מי יוצר טבלאות בפרויקט: השרת, הבדיקות, ומה שומר ששניהם מסכימים.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c07-chk4"><span>אני יודע/ת למה <span class="en">autogenerate</span> כותב טיוטה, ומה הוא לא רואה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c07-chk5"><span>אני יודע/ת לכתוב <span class="en">backfill</span>, ולמה <span class="en">migration</span> לא מייבא את המחלקות של האפליקציה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c07-chk6"><span>אני יודע/ת להסביר למה <code>downgrade</code> הוא לא "בטל", ומה הדרך החזרה האמיתית.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c07-chk7"><span>אני יודע/ת להסביר <span class="en">expand, migrate, contract</span> עם דוגמה, ולמה הסדר מגן על קוד ישן.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c07-chk8"><span>אני יודע/ת מה <span class="en">batch mode</span> עושה ב-SQLite, ומה ישתנה ב-Postgres.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c07-chk9"><span>אני יודע/ת לזהות שני <span class="en">heads</span> אחרי מיזוג, ולתקן אותם.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.11</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td><code>table conversations already exists</code> ב-<code>upgrade</code></td><td>בסיס נתונים מלפני הפרק, בלי היסטוריה. Alembic מתחיל מ-0001</td><td>אם הוא באמת במבנה של 0001: <code>uv run alembic stamp 0001</code>, ואז <code>upgrade head</code></td></tr>
+  <tr><td><code>Database error: The database has no migration history.</code></td><td>קובץ חדש וריק, או ישן שלא סומן</td><td>חדש: <code>uv run alembic upgrade head</code>. ישן: <code>stamp 0001</code> קודם</td></tr>
+  <tr><td><code>The database is at revision 0002, the code needs 0003.</code></td><td>משכתם קוד חדש ולא הרצתם את ה-<span class="en">migrations</span></td><td>גיבוי, ואז <code>uv run alembic upgrade head</code></td></tr>
+  <tr><td><code>Multiple head revisions are present for given argument 'head'</code></td><td>שני ענפים הוסיפו <span class="en">migration</span> אחרי אותו אב</td><td>מספרו מחדש את שלכם ושנו את <code>down_revision</code> (תרגיל 4)</td></tr>
+  <tr><td><code>table _alembic_tmp_conversations already exists</code></td><td><span class="en">migration</span> ב-<span class="en">batch mode</span> נכשל באמצע, ו-SQLite לא ביטל את פקודות המבנה</td><td>החזירו את הגיבוי. בלית ברירה: <code>DROP TABLE _alembic_tmp_conversations;</code> ב-<span class="en">shell</span>, תקנו את ה-<span class="en">migration</span>, הריצו שוב</td></tr>
+  <tr><td><code>near "ALTER": syntax error</code></td><td>שינוי עמודה בלי <span class="en">batch mode</span> על SQLite</td><td><code>render_as_batch=True</code> ב-<code>env.py</code>, או <code>op.batch_alter_table</code> ביד</td></tr>
+  <tr><td><span class="en">autogenerate</span> כתב <span class="en">migration</span> ריק, או כזה שמוחק טבלאות</td><td>הוא השווה מול בסיס הנתונים הלא נכון (<code>DATABASE_URL</code> שנשאר מוגדר בחלון)</td><td><code>$env:DATABASE_URL</code> לבדוק, <code>Remove-Item Env:DATABASE_URL</code>, למחוק את הקובץ וליצור שוב</td></tr>
+  <tr><td><code>No module named 'agent'</code> מ-<code>alembic</code></td><td>הרצתם מחוץ לתיקיית הפרויקט; <code>prepend_sys_path = .</code> יחסי</td><td><code>cd ~\projects\my-agent</code>, ואז שוב</td></tr>
+  <tr><td><code>No literal value renderer is available ... with datatype NULL</code> ב-<code>--sql</code></td><td><code>sa.column("title")</code> בלי <span class="en">type</span></td><td>תנו <span class="en">type</span> לכל עמודה ב-<code>sa.table</code>: <code>sa.column("title", sa.String)</code></td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.12</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>schema</dt><dd>המבנה של בסיס הנתונים: טבלאות, עמודות, <span class="en">types</span>, מפתחות ואינדקסים.</dd>
+  <dt>migration</dt><dd>שינוי אחד ב-<span class="en">schema</span> (ולפעמים בנתונים), כתוב כקוד, עם דרך קדימה ודרך אחורה.</dd>
+  <dt>Alembic</dt><dd>כלי ה-<span class="en">migrations</span> של SQLAlchemy.</dd>
+  <dt>revision / head / base</dt><dd>מזהה של <span class="en">migration</span> / האחרון בשרשרת / לפני הראשון.</dd>
+  <dt>upgrade / downgrade</dt><dd>הרצה קדימה / אחורה בשרשרת.</dd>
+  <dt>baseline</dt><dd><span class="en">migration</span> ראשון שמתאר מבנה שכבר קיים.</dd>
+  <dt>stamp</dt><dd>רישום מיקום ב-<code>alembic_version</code> בלי להריץ דבר.</dd>
+  <dt>autogenerate</dt><dd>טיוטת <span class="en">migration</span> מתוך ההבדל בין בסיס הנתונים למחלקות.</dd>
+  <dt>backfill</dt><dd>מילוי ערך חדש בשורות שהיו קיימות לפני השינוי.</dd>
+  <dt>backward compatible</dt><dd>שינוי שהקוד הקודם ממשיך לעבוד איתו.</dd>
+  <dt>expand, migrate, contract</dt><dd>שינוי שובר בשלבים: מוסיפים, מעבירים, ורק בסוף מחייבים או מוחקים.</dd>
+  <dt>batch mode</dt><dd>שינוי טבלה ב-SQLite דרך טבלה חדשה, העתקה, והחלפה.</dd>
+  <dt>rollback</dt><dd>חזרה לגרסה קודמת של קוד. של בסיס נתונים: גיבוי, או <span class="en">migration</span> מתקן.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">7.13</span>מה הלאה</h2>
+
+<p>למבנה של בסיס הנתונים יש עכשיו היסטוריה, כמו לקוד: חמישה <span class="en">migrations</span> ב-git, טבלה שזוכרת איפה היא, בדיקה ששומרת שהשרשרת והמחלקות מסכימות, ותהליך שלא מפיל קוד ישן. אבל כל זה עדיין רץ על קובץ במחשב שלכם, עם ה-Python שלכם וה-<code>.venv</code> שלכם. שרת אמיתי צריך Postgres, צריך להריץ <code>alembic upgrade head</code> לפני האפליקציה, וצריך לקבל בדיוק את אותה סביבה.</p>
+
+<p>איך אורזים את הסוכן ואת בסיס הנתונים כך שירוצו אותו דבר בכל מחשב? זה <strong>פרק 8: <span class="en">Containers</span></strong>. שם <code>DATABASE_URL</code> יצביע על Postgres, ותגלו אם ה-<span class="en">migrations</span> שכתבתם כאן באמת נכתבו בלי <span class="en">SQL</span> של SQLite.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-07</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים, בלי <code>.git</code> ובלי קובץ בסיס נתונים. <code>uv run alembic upgrade head</code> בונה בסיס נתונים חדש, <code>uv run pytest</code> מדווח על 71 בדיקות שעוברות, ו-<code>ruff</code> ו-<code>mypy agent scripts</code> נקיים.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-07.html">פתרונות לפרק 7</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

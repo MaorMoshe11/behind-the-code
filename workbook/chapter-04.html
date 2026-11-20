@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 4 · איך הרשת עובדת | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="04">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 4 · איך הרשת עובדת</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 4 מתוך 21</div>
+  <h1>איך הרשת עובדת</h1>
+  <p class="lead">מה קורה בין הרגע שתוכנית שולחת בקשה לבין הרגע שמגיעה תשובה, ואיך רואים את זה בעיניים, על המחשב שלכם, בלי אינטרנט.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>להסביר מה קורה בין הקלדת כתובת לבין קבלת תשובה: <span class="en">DNS</span>, חיבור ל-<span class="en">port</span>, <span class="en">TLS</span>, ובקשת <span class="en">HTTP</span>.</li>
+    <li>להריץ שרת קטן על המחשב שלכם ולשלוח אליו בקשות עם <code>curl.exe</code>, ואפילו ביד, כטקסט.</li>
+    <li>לקרוא בקשה ותשובה: <span class="en">method</span>, <span class="en">path</span>, <span class="en">headers</span>, <span class="en">body</span> ב-<span class="en">JSON</span>, ו-<span class="en">status code</span>.</li>
+    <li>לראות מה ה-SDK של Anthropic באמת שולח, ואיך הוא מגיב לכל סוג של שגיאה.</li>
+    <li>לזהות באיזה שלב בקשה נכשלה, לפי הודעת השגיאה בלבד.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> שלוש עד ארבע שעות, כולל התרגילים. <strong>מה צריך:</strong> הפרויקט מסוף פרק 3. אין צורך באינטרנט ולא במפתח: כל השרתים בפרק רצים אצלכם.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.1</span>הבעיה: שלוש שגיאות, הודעה אחת</h2>
+
+<p>בסוף פרק 3 גרמתם לסוכן להיכשל בכוונה, והסתכלתם ב-<code>agent.log</code>. היו שם דברים שלא הסברנו: הכתובת <code>http://127.0.0.1:9</code>, השגיאה <code>WinError 10061</code>, והשורה <span class="en">"Retrying request to /v1/messages"</span>. עבדתם עם ה-<span class="en">API</span> שלושה פרקים, ועוד לא ראיתם אף בקשה אחת שיצאה ממנו.</p>
+
+<p>וזה לא רק סקרנות. נניח שמשתמש כותב לכם: "הסוכן אומר <span class="en">Could not reach the API</span>". ההודעה הזו מכסה לפחות שלוש תקלות שונות לגמרי. אולי שם השרת לא מתורגם לכתובת (בעיית <span class="en">DNS</span>, למשל רשת ארגונית). אולי הכתובת נכונה אבל אף אחד לא עונה בה (<span class="en">firewall</span>, או <span class="en">proxy</span>). ואם השרת כן ענה, אבל בשגיאה, הודעה אחרת לגמרי הייתה מופיעה. לכל אחת מהן תיקון אחר, ומי שלא מבין את השלבים מנחש.</p>
+
+<p>הפרק עובר על השלבים האלה אחד אחד. בסופו תריצו שרת משלכם, תפנו אליו את הסוכן, ותראו את הבקשה המלאה שה-SDK שולח, כולל כל שורה בה. ובפרק 5, כשתבנו <span class="en">API</span> משלכם, תהיו בצד השני של אותה שיחה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.2</span>המפה: ארבעה שלבים של בקשה אחת</h2>
+
+<p>כשהסוכן קורא ל-<code>messages.create</code>, ה-SDK צריך להגיע ל-<code>https://api.anthropic.com/v1/messages</code>. ה-<span class="en">URL</span> הזה מכיל את כל מה שצריך כדי לעשות את זה:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>חלק</th><th>בדוגמה</th><th>מה הוא אומר</th></tr>
+  <tr><td><span class="en">scheme</span></td><td><code>https</code></td><td>באיזה פרוטוקול לדבר. <code>https</code> הוא <span class="en">HTTP</span> מוצפן, <code>http</code> בלי הצפנה</td></tr>
+  <tr><td><span class="en">host</span></td><td><code>api.anthropic.com</code></td><td>שם השרת. צריך לתרגם אותו לכתובת מספרית</td></tr>
+  <tr><td><span class="en">port</span></td><td>לא כתוב, ולכן <code>443</code></td><td>איזו "דלת" בשרת. ל-<code>https</code> ברירת המחדל היא 443, ל-<code>http</code> היא 80</td></tr>
+  <tr><td><span class="en">path</span></td><td><code>/v1/messages</code></td><td>מה מבקשים מהשרת. כאן: גרסה 1 של ה-<span class="en">API</span>, משאב ההודעות</td></tr>
+</table>
+</div>
+
+<p>ומכאן ארבעה שלבים, תמיד באותו סדר:</p>
+
+<div class="diagram">
+  <div class="flow steps">
+    <div class="layer l4">
+      <div class="name">1. DNS</div>
+      <div class="what">מתרגמים את השם לכתובת <span class="en">IP</span>: <code>api.anthropic.com</code> הוא, למשל, <code>160.79.104.10</code></div>
+    </div>
+    <div class="hop">&rarr;</div>
+    <div class="layer l3">
+      <div class="name">2. TCP connect</div>
+      <div class="what">פותחים חיבור לכתובת, ל-<span class="en">port</span> 443. מישהו צריך להאזין שם</div>
+    </div>
+    <div class="hop">&rarr;</div>
+    <div class="layer l2">
+      <div class="name">3. TLS</div>
+      <div class="what">מוודאים שזה באמת השרת הנכון, ומצפינים את החיבור. רק ב-<code>https</code></div>
+    </div>
+    <div class="hop">&rarr;</div>
+    <div class="layer">
+      <div class="name">4. HTTP</div>
+      <div class="what">שולחים בקשה (טקסט), ומקבלים תשובה עם <span class="en">status code</span></div>
+    </div>
+  </div>
+  <div class="caption">כל שלב יכול להיכשל, וכל כישלון נראה אחרת. אם שלב נכשל, השלבים שאחריו לא קורים בכלל.</div>
+</div>
+
+<p>הצד ששולח בקשה נקרא <strong><span class="en">client</span></strong>, והצד שמאזין ועונה נקרא <strong><span class="en">server</span></strong>. אלה תפקידים, לא סוגי מחשבים: הסוכן שלכם הוא <span class="en">client</span> של Anthropic, ובפרק 5 הוא יהיה גם <span class="en">server</span>, שדפדפן פונה אליו. נתחיל מהסוף, משלב 4, כי אותו אפשר לראות הכי טוב. בשביל זה צריך שרת.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.3</span>שרת משלכם: כתובות, <span class="en">ports</span> ו-<span class="en">localhost</span></h2>
+
+<p>ל-Python יש שרת מובנה, <code>http.server</code>, שמגיש את הקבצים שבתיקייה. הוא לא מיועד לייצור, אבל הוא מושלם לניסויים. צרו תיקייה נפרדת, <code>~\projects\net-lab</code>, ובה קובץ <code>index.html</code> (ב-VS Code) עם שורה אחת: <code>&lt;h1&gt;Hello from my own server&lt;/h1&gt;</code>. ואז:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects\net-lab
+uv run python -m http.server 8000 --bind 127.0.0.1</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Serving HTTP on 127.0.0.1 port 8000 (http://127.0.0.1:8000/) ...</code></pre>
+</div>
+
+<p>ה-<span class="en">terminal</span> "נתקע", וזה בסדר: שרת הוא תוכנית שלא נגמרת, היא מחכה לבקשות. עצירה היא <kbd>Ctrl</kbd>+<kbd>C</kbd>. פתחו בדפדפן <code>http://localhost:8000</code> ותראו את הכותרת. ב-<span class="en">terminal</span> של השרת הופיעה שורה על כל בקשה, זה ה-<span class="en">access log</span> שלו:</p>
+
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>127.0.0.1 - - [18/Nov/2026 13:17:54] "GET / HTTP/1.1" 200 -</code></pre>
+</div>
+
+<div class="callout warn">
+  <span class="title">לעולם לא בתיקיית הפרויקט</span>
+  <p><code>http.server</code> מגיש <em>כל</em> קובץ בתיקייה שבה הפעלתם אותו. מתוך <code>my-agent</code>, כל מי שמגיע לשרת יכול לבקש את <code>/.env</code> ולקבל את המפתח שלכם. לכן <code>net-lab</code> נפרדת, ולכן <code>--bind 127.0.0.1</code>, שמוסבר מיד.</p>
+</div>
+
+<h3>כתובת ו-<span class="en">port</span></h3>
+
+<p>לכל מחשב ברשת יש <strong>כתובת <span class="en">IP</span></strong>, כמו <code>160.79.104.10</code> (<span class="en">IPv4</span>), או הארוכה יותר <code>2001:db8::10</code> (<span class="en">IPv6</span>). כתובת אחת מספיקה כדי להגיע למחשב, אבל על המחשב רצות הרבה תוכניות. ה-<strong><span class="en">port</span></strong>, מספר בין 1 ל-65535, אומר לאיזו מהן. תוכנית ש"מאזינה על <span class="en">port</span> 8000" מקבלת את כל החיבורים שמגיעים למספר הזה. זה מה ש-<code>Serving HTTP on 127.0.0.1 port 8000</code> אומר.</p>
+
+<p>למה 8000? מספרים מתחת ל-1024 שמורים לשירותים מוכרים (80 ל-<code>http</code>, 443 ל-<code>https</code>), ו-8000 הוא ברירת המחדל של <code>http.server</code> וגם של השרת שתבנו בפרק 5. אין בו קסם: כל מספר פנוי מעל 1024 עובד. אם 8000 תפוס אצלכם, בחרו 8001, ושנו בהתאם בכל הפקודות.</p>
+
+<h3><span class="en">localhost</span>, <code>127.0.0.1</code> ו-<code>--bind</code></h3>
+
+<p><code>127.0.0.1</code> היא כתובת מיוחדת: "המחשב הזה". בקשה אליה לא יוצאת לרשת בכלל, ולכן כל הפרק עובד בלי אינטרנט. <code>localhost</code> הוא <em>שם</em> שמתורגם אליה, ותראו בסעיף 4.6 שגם ל-<code>::1</code>, הגרסה של <span class="en">IPv6</span>. שימו לב לפרט הזה, הוא יחזור.</p>
+
+<p><code>--bind 127.0.0.1</code> אומר לשרת להאזין רק על הכתובת הזו, כלומר רק לתוכניות במחשב שלכם. בלי הדגל, <code>http.server</code> מאזין על כל הכתובות של המחשב, ומי שמחובר לאותה רשת (בבית קפה, במשרד) יכול להגיע אליו. Windows גם עשוי לקפוץ עם חלון של <span class="en">Windows Defender Firewall</span> ששואל אם לאפשר. כשאתם מפתחים, הכלל הוא להאזין על <code>127.0.0.1</code>, אלא אם יש סיבה טובה אחרת.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.4</span><code>curl.exe</code>, ומלכודת ה-<span class="en">alias</span></h2>
+
+<p>דפדפן מציג את התשובה, ומסתיר את כל השאר. הכלי שמראה הכול הוא <code>curl</code>, שמגיע עם Windows 10 ו-11. פתחו <span class="en">terminal</span> <strong>שני</strong> (השרת ממשיך לרוץ בראשון. ב-VS Code: הכפתור <span class="en">Split Terminal</span>), ונסו:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>curl -i http://127.0.0.1:8000/</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Invoke-WebRequest : Cannot process command because of one or more missing mandatory parameters: Uri.</code></pre>
+</div>
+
+<p>השגיאה מגיעה מ-<code>Invoke-WebRequest</code>, לא מ-<code>curl</code>. ב-PowerShell 5.1, שמגיע עם Windows, <code>curl</code> הוא <strong><span class="en">alias</span></strong>, כינוי, לפקודה של PowerShell עצמו, עם פרמטרים אחרים לגמרי. <code>-i</code> פורש אצלו כפרמטר אחר, וה-<span class="en">URL</span> "נבלע". בלי דגלים הוא כן רץ, אבל עשוי לעצור ולשאול שאלת אבטחה על הרצת סקריפטים מהדף, ובשגיאות <span class="en">HTTP</span> הוא זורק חריגה במקום להראות את התשובה. בדקו בעצמכם:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>Get-Command curl          <span class="cm"># CommandType: Alias, Definition: Invoke-WebRequest</span>
+Get-Command curl.exe      <span class="cm"># C:\Windows\system32\curl.exe, the real curl</span></code></pre>
+</div>
+
+<p>הכלל לכל החוברת: <strong>תמיד <code>curl.exe</code>, עם הסיומת</strong>. כך PowerShell מריץ את התוכנה האמיתית, וכל דוגמה של <code>curl</code> שתמצאו באינטרנט תעבוד אצלכם (כמעט, ראו תרגיל 5).</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>curl.exe -i http://127.0.0.1:8000/</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>HTTP/1.0 200 OK
+Server: SimpleHTTP/0.6 Python/3.12.13
+Date: Wed, 18 Nov 2026 11:17:54 GMT
+Content-type: text/html
+Content-Length: 34
+Last-Modified: Wed, 18 Nov 2026 11:17:50 GMT
+
+&lt;h1&gt;Hello from my own server&lt;/h1&gt;</code></pre>
+</div>
+
+<p>הדגל <code>-i</code> מוסיף לפלט את מה שהדפדפן הסתיר: שורת הסטטוס ואת ה-<span class="en">headers</span>. אצלכם המספר ב-<code>Content-Length</code> עשוי להיות שונה בבית אחד, לפי סוג סוף השורה שנשמר בקובץ. ה-<code>Date</code> הוא תמיד בשעון גריניץ' (<span class="en">GMT</span>), ולכן הוא לא תואם את השעה במחשב שלכם.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.5</span><span class="en">HTTP</span>: בקשה ותשובה</h2>
+
+<p>הנה הסוד הגדול של <span class="en">HTTP</span>: הוא טקסט. בקשה היא כמה שורות שהלקוח כותב לחיבור, ותשובה היא כמה שורות שהשרת כותב בחזרה. כדי להוכיח את זה תשלחו בקשה בלי שום ספרייה של <span class="en">HTTP</span>, רק חיבור ומחרוזת. זה הקובץ הראשון בתיקייה חדשה, <code>scripts</code>, ולכן קודם ענף:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects\my-agent
+git switch main
+git pull
+git switch -c feature/network-scripts
+mkdir scripts</code></pre>
+</div>
+
+<div class="codebox">
+  <div class="label"><span>scripts\raw_http.py</span></div>
+<pre><code>"""Send one HTTP request by hand, as plain text over a TCP connection.
+
+Run it with: uv run python scripts/raw_http.py 127.0.0.1 8000
+"""
+
+import socket
+import sys
+
+# The whole request. Every line ends with \r\n.
+REQUEST = (
+    "GET / HTTP/1.1\r\n"  # the request line: method, path, protocol version
+    "Host: 127.0.0.1\r\n"  # headers, one per line
+    "Connection: close\r\n"
+    "\r\n"  # an empty line: the headers are over (a GET has no body)
+)
+
+
+def main() -&gt; None:
+    host, port = sys.argv[1], int(sys.argv[2])
+    with socket.create_connection((host, port), timeout=5) as connection:
+        connection.sendall(REQUEST.encode("ascii"))
+        reply = b""
+        while chunk := connection.recv(4096):  # read until the server closes
+            reply += chunk
+    print(reply.decode("utf-8", errors="replace"))
+
+
+if __name__ == "__main__":
+    main()</code></pre>
+</div>
+
+<p><code>socket.create_connection</code> הוא שלבים 1 ו-2 מהמפה: הוא מתרגם את השם לכתובת ופותח חיבור <span class="en">TCP</span>. <strong><span class="en">TCP</span></strong> הוא הצינור שמתחת ל-<span class="en">HTTP</span>: הוא דואג שהבתים יגיעו, בסדר הנכון ובלי חורים, ולא אכפת לו מה כתוב בהם. מה שכתוב בהם הוא <span class="en">HTTP</span>, והוא כולו במחרוזת <code>REQUEST</code>. הריצו:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python scripts\raw_http.py 127.0.0.1 8000</code></pre>
+</div>
+
+<p>תקבלו בדיוק את מה ש-<code>curl.exe -i</code> הראה. ה-<span class="en">terminal</span> של השרת רשם בקשה נוספת. שמרו: <code>git add scripts</code> ואז <code>git commit -m "Send an HTTP request by hand with raw_http.py"</code>.</p>
+
+<h3>מבנה של בקשה ושל תשובה</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>חלק</th><th>בבקשה</th><th>בתשובה</th></tr>
+  <tr><td>שורה ראשונה</td><td><code>GET / HTTP/1.1</code>: <span class="en">method</span>, <span class="en">path</span>, גרסה</td><td><code>HTTP/1.0 200 OK</code>: גרסה, <span class="en">status code</span>, משפט קצר</td></tr>
+  <tr><td><span class="en">Headers</span></td><td>שורות <code>Name: value</code>, מידע על הבקשה</td><td>אותו דבר, מידע על התשובה</td></tr>
+  <tr><td>שורה ריקה</td><td colspan="2">חובה. כך הצד השני יודע שה-<span class="en">headers</span> נגמרו</td></tr>
+  <tr><td><span class="en">Body</span></td><td>הנתונים שנשלחים, למשל השיחה. ב-<code>GET</code> אין</td><td>התוכן עצמו: דף, קובץ, <span class="en">JSON</span></td></tr>
+</table>
+</div>
+
+<h3><span class="en">Methods</span>: מה רוצים לעשות</h3>
+
+<p>ה-<span class="en">method</span> הוא הפועל של הבקשה. יש כמה, וחמישה מכסים כמעט הכול:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th><span class="en">Method</span></th><th>משמעות</th><th>בטוח לשלוח שוב?</th></tr>
+  <tr><td><code>GET</code></td><td>תן לי. לא משנה דבר בשרת</td><td>כן</td></tr>
+  <tr><td><code>POST</code></td><td>הנה נתונים, תעשה איתם משהו: צור, שלח, חשב. זה מה ש-<code>messages.create</code> שולח</td><td>לא בהכרח. שתי בקשות עשויות ליצור שני דברים</td></tr>
+  <tr><td><code>PUT</code></td><td>שים את זה במקום מה שיש</td><td>כן: פעמיים זה כמו פעם אחת</td></tr>
+  <tr><td><code>PATCH</code></td><td>שנה חלק ממה שיש</td><td>תלוי בשינוי</td></tr>
+  <tr><td><code>DELETE</code></td><td>מחק</td><td>כן: מה שנמחק נשאר מחוק</td></tr>
+</table>
+</div>
+
+<p>העמודה האחרונה נקראת <strong><span class="en">idempotency</span></strong>, והיא חשובה כשבקשה נכשלת באמצע: מותר לנסות שוב רק אם ניסיון נוסף לא יזיק. תראו את ה-SDK מחליט את זה בתרגיל 4, ותחזרו לזה ברצינות בפרק 11.</p>
+
+<h3><span class="en">Status codes</span>: מה קרה</h3>
+
+<p>המספר בשורה הראשונה של התשובה. הספרה הראשונה אומרת את רוב מה שצריך לדעת: <code>2xx</code> הצליח, <code>3xx</code> חפשו במקום אחר, <code>4xx</code> הבעיה בבקשה שלכם, <code>5xx</code> הבעיה בשרת. ההבדל בין 4 ל-5 הוא ההבדל בין "תקנו משהו אצלכם" לבין "נסו שוב אחר כך".</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>קוד</th><th>שם</th><th>מתי תפגשו אותו</th></tr>
+  <tr><td><code>200</code></td><td><span class="en">OK</span></td><td>הכול עבד</td></tr>
+  <tr><td><code>201</code></td><td><span class="en">Created</span></td><td><code>POST</code> יצר משהו חדש (פרק 5)</td></tr>
+  <tr><td><code>301</code>, <code>302</code></td><td><span class="en">Redirect</span></td><td>הדף עבר. ה-<span class="en">header</span> <code>Location</code> אומר לאן</td></tr>
+  <tr><td><code>400</code></td><td><span class="en">Bad Request</span></td><td>הבקשה שבורה: <span class="en">JSON</span> לא תקין, שדה חסר</td></tr>
+  <tr><td><code>401</code></td><td><span class="en">Unauthorized</span></td><td>אין מפתח, או שהוא שגוי. בפועל: "לא ברור מי אתם"</td></tr>
+  <tr><td><code>403</code></td><td><span class="en">Forbidden</span></td><td>ברור מי אתם, ואסור לכם</td></tr>
+  <tr><td><code>404</code></td><td><span class="en">Not Found</span></td><td>אין דבר כזה ב-<span class="en">path</span> הזה</td></tr>
+  <tr><td><code>429</code></td><td><span class="en">Too Many Requests</span></td><td>שלחתם יותר מדי, חכו (<span class="en">rate limit</span>)</td></tr>
+  <tr><td><code>500</code></td><td><span class="en">Internal Server Error</span></td><td>באג בשרת. אצלכם, בפרק 5, זו חריגה שלא נתפסה</td></tr>
+  <tr><td><code>503</code>, <code>529</code></td><td><span class="en">Unavailable</span>, <span class="en">Overloaded</span></td><td>השרת עמוס. <code>529</code> הוא קוד של Anthropic, לא תקני</td></tr>
+</table>
+</div>
+
+<h3><span class="en">Headers</span> ו-<span class="en">JSON</span></h3>
+
+<p>ה-<span class="en">headers</span> הם מידע <em>על</em> הבקשה או התשובה. שמות שלא משנה אם כותבים באותיות גדולות או קטנות (<code>Content-type</code> ו-<code>Content-Type</code> זהים), וכמה שתפגשו כל יום:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th><span class="en">Header</span></th><th>מה הוא אומר</th></tr>
+  <tr><td><code>Host</code></td><td>לאיזה אתר הבקשה. שרת אחד יכול לשרת הרבה שמות</td></tr>
+  <tr><td><code>Content-Type</code></td><td>איך לקרוא את ה-<span class="en">body</span>: <code>text/html</code>, <code>application/json</code></td></tr>
+  <tr><td><code>Content-Length</code></td><td>כמה <em>בתים</em> יש ב-<span class="en">body</span>, כדי שהצד השני יידע מתי הוא נגמר</td></tr>
+  <tr><td><code>Authorization</code></td><td>מי אתם: מפתח או <span class="en">token</span>. סוד, בדיוק כמו המפתח עצמו</td></tr>
+  <tr><td><code>User-Agent</code></td><td>איזו תוכנה שולחת: דפדפן, <code>curl</code>, ה-SDK</td></tr>
+</table>
+</div>
+
+<p>וה-<span class="en">body</span>? כששתי תוכניות מחליפות נתונים, ולא דף לאדם, הן כמעט תמיד משתמשות ב-<strong><span class="en">JSON</span></strong>: טקסט שנראה כמו <span class="en">dict</span> ו-<span class="en">list</span> של Python, עם מירכאות כפולות בלבד, <code>true</code>, <code>false</code> ו-<code>null</code>. ב-Python, <code>json.dumps</code> הופך אובייקט לטקסט, ו-<code>json.loads</code> הופך טקסט בחזרה. ה-SDK עושה את שני הכיוונים בשבילכם, ובסעיף 4.8 תראו את הטקסט עצמו.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.6</span><span class="en">DNS</span>, ושלוש דרכים להיכשל</h2>
+
+<p>שלב 1 במפה. אף אחד לא זוכר <code>160.79.104.10</code>, ולכן משתמשים בשמות. <strong><span class="en">DNS</span></strong> (<span class="en">Domain Name System</span>) הוא מערכת עולמית של שרתים שעונים על שאלה אחת: לאיזו כתובת שייך השם הזה. המחשב שלכם שואל שרת <span class="en">DNS</span> (בדרך כלל של הנתב או של ספק האינטרנט), שומר את התשובה לזמן מה, ורק אז פותח חיבור. את <code>localhost</code> Windows יודע לבד, בלי לשאול אף אחד:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>Resolve-DnsName localhost</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Name                                           Type   TTL   Section    IPAddress
+----                                           ----   ---   -------    ---------
+localhost                                      AAAA   1200  Question   ::1
+localhost                                      A      1200  Question   127.0.0.1</code></pre>
+</div>
+
+<p>שתי תשובות: <code>AAAA</code> היא כתובת <span class="en">IPv6</span>, ו-<code>A</code> היא <span class="en">IPv4</span>. אם יש לכם אינטרנט, נסו גם <code>Resolve-DnsName api.anthropic.com</code>. התשובה אצלכם עשויה להיות שונה מזו שבמפה: לשירותים גדולים יש הרבה כתובות, והן משתנות. זו בדיוק הסיבה שמשתמשים בשמות.</p>
+
+<p>את כל ארבעת השלבים רואים בבת אחת עם <code>-v</code> (<span class="en">verbose</span>) של <code>curl.exe</code>. השורות עם <code>*</code> הן מה ש-<code>curl</code> עושה, <code>&gt;</code> הוא מה שהוא שולח, ו-<code>&lt;</code> הוא מה שהוא מקבל:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>curl.exe -v http://localhost:8000/</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>* Host localhost:8000 was resolved.
+* IPv6: ::1
+* IPv4: 127.0.0.1
+*   Trying [::1]:8000...
+*   Trying 127.0.0.1:8000...
+* Established connection to localhost (127.0.0.1 port 8000) from 127.0.0.1 port 50275
+&gt; GET / HTTP/1.1
+&gt; Host: localhost:8000
+&gt; User-Agent: curl/8.21.0
+&gt; Accept: */*
+&gt;
+&lt; HTTP/1.0 200 OK
+&lt; Server: SimpleHTTP/0.6 Python/3.12.13
+...</code></pre>
+</div>
+
+<p>קראו את זה כסיפור. <span class="en">DNS</span>: השם תורגם לשתי כתובות. חיבור: <code>curl</code> ניסה קודם את <code>::1</code>, ושם אף אחד לא מאזין, כי השרת שלכם מאזין רק על <code>127.0.0.1</code>. אז הוא עבר לכתובת השנייה, והצליח. גם לצד שלכם יש <span class="en">port</span> (<code>50275</code>), שמערכת ההפעלה בחרה לבד, כדי שהתשובה תדע לאן לחזור. ואז <span class="en">HTTP</span>: שלוש שורות של בקשה, ותשובה.</p>
+
+<div class="callout warn">
+  <span class="title">למה בפרק הזה כותבים <code>127.0.0.1</code> ולא <code>localhost</code></span>
+  <p><code>curl</code> עובר מהר לכתובת השנייה. ה-SDK של Anthropic, כמו רוב ספריות ה-Python, מנסה את <code>::1</code>, ו-Windows מחכה כשתי שניות עד שהוא מוותר. אותה בקשה ל-<code>localhost</code> לקחה אצלנו 2.7 שניות, ול-<code>127.0.0.1</code> פחות מעשירית שנייה. כשמשהו מקומי "איטי בלי סיבה" ב-Windows, זה החשוד הראשון.</p>
+</div>
+
+<h3>שלוש תקלות, שלוש שכבות</h3>
+
+<p>עכשיו אפשר לענות על הבעיה מסעיף 4.1. השרת שלכם עדיין רץ על 8000. שלוש בקשות, שכל אחת נכשלת בשלב אחר:</p>
+
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>PS&gt; curl.exe http://no-such-host.invalid/
+curl: (6) Could not resolve host: no-such-host.invalid
+PS&gt; curl.exe http://127.0.0.1:9/
+curl: (7) Failed to connect to 127.0.0.1:9 after 2030 ms: Could not connect to server
+PS&gt; curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:8000/missing.html
+404</code></pre>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>שלב שנכשל</th><th>מה קרה</th><th>איך זה נראה ב-Python</th><th>מה בודקים</th></tr>
+  <tr><td>1. <span class="en">DNS</span></td><td>לשם אין כתובת. (<code>.invalid</code> שמור לשמות שלעולם לא יתקיימו)</td><td><code>[Errno 11001] getaddrinfo failed</code></td><td>שגיאת כתיב בשם, אין אינטרנט, <span class="en">DNS</span> ארגוני</td></tr>
+  <tr><td>2. חיבור</td><td>יש כתובת, ואף תוכנית לא מאזינה על ה-<span class="en">port</span></td><td><code>[WinError 10061] ... actively refused it</code></td><td>השרת לא רץ, <span class="en">port</span> שגוי, <span class="en">firewall</span></td></tr>
+  <tr><td>4. <span class="en">HTTP</span></td><td>השרת ענה, ואמר שמשהו לא בסדר</td><td>תשובה עם <span class="en">status code</span>, למשל <code>404</code></td><td>לפי הקוד: <code>4xx</code> הבקשה, <code>5xx</code> השרת</td></tr>
+</table>
+</div>
+
+<p>עכשיו ה-<span class="en">log</span> מפרק 3 קריא: <code>127.0.0.1:9</code> הוא המחשב שלכם, ב-<span class="en">port</span> שאף אחד לא מאזין בו, ולכן <code>WinError 10061</code>, שלב 2. שימו לב גם ל-<code>2030 ms</code>: Windows ניסה כמה פעמים לפני שוויתר, ו-<code>curl</code> החזיר שגיאה רק אחרי שתי שניות. כששלבים 1 או 2 נכשלים, ה-SDK זורק <code>APIConnectionError</code>, והסוכן אומר "Could not reach the API". כשהשרת עונה בשגיאה, זה <code>APIStatusError</code>, עם הקוד. בתרגיל 3 תראו את זה עם הסוכן עצמו.</p>
+
+<p>יש גם כישלון רביעי, שקט יותר: אף אחד לא עונה <em>וגם</em> לא מסרב, והבקשה פשוט תלויה. לזה יש <strong><span class="en">timeout</span></strong>, זמן מקסימלי להמתנה. ב-<code>raw_http.py</code> הוא 5 שניות, וב-SDK, כפי שתראו, עשר דקות. נחזור לזה בפרק 11.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.7</span><span class="en">HTTPS</span> ו-<span class="en">TLS</span>, במבט מלמעלה</h2>
+
+<p>כל מה שראיתם עד עכשיו עבר כטקסט גלוי. זה בסדר בתוך המחשב שלכם, אבל בדרך ל-<code>api.anthropic.com</code> הבקשה עוברת דרך הנתב, ספק האינטרנט ועוד כמה מחשבים בדרך. כל אחד מהם היה יכול לקרוא את המפתח שלכם מתוך <code>Authorization</code>, או לשנות את התשובה.</p>
+
+<p><strong><span class="en">TLS</span></strong> (<span class="en">Transport Layer Security</span>) הוא שלב 3, והוא פותר שלוש בעיות. <strong>הצפנה</strong>: רק שני הקצוות יכולים לקרוא. <strong>שלמות</strong>: שינוי בדרך מתגלה. <strong>זהות</strong>: השרת מציג <strong>תעודה</strong> (<span class="en">certificate</span>) שגוף מוכר חתם עליה, ובה כתוב "אני <code>api.anthropic.com</code>". הלקוח בודק את החתימה ואת השם, ואם משהו לא מתאים, הוא מסרב להמשיך. <span class="en">HTTPS</span> הוא פשוט <span class="en">HTTP</span> בתוך <span class="en">TLS</span>: אותן שורות בדיוק, בתוך צינור מוצפן.</p>
+
+<p>שתי מסקנות מעשיות. ראשית, מפתח נשלח רק ב-<code>https</code>. היום תשלחו מפתח מזויף ב-<code>http</code>, וזה בסדר רק כי הוא מזויף והבקשה לא עוזבת את המחשב. שנית, אי אפשר לראות את הבקשות האמיתיות של הסוכן מבחוץ, וזה בדיוק העניין. כדי לראות מה ה-SDK שולח, לא מצותתים לחיבור. מפנים את ה-SDK לשרת שלכם.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.8</span>דוגמה מודרכת: מה ה-SDK באמת שולח</h2>
+
+<p>ב-<code>conftest.py</code> מפרק 3 השתמשתם ב-<code>ANTHROPIC_BASE_URL</code> כדי שהבדיקות לא יגיעו ל-<span class="en">API</span>. אותו משתנה יכול לשלוח את הסוכן לשרת שמדפיס כל בקשה, ועונה בתשובה מזויפת בצורה של ה-<span class="en">API</span> האמיתי. כך <code>ClaudeClient</code> האמיתי, לא ה-<span class="en">mock</span>, ירוץ מההתחלה ועד הסוף, בלי אינטרנט ובלי כסף.</p>
+
+<div class="step">
+  <h3><span class="step-num">1</span>עוצרים את <code>http.server</code></h3>
+  <p>ב-<span class="en">terminal</span> של השרת, <kbd>Ctrl</kbd>+<kbd>C</kbd>. זה חשוב: ב-Windows, שרת Python שני על אותו <span class="en">port</span> עולה בלי שום שגיאה, ואז לא ברור מי משניהם עונה. בדקנו.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>שרת שמדפיס בקשות</h3>
+  <p><code>http.server</code> בנוי משני חלקים: <code>HTTPServer</code>, שמאזין ומקבל חיבורים, ו-<span class="en">handler</span>, מחלקה שמקבלת כל בקשה ומחליטה מה לענות. <code>http.server</code> הריץ handler שמגיש קבצים. אתם כותבים handler משלכם. צרו את <code>scripts\echo_server.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>scripts\echo_server.py</span></div>
+<pre><code>"""A tiny local HTTP server that prints every request it receives.
+
+Point the agent at it to see exactly what the Anthropic SDK sends:
+
+    uv run python scripts/echo_server.py
+    $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:8000"
+
+POST /v1/messages gets a fake reply in the shape of the Messages API, so the
+real ClaudeClient works against this server: offline, free, no real key needed.
+"""
+
+import argparse
+import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# Headers that carry secrets: print only their first characters.
+SECRET_HEADERS = {"authorization", "x-api-key"}
+
+
+def hide_secret(value: str) -&gt; str:
+    """'Bearer sk-ant-abc123' -&gt; 'Bearer sk-a***'."""
+    scheme, _, token = value.rpartition(" ")
+    return f"{scheme} {token[:4]}***".strip()
+
+
+def fake_message(request: dict[str, object]) -&gt; dict[str, object]:
+    """A reply shaped like the Messages API's, so the SDK can read it."""
+    messages = request.get("messages", [])
+    count = len(messages) if isinstance(messages, list) else 0
+    return {
+        "id": "msg_echo",
+        "type": "message",
+        "role": "assistant",
+        "model": request.get("model", "unknown"),
+        "content": [{"type": "text", "text": f"[echo server] messages received: {count}"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 0, "output_tokens": 0},  # fake counts
+    }
+
+
+class EchoHandler(BaseHTTPRequestHandler):
+    """Called by HTTPServer once for every request that arrives."""
+
+    def do_GET(self) -&gt; None:
+        self.answer()
+
+    def do_POST(self) -&gt; None:
+        self.answer()
+
+    def answer(self) -&gt; None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        self.print_request(body)
+
+        if self.command == "POST" and self.path == "/v1/messages":
+            self.send_json(200, fake_message(json.loads(body)))
+        else:
+            self.send_json(200, {"method": self.command, "path": self.path, "bytes": length})
+
+    def print_request(self, body: bytes) -&gt; None:
+        print(f"\n--- {self.requestline}")
+        for name, value in self.headers.items():
+            if name.lower() in SECRET_HEADERS:
+                value = hide_secret(value)
+            print(f"{name}: {value}")
+        if body:
+            print()
+            print(body.decode("utf-8"))
+
+    def send_json(self, status: int, data: dict[str, object]) -&gt; None:
+        payload = json.dumps(data).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+def main() -&gt; None:
+    parser = argparse.ArgumentParser(description="Print every HTTP request it receives.")
+    parser.add_argument("--port", type=int, default=8000)
+    args = parser.parse_args()
+
+    # 127.0.0.1: only programs on this computer can connect, not the network.
+    server = HTTPServer(("127.0.0.1", args.port), EchoHandler)
+    print(f"Echo server on http://127.0.0.1:{args.port} (Ctrl+C to stop)")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopped.")
+
+
+if __name__ == "__main__":
+    main()</code></pre>
+</div>
+  <p>שלושה דברים לשים לב אליהם. השרת קורא בדיוק <code>Content-Length</code> בתים, כי אחרת אין לו דרך לדעת איפה ה-<span class="en">body</span> נגמר. כל תשובה שלו נבנית מאותם שלושה חלקים: שורת סטטוס (<code>send_response</code>), <span class="en">headers</span>, ו-<span class="en">body</span>. ומפתחות לא מודפסים במלואם, גם לא במחשב שלכם (פרק 3, סעיף 3.9).</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>מפנים את הסוכן לשרת</h3>
+  <p>ב-<span class="en">terminal</span> הראשון: <code>uv run python scripts\echo_server.py</code>. בשני, אותם שלושה משתנים כמו בסעיף 3.9, רק שהפעם מישהו מאזין בכתובת:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$env:CHAT_MOCK = "0"
+$env:ANTHROPIC_API_KEY = "not-a-real-key"
+$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:8000"
+uv run python -m agent</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Chatting with claude-opus-5-5.
+Type a message and press Enter. Commands: /reset, /history, exit.
+
+you&gt; hello
+agent&gt; [echo server] messages received: 1
+
+you&gt; what is HTTP?
+agent&gt; [echo server] messages received: 3
+
+you&gt; exit
+Bye!</code></pre>
+</div>
+  <p>זה לא ה-<span class="en">mock</span>. זה <code>ClaudeClient</code>, עם ה-SDK האמיתי, שעבר את כל ארבעת השלבים (חוץ מ-<span class="en">TLS</span>) וקיבל תשובה אמיתית בפורמט אמיתי. רק התוכן מזויף.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>קוראים את הבקשה</h3>
+  <p>ב-<span class="en">terminal</span> של השרת מחכות שתי בקשות. הנה הראשונה, במלואה:</p>
+<div class="codebox output">
+  <div class="label"><span>echo server</span></div>
+<pre><code>--- POST /v1/messages HTTP/1.1
+Host: 127.0.0.1:8000
+Accept-Encoding: gzip, deflate
+Connection: keep-alive
+x-stainless-timeout: 600
+x-stainless-retry-count: 0
+x-stainless-read-timeout: 600
+Accept: application/json
+Content-Type: application/json
+User-Agent: Anthropic/Python 2.10.0
+X-Stainless-Lang: python
+X-Stainless-Package-Version: 2.10.0
+X-Stainless-OS: Windows
+X-Stainless-Arch: other:amd64
+X-Stainless-Runtime: CPython
+X-Stainless-Runtime-Version: 3.12.13
+Authorization: Bearer not-***
+X-Stainless-Async: false
+anthropic-version: 2026-10-21
+Content-Length: 212
+
+{"max_tokens":16000,"messages":[{"role":"user","content":"hello"}],"model":"claude-opus-5-5","system":"You are a friendly assistant. Keep your answers short and clear. Answer in the language the user writes in."}
+127.0.0.1 - - [18/Nov/2026 13:29:00] "POST /v1/messages HTTP/1.1" 200 -</code></pre>
+</div>
+  <p>כל מה שלמדתם בפרק נמצא כאן:</p>
+  <ul>
+    <li><strong>השורה הראשונה:</strong> <code>POST</code>, כי שולחים נתונים ומבקשים שיעשו איתם משהו. <code>/v1/messages</code> הוא ה-<span class="en">path</span> מה-<span class="en">log</span> של פרק 3: ה-SDK מצמיד אותו ל-<code>ANTHROPIC_BASE_URL</code>.</li>
+    <li><strong>המפתח</strong> נוסע ב-<code>Authorization: Bearer ...</code>. כל מי שרואה את הבקשה רואה אותו, ולכן <span class="en">TLS</span>.</li>
+    <li><strong><code>anthropic-version</code></strong> אומר לשרת לפי איזו גרסה של ה-<span class="en">API</span> לענות, כדי ששינויים אצלם לא ישברו קוד ישן אצלכם.</li>
+    <li><strong><code>x-stainless-*</code></strong> הם <span class="en">headers</span> של הכלי שייצר את ה-SDK: מערכת הפעלה, גרסת Python, ה-<span class="en">timeout</span> (600 שניות), וכמה ניסיונות חוזרים כבר היו. תצטרכו את האחרון בתרגיל 4.</li>
+    <li><strong>ה-<span class="en">body</span></strong> הוא <code>messages.create(...)</code> מ-<code>llm.py</code>, הפעם כ-<span class="en">JSON</span>: <code>max_tokens</code>, <code>model</code>, <code>system</code>, ו-<code>messages</code>.</li>
+  </ul>
+  <p>ובבקשה השנייה, <code>Content-Length: 322</code> וב-<code>messages</code> שלוש הודעות: <code>hello</code>, התשובה, ו-<code>what is HTTP?</code>. זה מה שהסברנו בפרק 1 בעזרת ה-<span class="en">debugger</span>: ה-<span class="en">API</span> לא זוכר כלום, ולכן כל השיחה נשלחת בכל תור. עכשיו ראיתם אותה עוברת בחיבור.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>גם ה-<span class="en">log</span> ידע</h3>
+  <p>פתחו את <code>agent.log</code>. ליד השורות שלכם יש שורה שלא כתבתם, מספריית ה-<span class="en">HTTP</span> שה-SDK משתמש בה:</p>
+<div class="codebox output">
+  <div class="label"><span>agent.log (shortened)</span></div>
+<pre><code>... INFO agent.cli: sending 1 messages
+... INFO httpx2: HTTP Request: POST http://127.0.0.1:8000/v1/messages "HTTP/1.0 200 OK"
+... INFO agent.llm: reply from claude-opus-5-5: 0 input tokens, 0 output tokens</code></pre>
+</div>
+  <p>מעכשיו, כשמשהו לא עובד מול ה-<span class="en">API</span> האמיתי, זו השורה הראשונה שמחפשים: לאיזה <span class="en">URL</span> הלכה הבקשה, ואיזה קוד חזר. עצרו את הסוכן ואת השרת, נקו את המשתנים (<code class="wrap">Remove-Item Env:CHAT_MOCK, Env:ANTHROPIC_API_KEY, Env:ANTHROPIC_BASE_URL</code>), ושמרו: <code>git add scripts</code>, ואז <code>git commit -m "Add an echo server that shows what the SDK sends"</code>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.9</span>תרגילים</h2>
+
+<p>כל התרגילים על הענף <code>feature/network-scripts</code>. בתרגילים שמשנים קוד, הריצו בסוף את ארבעת הכלים מפרק 3 ו-<span class="en">commit</span>. כל השרתים על <span class="en">port</span> 8000, אחד בכל פעם. פתרונות, כולל הפלטים, נמצאים <a href="solutions/chapter-04.html">בדף נפרד</a>.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · דפדפן מול <code>curl.exe</code></h3><span class="level">מודרך</span></div>
+  <ol>
+    <li>הריצו את <code>http.server</code> מ-<code>net-lab</code>. שלחו עם <code>curl.exe -i</code> שלוש בקשות: <code>/</code>, <code>/missing.html</code>, ו-<code>-X POST</code> ל-<code>/</code>. רשמו לכל אחת את ה-<span class="en">status code</span> ואת ה-<code>Content-Type</code>.</li>
+    <li>עצרו אותו, הריצו את <code>echo_server.py</code>, ופתחו בדפדפן <code>http://127.0.0.1:8000/hello</code>. אחר כך <code>curl.exe http://127.0.0.1:8000/hello</code>. השוו ב-<span class="en">terminal</span> של השרת את שתי הבקשות.</li>
+  </ol>
+  <label class="answer-label" for="n-ex1">איזה קוד קיבל ה-<code>POST</code>, ולמה דווקא מספר שמתחיל ב-5? כמה <span class="en">headers</span> שלח <code>curl</code> וכמה הדפדפן, ומה אחד מהם שלדעתכם השרת יכול להשתמש בו?</label>
+  <textarea class="answer" id="n-ex1" data-id="c04-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c04-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · לשבור את <code>raw_http.py</code></h3><span class="level">מודרך</span></div>
+  <p>עם <code>http.server</code> רץ, שנו כל פעם דבר אחד ב-<code>REQUEST</code>, הריצו, והסתכלו גם בפלט וגם ב-<span class="en">log</span> של השרת. אחרי כל ניסוי החזירו עם <code>git restore scripts\raw_http.py</code>.</p>
+  <ol>
+    <li>ה-<span class="en">path</span>: <code>/missing.html</code> במקום <code>/</code>.</li>
+    <li>ה-<span class="en">method</span>: <code>DELETE</code> במקום <code>GET</code>.</li>
+    <li>מחקו את השורה האחרונה, <code>"\r\n"</code>, השורה הריקה.</li>
+  </ol>
+  <label class="answer-label" for="n-ex2">מה קרה בניסוי 3, אחרי כמה זמן, ולמה? מה השרת חיכה לו?</label>
+  <textarea class="answer" id="n-ex2" data-id="c04-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c04-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · הסוכן מול שלוש שכבות</h3><span class="level mid">בינוני</span></div>
+  <p>הריצו את הסוכן במצב אמיתי עם מפתח מזויף (כמו בצעד 3), פעמיים, עם <code>ANTHROPIC_BASE_URL</code> אחר בכל פעם: <code>http://no-such-host.invalid</code>, ואז <code>http://127.0.0.1:9</code>. בכל ריצה שלחו הודעה אחת, צאו, וחפשו ב-<code>agent.log</code> את השורה של החריגה הכי נמוכה בשרשרת. רמז: <code class="wrap">Select-String -Path agent.log -Pattern "Error:"</code>.</p>
+  <label class="answer-label" for="n-ex3">מה ראה המשתמש בשתי הריצות, ומה ראיתם ב-<span class="en">log</span>? איזה שלב מהמפה נכשל בכל אחת? ואיזה משפט הייתם רוצים שהסוכן יכתוב במקום "Check your internet connection" בכל מקרה?</label>
+  <textarea class="answer" id="n-ex3" data-id="c04-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c04-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · שרת שעונה בשגיאה</h3><span class="level mid">בינוני</span></div>
+  <p>כדי לבדוק איך הסוכן מגיב ל-<code>429</code> או ל-<code>529</code>, לא מחכים שזה יקרה באמת. גורמים לזה.</p>
+  <ol>
+    <li>הוסיפו ל-<code>echo_server.py</code> אפשרות <code>--status</code> (ברירת מחדל 200). כשהיא לא 200, כל בקשה מקבלת את הקוד הזה, עם <span class="en">body</span> בצורה של שגיאת <span class="en">API</span>: <code class="wrap">{"type": "error", "error": {"type": "api_error", "message": "..."}}</code>. רמז: מאפיין של המחלקה, <code>EchoHandler.forced_status</code>, ש-<code>main</code> קובע.</li>
+    <li>הריצו את השרת עם <code>--status 401</code>, אחר כך <code>400</code>, <code>429</code> ו-<code>529</code>. בכל פעם שלחו מהסוכן הודעה אחת, וספרו כמה בקשות הגיעו לשרת. הסתכלו על <code>x-stainless-retry-count</code>.</li>
+    <li><span class="en">Commit</span>: <code>"Let the echo server answer with any status code"</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex4">אילו קודים ה-SDK ניסה שוב ואילו לא, ולמה זה הגיוני? למה ב-<code>401</code> הסוכן יצא, ובשאר המשיך? (פרק 3, סעיף 3.8.)</label>
+  <textarea class="answer" id="n-ex4" data-id="c04-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c04-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · להיות ה-SDK</h3><span class="level mid">בינוני</span></div>
+  <p>שלחו ל-<code>echo_server.py</code> (בלי <code>--status</code>) בקשה כמו של ה-SDK, ביד.</p>
+  <ol>
+    <li>קודם, המלכודת: <code>curl.exe -d '{"model": "x"}' http://127.0.0.1:8000/try</code>. מה הגיע לשרת ב-<span class="en">body</span>, ומה ה-<code>Content-Type</code>?</li>
+    <li>עכשיו נכון. צרו ב-VS Code קובץ <code>body.json</code> (מחוץ ל-<code>my-agent</code>, או מחקו אותו בסוף) עם <code>model</code>, <code>max_tokens</code> ו-<code>messages</code> שבה הודעה אחת: <code>"שלום"</code>. שלחו:</li>
+  </ol>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>curl.exe -i http://127.0.0.1:8000/v1/messages -H "Content-Type: application/json" -H "Authorization: Bearer not-a-real-key" --data-binary "@body.json"</code></pre>
+</div>
+  <label class="answer-label" for="n-ex5">למה הגיע <code>{model: x}</code> בניסיון הראשון? ובשני: כמה תווים יש ב-<code>שלום</code>, ובכמה בתים הוא תרם ל-<code>Content-Length</code>?</label>
+  <textarea class="answer" id="n-ex5" data-id="c04-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c04-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · <code>probe.py</code>: איפה זה נשבר?</h3><span class="level open">פתוח</span></div>
+  <p>כתבו <code>scripts\probe.py</code>, שמקבל <span class="en">URL</span> ועובר על השלבים של המפה אחד אחד: <span class="en">DNS</span> (<code>socket.getaddrinfo</code>), חיבור (<code>socket.create_connection</code>), ובקשת <code>GET</code> (<code>http.client.HTTPConnection</code>, או <code>HTTPSConnection</code> ל-<code>https</code>). אחרי כל שלב הוא מדפיס מה מצא, ובשלב הראשון שנכשל הוא אומר במילים פשוטות מה כנראה הבעיה, ועוצר. בחרו בעצמכם צורת פלט ו-<span class="en">exit code</span>.</p>
+  <p>הריצו אותו על ארבע כתובות: <code>.invalid</code>, <code>127.0.0.1:9</code>, ושתי כתובות בשרת שלכם, אחת שקיימת ואחת שלא. אם יש לכם אינטרנט, גם על <code>https://api.anthropic.com/</code>. אחר כך עדכנו את <code>README.md</code> (פרק "Network scripts" עם שלושת הסקריפטים, ו-<code>ANTHROPIC_BASE_URL</code> בטבלת המשתנים), <span class="en">commit</span>, ואחדו: <code>git switch main</code>, <code>git merge feature/network-scripts</code>, <code>git push</code>, <code>git branch -d feature/network-scripts</code>.</p>
+  <label class="answer-label" for="n-ex6">מה החלטתם לגבי ה-<span class="en">exit code</span>, ולמה? מה <code>probe.py</code> לא יודע לזהות?</label>
+  <textarea class="answer" id="n-ex6" data-id="c04-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c04-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.10</span>בדקו את עצמכם</h2>
+
+<p>סמנו רק מה שאתם מסוגלים להסביר בקול רם לאדם אחר, בלי להציץ בפרק.</p>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c04-chk1"><span>אני יודע/ת לתאר מה קורה מרגע שמקלידים <span class="en">URL</span> ועד שמגיעה תשובה, בארבעה שלבים.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c04-chk2"><span>אני יודע/ת להסביר מה זה כתובת <span class="en">IP</span>, <span class="en">port</span>, <code>127.0.0.1</code> ו-<code>localhost</code>, ומה עושה <code>--bind 127.0.0.1</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c04-chk3"><span>אני יודע/ת לפרק בקשה ותשובה של <span class="en">HTTP</span> לחלקים, ולמה השורה הריקה חשובה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c04-chk4"><span>אני יודע/ת מה אומרים <code>GET</code> ו-<code>POST</code>, ומה ההבדל בין <code>4xx</code> ל-<code>5xx</code>, עם שתי דוגמאות לכל אחד.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c04-chk5"><span>אני יודע/ת למה כותבים <code>curl.exe</code> ב-PowerShell, ואיך שולחים <span class="en">JSON</span> בלי שהמירכאות ייעלמו.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c04-chk6"><span>אני יודע/ת לזהות מהודעת שגיאה אם נכשל <span class="en">DNS</span>, חיבור, או <span class="en">HTTP</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c04-chk7"><span>אני יודע/ת אילו שלוש בעיות <span class="en">TLS</span> פותר, ולמה מפתח נשלח רק ב-<code>https</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c04-chk8"><span>אני יודע/ת להפנות את הסוכן לשרת מקומי, ולהסביר כל חלק בבקשה שה-SDK שולח.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.11</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td><code>Invoke-WebRequest : ...</code>, או שאלת אבטחה, אחרי <code>curl</code></td><td>ב-PowerShell 5.1, <code>curl</code> הוא כינוי ל-<code>Invoke-WebRequest</code></td><td>כתבו <code>curl.exe</code></td></tr>
+  <tr><td>השרת מקבל <code>{model: x}</code> במקום <span class="en">JSON</span></td><td>PowerShell 5.1 מוחק מירכאות כפולות בארגומנטים לתוכנות חיצוניות</td><td>שימו את ה-<span class="en">JSON</span> בקובץ ושלחו <code>--data-binary "@body.json"</code></td></tr>
+  <tr><td>כל בקשה מקומית מחכה כשתי שניות</td><td><code>localhost</code> מנסה קודם <code>::1</code>, והשרת מאזין רק על <code>127.0.0.1</code></td><td>כתבו <code>127.0.0.1</code> ב-<span class="en">URL</span></td></tr>
+  <tr><td>שיניתם את השרת, ועונה הגרסה הישנה (או דף <span class="en">HTML</span> במקום <span class="en">JSON</span>)</td><td>שרת קודם עדיין רץ על אותו <span class="en">port</span>. ב-Windows, Python מצליח להאזין פעמיים על אותו <span class="en">port</span> בלי שגיאה</td><td><code class="wrap">Get-NetTCPConnection -LocalPort 8000 -State Listen</code> מראה מי מאזין. עצרו את כולם עם <kbd>Ctrl</kbd>+<kbd>C</kbd></td></tr>
+  <tr><td><code>[WinError 10061] ... actively refused it</code></td><td>אף תוכנית לא מאזינה על הכתובת וה-<span class="en">port</span></td><td>הפעילו את השרת, ובדקו שה-<span class="en">port</span> זהה בשני הצדדים</td></tr>
+  <tr><td><code>[Errno 11001] getaddrinfo failed</code></td><td>השם לא תורגם לכתובת (<span class="en">DNS</span>)</td><td>בדקו את השם, את החיבור לאינטרנט, ו-<code>Resolve-DnsName</code></td></tr>
+  <tr><td>אחרי שעצרתם את השרת המקומי, הסוכן במצב אמיתי אומר <span class="en">Could not reach the API</span></td><td><code>ANTHROPIC_BASE_URL</code> עדיין מוגדר בחלון, והסוכן עדיין פונה לשרת שכבר לא קיים</td><td><code>Remove-Item Env:ANTHROPIC_BASE_URL</code>, או חלון חדש</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.12</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>client / server</dt><dd>מי ששולח בקשה / מי שמאזין ועונה. תפקידים, לא סוגי מחשבים.</dd>
+  <dt>URL</dt><dd>כתובת מלאה: <span class="en">scheme</span>, <span class="en">host</span>, <span class="en">port</span>, <span class="en">path</span>.</dd>
+  <dt>IP address</dt><dd>הכתובת המספרית של מחשב ברשת. <span class="en">IPv4</span> כמו <code>127.0.0.1</code>, <span class="en">IPv6</span> כמו <code>::1</code>.</dd>
+  <dt>port</dt><dd>מספר שמזהה תוכנית מסוימת במחשב, שמאזינה לחיבורים.</dd>
+  <dt>localhost</dt><dd>השם של המחשב הזה. מתורגם ל-<code>127.0.0.1</code> ול-<code>::1</code>.</dd>
+  <dt>DNS</dt><dd>המערכת שמתרגמת שמות לכתובות <span class="en">IP</span>.</dd>
+  <dt>TCP</dt><dd>חיבור שמעביר בתים בסדר ובשלמות. <span class="en">HTTP</span> רץ מעליו.</dd>
+  <dt>HTTP</dt><dd>פרוטוקול טקסט של בקשה ותשובה בין <span class="en">client</span> ל-<span class="en">server</span>.</dd>
+  <dt>method</dt><dd>הפועל של בקשה: <code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>PATCH</code>, <code>DELETE</code>.</dd>
+  <dt>status code</dt><dd>המספר בתשובה שאומר מה קרה: <code>2xx</code>, <code>3xx</code>, <code>4xx</code>, <code>5xx</code>.</dd>
+  <dt>header</dt><dd>שורת <code>Name: value</code> עם מידע על הבקשה או התשובה.</dd>
+  <dt>body</dt><dd>הנתונים עצמם, אחרי השורה הריקה.</dd>
+  <dt>JSON</dt><dd>פורמט טקסט לנתונים, שתוכניות מחליפות ביניהן.</dd>
+  <dt>idempotent</dt><dd>פעולה שאם עושים אותה פעמיים, התוצאה כמו פעם אחת. רק אותה בטוח לנסות שוב.</dd>
+  <dt>TLS / HTTPS</dt><dd>הצפנה, שלמות וזהות לחיבור / <span class="en">HTTP</span> בתוך <span class="en">TLS</span>.</dd>
+  <dt>certificate</dt><dd>מסמך חתום שמוכיח שהשרת הוא מי שהוא טוען.</dd>
+  <dt>timeout</dt><dd>הזמן המקסימלי שמחכים לתשובה לפני שמוותרים.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">4.13</span>מה הלאה</h2>
+
+<p>ראיתם את שני הצדדים של בקשה. ה-<span class="en">client</span> הוא הסוכן שלכם, וה-<span class="en">server</span> היה <code>echo_server.py</code>, עם <code>if</code> אחד שמחליט מה לענות לפי ה-<span class="en">path</span>. עכשיו דמיינו שהשרת צריך לענות לעשרה <span class="en">paths</span>, לבדוק שכל <span class="en">body</span> תקין ולהחזיר <code>400</code> כשלא, לדרוש מפתח, ולתאר את עצמו כדי שאחרים ידעו איך לדבר איתו. עם <code>BaseHTTPRequestHandler</code> זה מהר מאוד הופך לגוש של <code>if</code>.</p>
+
+<p>וזה בדיוק מה שהסוכן צריך: כרגע רק אתם יכולים לדבר איתו, ורק מה-<span class="en">terminal</span>, שבו עברית מתהפכת. ב<strong>פרק 5: <span class="en">APIs</span></strong>, הסוכן הופך לשירות עם <span class="en">API</span> משלו, מפתח משלו, ודף צ'אט בדפדפן. אתם כבר יודעים מה עובר בחיבור. שם תלמדו לבנות את הצד שעונה.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-04</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים, בלי <code>.git</code>. הקוד של הסוכן לא השתנה: נוספו <code>scripts\</code> ועדכונים ל-<code>README.md</code> ול-<code>.env.example</code>. <code>uv run pytest</code> עדיין מדווח על 42 בדיקות שעוברות.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-04.html">פתרונות לפרק 4</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 13 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-13.html">→ חזרה לפרק 13</a>
+    <span>פתרונות לפרק 13</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 13 · מערכת חיה</h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם; בתרגיל 3 במיוחד, כי הערך שלו הוא בחיפוש. הפלטים כאן הם מה שהתקבל באמת; המזהים והזמנים אצלכם יהיו אחרים. הקוד המלא נמצא ב-<code>checkpoints\chapter-13</code>.</p>
+</header>
+
+<h2><span class="sec">1</span>מזהה אחד, שלושה שירותים</h2>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>== afcdfafdc58848488422311da4c399de
+2026-11-18T20:54:21.076+00:00 chat-api    model replied
+2026-11-18T20:54:21.085+00:00 chat-api    POST /chat 200                                                         29
+2026-11-18T20:54:21.117+00:00 chat-worker partition 0 offset 7: message.created 4338e849dde845ab88db728227c1a642
+
+== 42ffe80fc6744a3285732d39bade705b
+2026-11-18T20:54:21.686+00:00 notes    note 2d5709eba92c4e6e93c8f6b2c789fcee saved
+2026-11-18T20:54:21.688+00:00 notes    POST /v1/notes 201                          28
+2026-11-18T20:54:21.691+00:00 chat-api POST /chat 200                              39
+
+== f24b61cf6d364050872961f8b5349fd7
+2026-11-18T20:54:21.846+00:00 chat-api    saga delete: step 'archive the conversation' done
+2026-11-18T20:54:21.860+00:00 notes       GET /v1/notes 200                                                           12
+2026-11-18T20:54:21.881+00:00 notes       deleted 1 notes
+2026-11-18T20:54:21.883+00:00 notes       DELETE /v1/notes 200                                                        19
+2026-11-18T20:54:21.885+00:00 chat-api    saga delete: step 'delete its notes' done
+2026-11-18T20:54:21.897+00:00 chat-api    saga delete: step 'delete the conversation' done
+2026-11-18T20:54:21.899+00:00 chat-api    DELETE /conversations/4338e849dde845ab88db728227c1a642 204                  64
+2026-11-18T20:54:21.925+00:00 chat-worker partition 0 offset 8: conversation.deleted 4338e849dde845ab88db728227c1a642</code></pre>
+</div>
+<p>הודעה רגילה: שתי שורות ב-<code>api</code> ואחת ב-<span class="en">worker</span>. <code>/note</code>: שתיים בשירות ההערות ואחת ב-<code>api</code>, ובלי <span class="en">worker</span>, כי פקודת הערה לא מגיעה למודל ולא מפרסמת <code>message.created</code>. המחיקה: ארבע ב-<code>api</code>, שתיים או שלוש בשירות ההערות, ואחת ב-<span class="en">worker</span>. את ה-<span class="en">worker</span> ה-<code>api</code> בכלל לא מכיר: המזהה הגיע אליו בתוך ה-<span class="en">header</span> של <code>conversation.deleted</code>, 26 מילישניות אחרי שהמשתמש כבר קיבל 204. (השורה <code>GET /v1/notes</code> מופיעה רק אחרי התיקון של תרגיל 4. ההרצה כאן נעשתה עם הקוד של סוף הפרק.)</p>
+<p>הפקודות: <code>$a = uv run python scripts/ask.py "..."</code> ואז <code>$a[-1]</code> לשורה עם המזהים; למחיקה, <code class="wrap">$r = Invoke-WebRequest ... -Method Delete -Headers $h -UseBasicParsing</code> ו-<code>$r.Headers["X-Request-ID"]</code>. לכל מזהה, <code class="wrap">docker compose logs api notes worker --no-log-prefix | Select-String $id | ForEach-Object { $_.Line | ConvertFrom-Json } | Sort-Object time | Format-Table time, service, message, duration_ms</code>.</p>
+
+<h2><span class="sec">2</span>התראה שמצלצלת</h2>
+<div class="codebox output">
+  <div class="label"><span>polling /api/v1/alerts every 15 s after docker compose stop api</span></div>
+<pre><code>  0 s  inactive
+ 15 s  pending
+ 30 s  pending
+ 45 s  pending
+ 60 s  pending
+ 75 s  firing
+ 90 s  firing
+after start:</code></pre>
+</div>
+<p>Prometheus מנסה לקרוא את <code>/metrics</code> כל 5 שניות; כשהקריאה נכשלת, <code>up</code> הופך ל-0, ובהערכה הבאה (גם היא כל 5 שניות) ההתראה עוברת ל-<code>pending</code>. <code>for: 1m</code> אומר "רק אם זה נמשך דקה שלמה", ולכן <code>firing</code> הגיע בין 60 ל-75 שניות. ה-<code>for</code> מונע התראה על הפעלה מחדש של עשר שניות, ועולה דקה של איחור. אחרי <code>start</code> ההתראה נעלמה (שורה ריקה).</p>
+<p><strong>למה <code>ChatErrors</code> שתקה:</strong> היא מחלקת שגיאות בכל הבקשות. כשה-<code>api</code> למטה, אף בקשה לא מגיעה אליו, ולכן אף מונה לא עולה: אפס חלקי אפס הוא "אין נתונים", לא "100% שגיאות". מבחינת המדדים, שירות מת נראה כמו שירות שקט. לכן צריך התראה נפרדת על היעדר נתונים (<code>up == 0</code>), או בדיקה מבחוץ (<span class="en">synthetic check</span>) ששולחת בקשה כל דקה.</p>
+
+<h2><span class="sec">3</span>התקלה של דנה</h2>
+<p>הדרך, צעד אחרי צעד, עם הפקודות מה-<code>README.md</code> של התיקייה.</p>
+<p><strong>1. מתחילים מהמזהה שבדיווח.</strong></p>
+<div class="codebox output">
+  <div class="label"><span>Select-String c0dd82a75021404d805a82265d0c84cd in api.log: time, level, logger, message (shortened)</span></div>
+<pre><code>20:44:30.737 INFO    agent.saga   saga delete: step 'archive the conversation' done
+20:44:32.741 WARNING agent.notes  notes: DELETE /v1/notes: ReadTimeout('timed out'); retry in 0.05 s
+20:44:34.801 WARNING agent.notes  notes: DELETE /v1/notes: ReadTimeout('timed out'); retry in 0.07 s
+20:44:36.876 WARNING agent.saga   saga delete: step 'delete its notes' failed; compensating
+20:44:36.888 WARNING agent.saga   saga delete: compensated 'archive the conversation'
+20:44:36.890 INFO    agent.api    DELETE /conversations/88edc6c9b4b94dc3b54d509bcec8dc01 503   duration_ms 6172</code></pre>
+</div>
+<p>מבחינת ה-<code>api</code>: שלושה ניסיונות, שלושה <span class="en">timeouts</span>, תיקון, ו"שום דבר לא נמחק". אילו עצרתם כאן, הייתם מסיקים "שירות ההערות לא ענה", וזה נכון רק בחצי.</p>
+<p><strong>2. אותו מזהה, בצד השני.</strong></p>
+<div class="codebox output">
+  <div class="label"><span>notes.log, 20:44:10 to 20:44:40, as a table (shortened)</span></div>
+<pre><code>2026-11-18T20:44:10.024+00:00 INFO    starting notes-service 0.3.0, environment staging
+2026-11-18T20:44:10.024+00:00 WARNING fault injection: delay 2.5s, fail after save False
+2026-11-18T20:44:22.921+00:00 INFO    note 9695b3bf674d42c98a65e849fb4626f3 saved
+2026-11-18T20:44:22.922+00:00 INFO    POST /v1/notes 201                                                           2532
+2026-11-18T20:44:24.925+00:00 INFO    note 9695b3bf674d42c98a65e849fb4626f3 replayed (Idempotency-Key seen before)
+2026-11-18T20:44:24.927+00:00 INFO    POST /v1/notes 200                                                           2510
+2026-11-18T20:44:27.188+00:00 INFO    note 9695b3bf674d42c98a65e849fb4626f3 replayed (Idempotency-Key seen before)
+2026-11-18T20:44:27.192+00:00 INFO    POST /v1/notes 200                                                           2510
+2026-11-18T20:44:33.260+00:00 INFO    deleted 3 notes
+2026-11-18T20:44:33.262+00:00 INFO    DELETE /v1/notes 200                                                         2522
+2026-11-18T20:44:35.309+00:00 INFO    deleted 0 notes
+2026-11-18T20:44:35.310+00:00 INFO    DELETE /v1/notes 200                                                         2511
+2026-11-18T20:44:37.383+00:00 INFO    deleted 0 notes
+2026-11-18T20:44:37.385+00:00 INFO    DELETE /v1/notes 200                                                         2511</code></pre>
+</div>
+<p>שירות ההערות <em>ענה</em>, 200, לכל ניסיון, אחרי 2.5 שניות. ה-<code>api</code> מוותר אחרי 2. הניסיון הראשון מחק <strong>שלוש</strong> הערות (20:44:33.260), חצי שנייה אחרי שה-<code>api</code> כבר רשם <span class="en">timeout</span> (20:44:32.741). הניסיון השלישי מסתיים אפילו אחרי שה-<code>api</code> כבר ענה לדנה 503. ולמה שלוש ולא שתיים? ההערה שדנה הוסיפה ב-20:44:20 נשמרה בניסיון הראשון ושוחזרה פעמיים (<code>Idempotency-Key</code>, פרק 11), בזמן שדנה שמעה שההערות לא זמינות.</p>
+<p><strong>3. למה ה-<span class="en">saga</span> לא החזירה אותן.</strong> בקוד של <code>run_saga</code>, רק צעדים שהסתיימו (<code>done</code>) מתוקנים; הצעד שזרק שגיאה נחשב כאילו לא עשה כלום. ופעולת התיקון של "delete its notes" משחזרת את מה ש-<code>delete_all</code> <em>החזיר</em>, תשובה שלא הגיעה מעולם. שתי הנחות, אותה טעות: <span class="en">timeout</span> נקרא כ"לא". הוא בעצם "לא יודע".</p>
+<p><strong>4. הסיבה לאיטיות.</strong> השורה ב-20:44:10: השירות הופעל מחדש עם <code>NOTES_DELAY_SECONDS=2.5</code>, הגדרת לימוד מפרק 11 שהגיעה לסביבה משותפת. היא נחסמת רק ב-<span class="en">prod</span>. הכול מתחיל עשר שניות אחריה, ונגמר בהפעלה מחדש של 20:50:48.</p>
+<p><strong>5. הסימנים המטעים.</strong></p>
+<ul>
+  <li><strong>ה-<code>ERROR</code> של ה-<span class="en">worker</span> ב-20:43:34</strong>, דקה לפני: <code>dead letter: offset 4: not JSON</code>. הוא <code>ERROR</code> היחיד שאינו מה-<code>api</code>, וקל להיתפס אליו. אבל אין לו <code>request_id</code>: ההודעה לא הגיעה מה-<code>api</code> בכלל (מישהו כתב ל-<span class="en">topic</span> ישירות). ה-<span class="en">worker</span> עשה בדיוק מה שצריך, והמשיך.</li>
+  <li><strong><code>ready.json</code>:</strong> באמצע התקלה, <code>"notes": "ok"</code>. <code>/ready</code> של שירות ההערות בודק את בסיס הנתונים שלו, ואין עליו השהיה. בדיקות הבריאות היו ירוקות כל הזמן.</li>
+  <li><strong>ה-<code>WARNING</code> של <code>kafka</code></strong> בתחילת <code>api.log</code> (<code>Coordinator load in progress: retrying</code>), אפילו עם <code>request_id</code> של מישהו: <code>librdkafka</code> כתבה אותה בזמן <code>poll</code> בתוך בקשה. זה Kafka שעוד עולה, שתי דקות לפני הכול.</li>
+  <li><strong>הממוצע:</strong> ב-<code>metrics-after.txt</code>, <code>/chat</code>: <code>_sum</code> 89.66 חלקי <code>_count</code> 515, כלומר 0.17 שנייה. 503 מתוך 515 בקשות (97.7%) לקחו עד 0.25 שנייה, ולכן גם p95 מתחת ל-0.25. אבל 12 בקשות נמצאות בין <code>le="5.0"</code> ל-<code>le="10.0"</code>: p99 הוא בין 5 ל-10 שניות. "אנשים אחרים אומרים שהצ'אט היה בסדר" נכון לרובם.</li>
+</ul>
+<p><strong>6. ההתראות.</strong> <code>alerts.json</code>: רק <code>NotesFailing</code>, <code>ticket</code>, פעילה מ-20:44:41, כלומר <code>firing</code> מ-20:49:41. בהשוואה בין <code>metrics-before</code> ל-<code>metrics-after</code>: <code>notes_calls_total</code> עבר מ-7 <code>ok</code> ל-11 <code>ok</code>, 13 <code>failed</code> ו-17 <code>rejected</code> (ה-<span class="en">breaker</span> נפתח ב-20:44:45). <code>ChatErrors</code> לא הופעלה: מחיקה אחת עם 503 מתוך מאות בקשות. <code>SagaCompensationFailed</code> לא הופעלה, כי התיקון "הצליח": <code>sagas_total{outcome="compensated"} 1.0</code>. אף התראה לא שומרת על "נתונים אבדו". זו פעולה ל-<span class="en">postmortem</span>.</p>
+<p>איך הראיות נוצרו: הרצה אמיתית של המערכת בגרסה 0.13.0, לפני התיקון של תרגיל 4, עם <code>APP_ENV=staging</code> ל-<code>api</code> ול-<code>notes</code>, שלושה משתמשים שמשוחחים ברקע, והפעלה מחדש של <code>notes</code> עם <code>NOTES_DELAY_SECONDS=2.5</code>. בהרצה הראשונה ההערות של משתמשים אחרים פתחו את ה-<span class="en">breaker</span> לפני המחיקה של דנה, והמחיקה נכשלה מיד בלי למחוק דבר: אותו באג, בלי נזק. ובהרצה השנייה הלוגים של שירות ההערות נעלמו יחד עם ה-<span class="en">container</span> שהוחלף, ולכן בשלישית הם נאספו לפני כל הפעלה מחדש, כמו שמאגר לוגים היה עושה.</p>
+
+<h2><span class="sec">4</span>שגיאה שאינה "לא"</h2>
+<div class="codebox">
+  <div class="label"><span>tests\test_saga.py (the new parts)</span></div>
+<pre><code>        self.slow_deletes = False  <span class="cm"># delete, then answer too late: the client sees a timeout</span>
+...
+            self.notes = [n for n in self.notes if n["conversation_id"] != conversation_id]
+            if self.slow_deletes:
+                raise httpx2.ReadTimeout("timed out")  <span class="cm"># the work is done; the answer is lost</span>
+...
+
+def test_a_delete_that_timed_out_after_deleting_loses_no_notes(world):
+    <span class="cm"># Chapter 13's incident: the notes service deleted, then answered after the timeout.</span>
+    service, notes, conversations, conversation_id = world
+    service.slow_deletes = True
+    with pytest.raises(NotesUnavailable):
+        run_saga("delete", delete_conversation(conversations, notes, conversation_id))
+    assert sorted(note["text"] for note in service.notes) == ["buy milk", "call Dana"]
+    assert conversations.title(conversation_id) == "hello"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest tests/test_saga.py, before the fix (shortened)</span></div>
+<pre><code>E       AssertionError: assert [] == ['buy milk', 'call Dana']
+E         Right contains 2 more items, first extra item: 'buy milk'
+FAILED tests/test_saga.py::test_a_delete_that_timed_out_after_deleting_loses_no_notes
+1 failed, 5 passed in 18.64s</code></pre>
+</div>
+<p>(<code>GET</code> של המזויף מחזיר עכשיו רק את ההערות של השיחה המבוקשת, כמו השירות האמיתי.) התיקון:</p>
+<div class="codebox">
+  <div class="label"><span>agent\saga.py (the changed parts)</span></div>
+<pre><code>def run_saga(name: str, steps: list[Step]) -&gt; None:
+    """Run the steps in order. If one fails, compensate it and those done, then raise its error.
+
+    The failed step is compensated too: "failed" may mean "timed out after doing the work",
+    so its compensation must work whatever the step really did (nothing, part, or all).
+    """
+    ...
+            for finished in <span class="hl">reversed([*done, step])</span>:
+...
+    before: list[Note] = []  <span class="cm"># the notes as they were before step 2, for its compensation</span>
+
+    def delete_notes() -&gt; None:
+        <span class="cm"># Remember first. The answer to the delete may never arrive (a timeout), even</span>
+        <span class="cm"># when the delete itself happened: then only this list knows what was there.</span>
+        before.extend(notes.list(conversation_id))
+        notes.delete_all(conversation_id)
+
+    def restore_notes() -&gt; None:
+        if not before:
+            return  <span class="cm"># nothing was there, or step 2 failed before it could change anything</span>
+        <span class="cm"># Put back the notes that are gone now, whatever the delete really did.</span>
+        present = {note.id for note in notes.list(conversation_id)}
+        notes.restore(conversation_id, [note for note in before if note.id not in present])</code></pre>
+</div>
+<p>6 עברו, וכל החבילה 124 (בלי Postgres). שלושת המקרים: <strong>המחיקה קרתה</strong>: אף מזהה מהרשימה לא קיים, כולן משוחזרות (מזהים חדשים, כמו בפרק 12). <strong>לא קרתה</strong>: כולן קיימות, ולא משוחזר כלום, בלי כפילויות. <strong>השירות עדיין איטי בזמן התיקון</strong>: <code>list</code> בתוך <code>restore_notes</code> נכשל, נרשם <code>COMPENSATION FAILED</code>, <code>sagas_total{outcome="compensation_failed"}</code> עולה, ו-<code>SagaCompensationFailed</code> מעירה אדם. ההערות שבזיכרון לא נכתבות ללוג (תוכן של משתמשים), ולכן הן עדיין עלולות לאבוד, אבל לא בשקט. ובתקלה של דנה בדיוק, עם התיקון, כבר <code>list</code> בתחילת הצעד היה נכשל, לפני שמשהו נמחק.</p>
+<p>תיקונים עמוקים יותר: <span class="en">soft delete</span> בשירות ההערות (תיקון בלי לדעת מה נמחק, ועם אותם מזהים), או התקדמות קדימה: מחיקת הערות היא <span class="en">idempotent</span> והמשתמש רוצה אותה, ולכן אפשר להשאיר את השיחה בארכיון ולנסות שוב מאוחר יותר, עם ה-<span class="en">cleanup job</span> שפרק 12 הציע. בפרק 20, בסוכן-מתזמר, תפגשו את אותה שאלה: צעד שלא ענה לא בהכרח לא עשה.</p>
+<p>ב-<code>CHANGELOG.md</code>, תחת <span class="en">Unreleased</span>, <code>### Fixed</code>.</p>
+
+<h2><span class="sec">5</span>מה שאסור שיגיע ללוג</h2>
+<div class="codebox">
+  <div class="label"><span>tests\test_observability.py</span></div>
+<pre><code>def test_what_people_write_never_reaches_the_logs(client, log_lines):
+    secret = "my password is hunter2"
+    client.post("/chat", json={"message": secret}, headers=AUTH)
+    assert log_lines()  <span class="cm"># something was logged...</span>
+    leaked = [line["message"] for line in log_lines() if secret in json.dumps(line)]
+    assert leaked == []  <span class="cm"># ...but not what the user wrote</span></code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>with "model replied to: %s", text in conversations.py</span></div>
+<pre><code>E       AssertionError: assert ['model repli...d is hunter2'] == []
+E         Left contains one more item: 'model replied to: my password is hunter2'
+1 failed, 5 deselected in 5.80s</code></pre>
+</div>
+<p>גרסה ראשונה טבעית, <code class="wrap">assert all(secret not in json.dumps(line) for line in log_lines())</code>, נכשלה עם <code>assert False</code> ו-<code>&lt;generator object ...&gt;</code>: נכון, ולא אומר מה דלף. רשימה של מה שדלף, מול <code>[]</code>, מראה את השורה עצמה. ה-<code>assert log_lines()</code> לפניה חשוב: בלעדיו, בדיקה שלא אספה אף שורה (למשל <span class="en">fixture</span> שבור) עוברת תמיד.</p>
+<p>עוד דברים שאסור שיגיעו ללוג, ואיך הם מגיעים בלי כוונה: כותרות <code>X-API-Key</code> ו-<code>Authorization</code> (מי שרושם "את כל הכותרות" לדיבאג); טקסט של הערה (<code>to_note</code> שנרשם כולו, או הודעת שגיאה שמצטטת את הבקשה); <code>DATABASE_URL</code> עם סיסמה (שורת הפעלה שמדפיסה את ההגדרות); <span class="en">traceback</span> של שגיאת ולידציה שכולל את הקלט; ושאילתות SQL עם ערכים, אם מישהו מדליק <code>echo=True</code> ב-SQLAlchemy. גם מזהה שמגיע מבחוץ הוא קלט, ולכן <code>SAFE_ID</code>. פרק 14 ממשיך מכאן.</p>
+
+<h2><span class="sec">6</span><span class="en">Postmortem</span></h2>
+<p>ה-<span class="en">postmortem</span> המלא נמצא ב-<code>checkpoints\chapter-13\docs\postmortems\2026-11-18-notes-lost-on-delete.md</code>. העיקר:</p>
+<ul>
+  <li><strong>סיבת שורש:</strong> ה-<span class="en">saga</span> הניחה שצעד שנכשל לא שינה כלום, ותיקנה מתוך תשובה שלא הגיעה. <strong>גורמים תורמים:</strong> הגדרת לימוד שהגיעה ל-<span class="en">staging</span>; <code>/ready</code> שבודק בסיס נתונים ולא מהירות; אף אחד לא השווה את ה-<span class="en">timeout</span> של הלקוח (2 שניות) למהירות השירות; אין התראה על אובדן נתונים.</li>
+  <li><strong>פעולות:</strong> למנוע: התיקון של תרגיל 4, וחסימת <span class="en">fault injection</span> בכל סביבה שאינה <code>local</code>. לגלות: <code>/metrics</code> לשירות ההערות, והתראה על זמני תשובה מעל ה-<span class="en">timeout</span> של הלקוח. לצמצם נזק: <span class="en">soft delete</span>.</li>
+  <li><strong>SLO:</strong> SLI = החלק מהקריאות לשירות ההערות שנענו בהצלחה תוך 2 שניות, כפי שהצ'אט רואה אותן (<code>notes_calls_total</code>); יעד 99% על פני 28 יום; התראת <code>page</code> כשקצב השריפה בשעה האחרונה (<span class="en">burn rate</span>) יגמור את התקציב של החודש ביומיים. בין שתי התמונות של התקלה, 30 קריאות נכשלו או נדחו ו-4 הצליחו: 88% כישלונות, פי 88 מהתקציב (1%). בקצב כזה, התקציב של 28 יום נגמר בפחות משמונה שעות, ולכן ההתראה הזו הייתה מעירה מישהו כמה דקות אחרי 20:44.</li>
+</ul>
+<p>משפט מאשים שכדאי לשכתב: "מישהו השאיר <code>NOTES_DELAY_SECONDS</code> ב-<span class="en">staging</span>". בלי האשמה: "המערכת אפשרה להפעיל <span class="en">fault injection</span> בסביבה משותפת, ושום דבר לא הזהיר כשזה קרה".</p>
+
+<h2><span class="sec">·</span>ה-commits של הפרק</h2>
+<div class="codebox output">
+  <div class="label"><span>git log --oneline (the intended history)</span></div>
+<pre><code>Write the postmortem of the notes-lost-on-delete incident (ex. 6)
+Saga: a failed step may have done its work; compensate it from what was there before (ex. 4)
+Merge: version 0.13.0, tag v0.13.0
+  Document logs, metrics and alerts; runbook and postmortem template; version 0.13.0
+  Alert rules, a test that they use real metrics, and Prometheus in compose
+  A /metrics endpoint: requests, latency, model tokens, notes, events, sagas; worker metrics
+  Never log what users write (ex. 5)
+  Pass the request id to the notes service and into Kafka events
+  JSON logs on stdout, and a request id for every request</code></pre>
+</div>
+
+<nav class="footer-nav">
+  <a href="../chapter-13.html">→ חזרה לפרק 13</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

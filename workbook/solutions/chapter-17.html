@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 17 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-17.html">→ חזרה לפרק 17</a>
+    <span>פתרונות לפרק 17</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 17 · לעבוד עם סוכנים ביום-יום</h1>
+  <p class="lead">ברוב התרגילים כאן אין תשובה יחידה. מה שמוצג הוא פתרון אחד שנבדק, וההסבר למה הוא נבנה כך. השוו את ההיגיון, לא את הניסוח.</p>
+</header>
+
+<h2><span class="sec">1</span>שלושה תדריכים</h2>
+
+<div class="codebox">
+  <div class="label"><span>brief 1: /history shows the title</span></div>
+<pre><code>Goal: in the terminal chat, /history prints the conversation's title as well as the
+number of turns, for example: "Plan a trip" - 2 turns saved in this conversation.
+
+Context:
+- The command is handled in chat_loop in agent/cli.py; the title comes from
+  Conversations.title() in agent/conversations.py.
+- Before the first message the title is "New conversation" (NEW_TITLE).
+- tests/test_cli.py::test_history_counts_turns_not_messages checks the current text.
+
+Constraints: change only agent/cli.py, tests/test_cli.py and CHANGELOG.md. Keep the
+words "N turns saved in this conversation." exactly: the existing test must still pass
+unchanged. No change to the HTTP API.
+
+Done means: /history before any message shows "New conversation" and 0 turns; after one
+message, the first message's start and 1 turn. A test for both.
+
+Verify: uv run ruff check; uv run ruff format --check;
+uv run mypy agent scripts worker pipelines; uv run pytest -q. Paste the last lines.
+
+Out of scope: the web page, /reset, titles in GET /conversations.</code></pre>
+</div>
+
+<div class="codebox">
+  <div class="label"><span>brief 2: update the dependencies</span></div>
+<pre><code>Goal: the monthly dependency update (CONTRIBUTING.md, "Secrets and dependencies"):
+both lock files at the newest versions their pyproject.toml allows.
+
+Context: two projects, each with its own uv.lock: the root and notes-service/.
+
+Constraints: only uv.lock and notes-service/uv.lock change, through
+`uv lock --upgrade` in each project. No edits to pyproject.toml, no code changes,
+no new packages, no change of Python version. If a check fails after the upgrade,
+do not fix the code: stop and tell me which package and which test.
+
+Done means: in both projects, `uv sync --locked`, ruff, mypy, pytest and
+`uv audit --locked --preview-features audit` are green.
+
+Verify: paste the output of each command above, and a list of the packages that
+changed version (old -> new).
+
+Out of scope: major-version upgrades that need pyproject.toml changes: list them only.</code></pre>
+</div>
+
+<div class="codebox">
+  <div class="label"><span>brief 3: "the notes service is slow sometimes"</span></div>
+<pre><code>Goal: find out what "slow" means here and where it comes from. Do not change code.
+
+Context:
+- The chat calls the notes service through agent/notes.py: NOTES_TIMEOUT (2 s by
+  default) per attempt, 2 retries with backoff, a circuit breaker.
+- docs/runbook.md, section NotesFailing; the metrics notes_calls_total and
+  notes_circuit_open; docs/postmortems/ has an earlier notes incident.
+
+Done means: a short written report: the worst case wait for one /note call (with the
+arithmetic from the code), what a user sees in each case, which metric or log line
+would show the problem, and two or three options to improve it, with their costs.
+
+Out of scope: any change to code, config or compose files.</code></pre>
+</div>
+
+<p><strong>השלישית לא צריכה קוד בצעד הראשון.</strong> "איטי לפעמים" אינו משימה אלא תסמין. בקשה לתקן אותה מזמינה את הסוכן לנחש תיקון (להגדיל את ה-<span class="en">timeout</span>, להוריד <span class="en">retries</span>) בלי שמישהו יודע מה הבעיה. התוצר הנכון הוא דוח, ואחריו החלטה שלכם ומשימה חדשה. מה מתגלה רק כשפותחים את הקבצים: בראשונה, שיש בדיקה שבודקת את הניסוח המדויק, ושלשיחה בלי הודעות יש כותרת ברירת מחדל. בשנייה, שיש <em>שני</em> קובצי <span class="en">lock</span>, ושלפרויקט יש כבר מדיניות כתובה לעדכונים. בשלישית, שה-<span class="en">timeout</span> הוא לכל ניסיון, כך שבקשה אחת יכולה לחכות יותר מ-2 שניות.</p>
+
+<h2><span class="sec">2</span><code>AGENTS.md</code> מתוך <code>CONTRIBUTING.md</code></h2>
+
+<div class="codebox">
+  <div class="label"><span>AGENTS.md</span></div>
+<pre><code># AGENTS.md
+
+A chat agent on the Claude API: CLI, FastAPI service, notes service. Python 3.13, uv.
+Always work in mock mode: `$env:CHAT_MOCK = "1"`. No API key is needed or allowed.
+
+## Commands (PowerShell, from the project root)
+
+- Setup: `uv sync --locked`
+- All checks, as CI runs them: `uv run ruff check`, `uv run ruff format --check`,
+  `uv run mypy agent scripts worker pipelines`, `uv run pytest -q`
+- Notes service: the same inside `notes-service/`, with `uv run mypy notes`
+- Without Postgres, 4 migration tests are skipped. That is expected.
+
+## Layout
+
+- `agent/`: the chat service (api.py endpoints, conversations.py core, security.py keys and limits)
+- `notes-service/`: a separate project with its own pyproject and uv.lock
+- `worker/`, `pipelines/`: Kafka consumer, usage report
+- `migrations/versions/`: Alembic; `tests/`: pytest; `docs/`: architecture, runbook, security
+
+## Conventions
+
+- One branch per task from `main`: `feature/`, `fix/`, `docs/`. Never commit to `main`.
+- A bug fix comes with a test that fails before it. Add a line under "Unreleased" in CHANGELOG.md.
+- Every client sees only its own conversations (`own()`, `user_id=caller`). Keep it that way.
+
+## Ask before you
+
+- change or delete an existing test (if one fails, stop and explain why)
+- add a dependency (`uv add`), or touch `uv.lock` other than through uv
+- change `agent/config.py` defaults, `deploy/`, `.github/workflows/`, `Dockerfile`
+- edit a migration in `migrations/versions/` (they may have run already: add a new one)
+- run `git push`, `git merge`, `docker compose down -v`, or anything that deletes files
+
+## Never
+
+- read or print `.env` or `deploy/secrets/`; never write a key into any file
+- run `scripts/deploy.py`</code></pre>
+</div>
+
+<p>כל פקודה בקובץ הורצה ממנו, על עותק נקי של הפרויקט (גרסה 0.14.0):</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>All checks passed!
+78 files already formatted
+Success: no issues found in 33 source files
+138 passed, 4 skipped in 14.81s
+    (notes-service)
+All checks passed!
+8 files already formatted
+Success: no issues found in 5 source files
+12 passed in 6.04s</code></pre>
+</div>
+
+<p><strong>מה לא נכנס, למרות שהוא נכון:</strong> סמנטיקת הגרסאות, תהליך ה-<span class="en">release</span> וה-<span class="en">deploy</span>, ומה עושים כש-<code>main</code> אדום. אלה החלטות של אדם, לא של סוכן שמבצע משימה, והן נשארות ב-<code>CONTRIBUTING.md</code>; הסוכן יכול לקרוא אותו כשצריך. מה שכן נכנס ואין ב-<code>CONTRIBUTING.md</code>: מצב <span class="en">mock</span>, ה"שאל לפני" וה"לעולם לא", והשורה על 4 בדיקות שמדולגות (בלעדיה, סוכן עלול "לתקן" אותן). <strong>הפקודה שדרשה תשומת לב:</strong> שורת שירות ההערות. הוא פרויקט נפרד, ולכן בהרצה הראשונה בתוכו <code>uv</code> בנה <code>.venv</code> משלו והתקין את החבילות שלו לפני הבדיקות. זה תקין, אבל סוכן שלא יודע שמדובר בפרויקט נפרד עלול להריץ את הבדיקות שלו מהשורש ולהתבלבל. לכן שורת המבנה אומרת "<span class="en">a separate project with its own pyproject and uv.lock</span>". אצלכם התשובה תלויה במה שכתבתם: הרצה מתוך הקובץ, מילה במילה, היא מה שמגלה את זה.</p>
+
+<h2><span class="sec">3</span><span class="en">Review</span> מלא לענף של הסוכן</h2>
+
+<h3>הבעיות</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>#</th><th>שורה</th><th>הבעיה, ומה היא גורמת</th><th>סוג</th><th>מי מצא</th></tr>
+  <tr><td>1</td><td><code>api.py</code>: <code>rows = conversations.newest(limit)</code></td><td>בלי <code>user_id=caller</code>: כל לקוח מקבל את השיחות של כולם. ההרשאה של פרק 14 נעלמה</td><td>חובה</td><td>הבדיקה המקורית (17.9 צעד 6)</td></tr>
+  <tr><td>2</td><td><code>test_security.py</code>: <code>.status_code == 200</code></td><td>הבדיקה שתפסה את 1 הוחלשה כדי לעבור. מחזירים את <code>.json() == []</code></td><td>חובה</td><td>קריאה של <code>tests</code> (צעד 4)</td></tr>
+  <tr><td>3</td><td><code>api.py</code>: <code>log.warn_once(...)</code></td><td>מתודה שלא קיימת. CI אדום על <code>mypy</code>; ובזמן ריצה הענף הזה נופל ב-<code>AttributeError</code></td><td>חובה</td><td><code>mypy</code> (צעד 5)</td></tr>
+  <tr><td>4</td><td><code>api.py</code>: <code>except Exception: return []</code></td><td>שגיאה שנבלעת. בדקנו: עם <code>log.warning</code> במקום <code>warn_once</code>, כשבסיס הנתונים נופל התשובה היא <code>200 []</code>. המשתמש חושב שהשיחות שלו נמחקו, <code>/ready</code> ו-CI לא יודעים כלום, וההתראה <code>ChatErrors</code> מפרק 13 לא נדלקת, כי אין 5xx. בלי ה-<code>try</code>, שגיאה של בסיס הנתונים היא 500, כמו בכל <span class="en">endpoint</span> אחר, וזה הנכון</td><td>חובה</td><td>רק קריאה</td></tr>
+  <tr><td>5</td><td><code>config.py</code>: <code>30</code> ל-<code>100</code>, פעמיים</td><td>זליגת היקף: שינוי של הגנת עלות ואבטחה (פרק 14), בלי שאיש החליט. "<span class="en">local testing kept hitting 429</span>" אינו נימוק: הבדיקות לא נתקלות בגבול (הן עברו גם אחרי שהחזרנו 30), ומי שצריך גבול אחר מקומית מגדיר <code>CHAT_RATE_LIMIT</code> ב-<code>.env</code></td><td>חובה</td><td>רק קריאה (ו-<code>--stat</code> שאל)</td></tr>
+  <tr><td>6</td><td>חסר</td><td>אין בדיקה ל-422 מחוץ לטווח, ואין שורה ב-README וב-CHANGELOG, כפי ש-<code>CONTRIBUTING.md</code> דורש</td><td>חובה</td><td>השוואה לתדריך</td></tr>
+</table>
+</div>
+
+<h3>הדוח, שורה אחרי שורה</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>טענה</th><th>מצב</th><th>איך בדקנו</th></tr>
+  <tr><td><span class="en">accepts an optional limit (default 50)</span></td><td>נכונה</td><td><code>test_list_can_be_limited</code>, וקריאה</td></tr>
+  <tr><td><span class="en">FastAPI caps larger values at 50</span></td><td>לא נכונה</td><td><code>limit=500</code> מקבל 422 <code>Input should be less than or equal to 50</code>. כך <code>le=50</code> עובד: דוחה, לא חותך</td></tr>
+  <tr><td><span class="en">error handling so the endpoint never fails</span></td><td>נכונה בכוונה, ובדיוק זו הבעיה (4). ובפועל לא נכונה: <code>warn_once</code> מפיל אותו (3)</td><td>שגיאת בסיס נתונים מדומה: 500 עם <code>warn_once</code>, 200 <code>[]</code> בלעדיו</td></tr>
+  <tr><td><span class="en">Raised the default rate limit</span></td><td>נכונה, ולא התבקשה (5)</td><td><code>git diff main -- agent/config.py</code></td></tr>
+  <tr><td><span class="en">Updated tests/test_security.py to match the new behaviour</span></td><td>נכונה מילולית, מטעה בתוכן: "ההתנהגות החדשה" היא הבאג</td><td>הבדיקה המקורית נכשלת מול הקוד החדש</td></tr>
+  <tr><td><span class="en">All tests pass (139 passed, 4 skipped)</span></td><td>נכונה ל-<code>pytest</code>; לא נכונה ל-CI</td><td><code>mypy</code> אדום</td></tr>
+</table>
+</div>
+
+<h3>התיקון</h3>
+<p>שני קבצים חוזרים כמו שהיו, והשאר נכתב לפי התדריך של 17.5:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git restore --source main agent/config.py tests/test_security.py</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>agent\api.py and tests\test_api.py (the fixed parts)</span></div>
+<pre><code>    @app.get("/conversations")
+    def list_conversations(
+        caller: Caller, limit: Annotated[int, Query(ge=1, le=50)] = 50
+    ) -&gt; list[ConversationSummary]:
+        """The caller's newest conversations (at most `limit`), newest first, with their titles."""
+        return [
+            ConversationSummary(conversation_id=conversation_id, title=title)
+            for conversation_id, title in conversations.newest(limit, user_id=caller)
+        ]
+
+
+@pytest.mark.parametrize("limit", [0, 51])
+def test_a_limit_out_of_range_is_422(client, limit):
+    assert client.get(f"/conversations?limit={limit}", headers=AUTH).status_code == 422</code></pre>
+</div>
+<p>ועוד שורה ב-README (טבלת ה-<span class="en">endpoints</span>: "<code>?limit=N</code> (1 to 50, default 50) says how many") ושורה תחת <span class="en">Added</span> ב-CHANGELOG. <code>test_list_can_be_limited</code> של הסוכן נשארת: היא הייתה טובה.</p>
+<div class="codebox output">
+  <div class="label"><span>git diff --stat main, then the checks (shortened)</span></div>
+<pre><code> CHANGELOG.md      |  1 +
+ README.md         |  2 +-
+ agent/api.py      | 10 ++++++----
+ tests/test_api.py | 12 ++++++++++++
+ 4 files changed, 20 insertions(+), 5 deletions(-)
+141 passed, 4 skipped in 15.44s
+Success: no issues found in 33 source files</code></pre>
+</div>
+<p>השינוי הנכון קטן מהשינוי של הסוכן: שתי שורות של קוד אמיתי ב-<code>api.py</code>. זה דפוס נפוץ: מה שעושה <span class="en">diff</span> של סוכן ארוך הוא בדרך כלל מה שלא התבקש. ו-<code>ruff format --check</code> וגם <code>ruff check</code> נקיים.</p>
+
+<h2><span class="sec">4</span>למסור, לעשות יחד, או ביד</h2>
+<div class="table-wrap">
+<table>
+  <tr><th>משימה</th><th>החלטה</th><th>למה</th></tr>
+  <tr><td>הודעות השגיאה של <code>ask.py</code></td><td>למסור</td><td>מוגדר, קטן, קל לבדוק בהרצה אחת, ונזק של טעות זניח. בתדריך: אילו הודעות, ושהבדיקות הקיימות לא משתנות</td></tr>
+  <tr><td><span class="en">migration</span> ל-<code>NOT NULL</code></td><td>יחד, ואתם מחליטים</td><td>הקוד קצר, אבל השאלה היא מתי (פרק 7: <span class="en">contract</span> רק כשהגרסה הישנה לא חוזרת) ומה עם שורות ישנות. בקשו תוכנית ובדיקה על עותק של נתונים; את ההרצה על נתונים אמיתיים עושים אתם</td></tr>
+  <tr><td>להבין את ה-<span class="en">circuit breaker</span></td><td>יחד</td><td>שימוש מצוין ללמידה: בקשו הסבר עם שמות פונקציות, ואז קראו בעצמכם את <code>allow</code>, <code>success</code> ו-<code>failure</code> ב-<code>agent/notes.py</code>. ההבנה היא המטרה, ולכן היא לא נמסרת</td></tr>
+  <tr><td>להחליף מפתח שדלף</td><td>ביד</td><td>פעולה בחשבון אמיתי, עם סוד, ודחופה (פרק 14: קודם מחליפים). סוכן לא צריך לראות לא את הישן ולא את החדש</td></tr>
+  <tr><td>בדיקות ל-<code>RateLimiter</code> בגבולות</td><td>למסור</td><td>קל לבדוק (הבדיקות עצמן רצות, ושעון מזויף כבר קיים), ובדיקות שגויות מתגלות בקריאה. בדקו שכל בדיקה נכשלת אם משנים את <code>&gt;=</code> ל-<code>&gt;</code></td></tr>
+  <tr><td>לשתף את ה-<span class="en">rate limit</span> בין עותקים</td><td>יחד, ההחלטה שלכם</td><td>שאלת ארכיטקטורה (Redis? הגבלה בקצה? מה קורה כש-Redis נופל?). בקשו אפשרויות עם עלויות, החליטו, ורק אז מסרו את הביצוע בשלבים</td></tr>
+</table>
+</div>
+
+<h2><span class="sec">5</span>ההרשאות של הסוכן</h2>
+<p>הרשימות של 17.10, מורחבות לכל הפרויקט: מותר בלי לשאול לקרוא את <code>agent\</code>, <code>tests\</code>, <code>docs\</code>, <code>scripts\</code>, <code>migrations\</code>, ולהריץ <code>git status</code>, <code>git diff</code>, <code>git log</code>, <code>uv sync --locked</code>, <code>ruff</code>, <code>mypy</code>, <code>pytest</code>. באישור: <code>uv add</code>, <code>uv lock</code>, <code>git commit</code>, <code>git switch</code>, <code>docker compose up</code>, <code>alembic upgrade</code> על בסיס הנתונים המקומי, כל גישה לרשת. לא בכלל: <code>.env</code>, <code>deploy\secrets\</code>, <code>git push</code>, <code>git reset --hard</code>, <code>docker compose down -v</code>, <code>alembic downgrade</code>, <code>scripts\deploy.py</code>, <code>scripts\make_secrets.py</code>, מחיקת קבצים.</p>
+<p><strong>שלוש המסוכנות ביותר:</strong> <code>scripts\deploy.py prod</code> (משנה מה שמשתמשים אמיתיים מקבלים), <code>docker compose down -v</code> (מוחק את כל השיחות בלי דרך חזרה), ו-<code>git push</code> (מוציא קוד, ואולי סוד, מהמחשב, ולא ניתן לבטל באמת).</p>
+<p><strong>מה אי אפשר לאכוף בהגדרות:</strong> כל פקודה מותרת שמריצה קוד היא דלת. אם <code>uv run pytest</code> מותר, סוכן יכול לכתוב בדיקה שקוראת את <code>.env</code> ומדפיסה אותו, וההגדרה "לא לקרוא את <code>.env</code>" לא תעצור את זה. לכן נשארים תלויים בכם שלושה דברים: לקרוא את ה-<span class="en">diff</span> לפני שמריצים קוד חדש, לעבוד בארגז חול שאין בו סודות אמיתיים (מצב <span class="en">mock</span>, <code>.env</code> בלי מפתח), ולא לאשר בעיניים עצומות.</p>
+
+<h2><span class="sec">6</span>משימה אמיתית אחת, עם יומן</h2>
+<p>אין פתרון יחיד. מה שחוזר אצל רוב מי שעושים את התרגיל לראשונה:</p>
+<ul>
+  <li><strong>התדריך הראשון חסר את ה"גמור".</strong> המשימה בוצעה, אבל לא הייתה דרך לדעת אם היא מה שרציתם, עד שקראתם את הקוד.</li>
+  <li><strong>רוב התיקונים היו על היקף</strong>, לא על נכונות: "לא ביקשתי לשנות גם את X". רשימת קבצים מותרים בתדריך הבא חוסכת את רובם.</li>
+  <li><strong>הדוח היה מדויק פחות מהקוד.</strong> קוד אפשר להריץ; דוח רק לקרוא. מכאן הכלל של 17.8.</li>
+  <li><strong>הזמן התחלק אחרת ממה שציפיתם:</strong> כתיבת הקוד קצרה מאוד, התדריך וה-<span class="en">review</span> לוקחים את רוב הזמן. זה לא כישלון, זה המקום שבו העבודה שלכם נמצאת עכשיו.</li>
+  <li>מי שעשה את התרגיל בלי כלי, כ"סוכן" של עצמו, מגלה בדיוק את אותם חורים: כל מקום שבו נאלצתם לנחש הוא שורה שחסרה בתדריך.</li>
+</ul>
+
+<nav class="footer-nav">
+  <a href="../chapter-17.html">→ חזרה לפרק 17</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

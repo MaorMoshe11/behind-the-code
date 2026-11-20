@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 4 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-04.html">→ חזרה לפרק 4</a>
+    <span>פתרונות לפרק 4</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 4 · איך הרשת עובדת</h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. הפלטים כאן הם מה שהתקבל באמת כשהתרגילים נעשו. התאריכים, המזהים, ה-<span class="en">ports</span> של הלקוח והגרסאות אצלכם יהיו אחרים. הקוד המלא נמצא ב-<code>checkpoints\chapter-04</code>.</p>
+</header>
+
+<h2><span class="sec">1</span>דפדפן מול <code>curl.exe</code></h2>
+<div class="table-wrap">
+<table>
+  <tr><th>בקשה</th><th>שורת הסטטוס</th><th><code>Content-Type</code></th></tr>
+  <tr><td><code>GET /</code></td><td><code>HTTP/1.0 200 OK</code></td><td><code>text/html</code></td></tr>
+  <tr><td><code>GET /missing.html</code></td><td><code>HTTP/1.0 404 File not found</code></td><td><code>text/html;charset=utf-8</code></td></tr>
+  <tr><td><code>POST /</code></td><td><code>HTTP/1.0 501 Unsupported method ('POST')</code></td><td><code>text/html;charset=utf-8</code></td></tr>
+</table>
+</div>
+<p><strong>למה 501:</strong> הבקשה תקינה לגמרי. פשוט ל-<code>http.server</code> אין מימוש ל-<code>POST</code>, והוא מודה בזה: <code>501 Not Implemented</code> אומר "השרת לא יודע לעשות את זה", ולכן זו בעיה בצד שלו, <code>5xx</code>. בשתי השגיאות השרת גם שלח דף <span class="en">HTML</span> שמסביר את השגיאה, כי מבחינתו הלקוח הוא דפדפן.</p>
+<p>ב-<code>echo_server.py</code>, הבקשה של <code>curl</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>echo server</span></div>
+<pre><code>--- GET /hello HTTP/1.1
+Host: 127.0.0.1:8000
+User-Agent: curl/8.21.0
+Accept: */*</code></pre>
+</div>
+<p>והבקשה של הדפדפן (אצלנו Edge, שרץ בלי חלון. אצלכם הרשימה תהיה דומה אבל לא זהה):</p>
+<div class="codebox output">
+  <div class="label"><span>echo server (shortened)</span></div>
+<pre><code>--- GET /hello HTTP/1.1
+Host: 127.0.0.1:8000
+Connection: keep-alive
+sec-ch-ua: "Not-A.Brand";v="99", "Microsoft Edge";v="157", "Chromium";v="157"
+sec-ch-ua-platform: "Windows"
+Upgrade-Insecure-Requests: 1
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) ... Edg/157.0.0.0
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,...
+Sec-Fetch-Site: none
+Sec-Fetch-Mode: navigate
+Accept-Encoding: gzip, deflate, br, zstd
+Accept-Language: en-US,en;q=0.9
+...</code></pre>
+</div>
+<p>שלושה מול כחמישה-עשר. <code>curl</code> שולח רק את המינימום. הדפדפן מספר על עצמו הרבה. כמה דוגמאות לשימוש: <code>Accept-Language</code> מאפשר לשרת לבחור שפה (אצלכם בפרק 5, עברית), <code>Accept</code> אומר שהדפדפן מעדיף <span class="en">HTML</span>, ו-<code>Accept-Encoding</code> שאפשר לשלוח לו תשובה דחוסה. הדפדפן גם הציג את ה-<span class="en">JSON</span> יפה, כי ה-<code>Content-Type</code> אמר לו מה זה. בדפדפן רגיל ייתכן שתראו גם בקשה שנייה, ל-<code>/favicon.ico</code>: הדפדפן מחפש אייקון ללשונית.</p>
+
+<h2><span class="sec">2</span>לשבור את <code>raw_http.py</code></h2>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code><span class="cm"># 1. GET /missing.html</span>
+HTTP/1.0 404 File not found
+<span class="cm"># 2. DELETE /</span>
+HTTP/1.0 501 Unsupported method ('DELETE')
+<span class="cm"># 3. no empty line</span>
+  File "C:\Users\you\projects\my-agent\scripts\raw_http.py", line 22, in main
+    while chunk := connection.recv(4096):  # read until the server closes
+                   ^^^^^^^^^^^^^^^^^^^^^
+TimeoutError: timed out</code></pre>
+</div>
+<p>בניסוי 3 שום דבר לא קרה במשך חמש שניות, ואז <code>TimeoutError</code>. השרת קרא את <code>GET / HTTP/1.1</code> ואת שני ה-<span class="en">headers</span>, וחיכה לעוד: אולי יגיע <span class="en">header</span> נוסף. רק שורה ריקה אומרת לו "זהו". הלקוח, מצידו, חיכה לתשובה. שני הצדדים חיכו זה לזה, עד שה-<span class="en">timeout</span> של 5 שניות ב-<code>create_connection</code> שבר את הקיפאון. אחרי שהלקוח סגר את החיבור, השרת הבין שהבקשה נגמרה וניסה לענות, לחיבור שכבר לא קיים. לכן ב-<span class="en">terminal</span> שלו מופיעה <code>ConnectionAbortedError: [WinError 10053]</code>. בלי <span class="en">timeout</span>, הלקוח היה מחכה לנצח. זה הכישלון השקט מסעיף 4.6.</p>
+
+<h2><span class="sec">3</span>הסוכן מול שלוש שכבות</h2>
+<p>המשתמש ראה בשתי הריצות את אותו משפט, <span class="en">"Could not reach the API. Check your internet connection."</span>, ושתיהן נמשכו כמה שניות, בגלל הניסיונות החוזרים של ה-SDK. ה-<span class="en">log</span> מבדיל ביניהן:</p>
+<div class="codebox output">
+  <div class="label"><span>Select-String -Path agent.log -Pattern "Error:"</span></div>
+<pre><code><span class="cm"># ANTHROPIC_BASE_URL = http://no-such-host.invalid</span>
+httpcore2.ConnectError: [Errno 11001] getaddrinfo failed
+httpx2.ConnectError: [Errno 11001] getaddrinfo failed
+anthropic.APIConnectionError: Connection error.
+agent.llm.LLMError: Could not reach the API. Check your internet connection.
+<span class="cm"># ANTHROPIC_BASE_URL = http://127.0.0.1:9</span>
+httpcore2.ConnectError: [WinError 10061] No connection could be made because the target machine actively refused it
+httpx2.ConnectError: [WinError 10061] No connection could be made because the target machine actively refused it
+anthropic.APIConnectionError: Connection error.
+agent.llm.LLMError: Could not reach the API. Check your internet connection.</code></pre>
+</div>
+<p>הראשונה נכשלה בשלב 1, <span class="en">DNS</span> (<code>getaddrinfo</code> היא הפונקציה שמתרגמת שם לכתובת). השנייה בשלב 2, חיבור. משפטים טובים יותר: "The API's address could not be found. Check ANTHROPIC_BASE_URL and your network." ו-"Nothing answered at the API's address. Is a proxy or firewall in the way?". ה-SDK עוטף את שתיהן באותה <code>APIConnectionError</code>, ולכן כדי להבדיל צריך להסתכל על <code>__cause__</code> שלה. לא שינינו את הסוכן: ה-<span class="en">log</span> כבר שומר את כל השרשרת, וזה מה שמי שחוקר צריך.</p>
+
+<h2><span class="sec">4</span>שרת שעונה בשגיאה</h2>
+<div class="codebox">
+  <div class="label"><span>scripts\echo_server.py (the changed parts)</span></div>
+<pre><code>def fake_error(status: int) -&gt; dict[str, object]:
+    """An error body shaped like the API's, e.g. for 401, 429, 500 or 529."""
+    return {
+        "type": "error",
+        "error": {"type": "api_error", "message": f"echo server answered {status} on purpose"},
+    }
+
+
+class EchoHandler(BaseHTTPRequestHandler):
+    """Called by HTTPServer once for every request that arrives."""
+
+    # Set from --status: answer every request with this status instead of 200.
+    forced_status = 200
+    ...
+        <span class="hl">if self.forced_status != 200:</span>
+            <span class="hl">self.send_json(self.forced_status, fake_error(self.forced_status))</span>
+        <span class="hl">elif</span> self.command == "POST" and self.path == "/v1/messages":
+    ...
+    parser.add_argument("--status", type=int, default=200, help="answer every request with it")
+    args = parser.parse_args()
+    EchoHandler.forced_status = args.status</code></pre>
+</div>
+<p><code>HTTPServer</code> יוצר <code>EchoHandler</code> חדש לכל בקשה, ולכן אי אפשר להעביר לו ערך בבנאי. מאפיין של המחלקה, שנקבע פעם אחת ב-<code>main</code>, הוא הדרך הפשוטה.</p>
+<div class="table-wrap">
+<table>
+  <tr><th><code>--status</code></th><th>בקשות שהגיעו</th><th><code>x-stainless-retry-count</code></th><th>מה המשתמש ראה</th></tr>
+  <tr><td><code>401</code></td><td>1</td><td>0</td><td><span class="en">The API rejected your key. Check ANTHROPIC_API_KEY.</span>, והסוכן יצא</td></tr>
+  <tr><td><code>400</code></td><td>1</td><td>0</td><td><span class="en">The API returned an error (400).</span></td></tr>
+  <tr><td><code>429</code></td><td>3</td><td>0, 1, 2</td><td><span class="en">The API returned an error (429).</span></td></tr>
+  <tr><td><code>529</code></td><td>3</td><td>0, 1, 2</td><td><span class="en">The API returned an error (529).</span></td></tr>
+</table>
+</div>
+<div class="codebox output">
+  <div class="label"><span>agent.log, --status 529 (shortened)</span></div>
+<pre><code>13:24:40,544 INFO httpx2: HTTP Request: POST http://127.0.0.1:8000/v1/messages "HTTP/1.0 529 "
+13:24:40,544 INFO anthropic._base_client: Retrying request to /v1/messages in 0.467499 seconds
+13:24:41,018 INFO httpx2: HTTP Request: POST http://127.0.0.1:8000/v1/messages "HTTP/1.0 529 "
+13:24:41,018 INFO anthropic._base_client: Retrying request to /v1/messages in 0.973503 seconds
+13:24:42,009 INFO httpx2: HTTP Request: POST http://127.0.0.1:8000/v1/messages "HTTP/1.0 529 "</code></pre>
+</div>
+<p><strong>ההיגיון:</strong> ה-SDK מנסה שוב רק כשניסיון נוסף עשוי להצליח. <code>429</code> (חכו) ו-<code>5xx</code> (השרת עמוס או נפל) הם מצבים זמניים. <code>400</code> ו-<code>401</code> לא: אותה בקשה, עם אותו מפתח, תיכשל שוב בדיוק באותה צורה, ולשלוח אותה שוב רק מבזבז זמן. בקוד של ה-SDK (<code>_should_retry</code>, פרק 3 תרגיל 5) הרשימה היא <code>408</code>, <code>409</code>, <code>429</code> וכל <code>5xx</code>, ובנוסף שגיאות חיבור. בין ניסיון לניסיון ההמתנה גדלה (כחצי שנייה, ואז כשנייה): זה <span class="en">exponential backoff</span>, כדי לא להציף שרת שכבר עמוס.</p>
+<p><strong>למה <code>401</code> סוגר את הסוכן:</strong> ב-<code>llm.py</code>, <code>AuthenticationError</code> הופכת ל-<code>LLMError</code> עם <code>fatal=True</code>, ו-<code>chat_loop</code> קורא ל-<code>sys.exit(1)</code>. אותו היגיון כמו של ה-SDK, ברמה של הסוכן: מפתח שגוי לא יתקן את עצמו. שאר הקודים הם <code>APIStatusError</code> רגילה, והשיחה ממשיכה.</p>
+
+<h2><span class="sec">5</span>להיות ה-SDK</h2>
+<div class="codebox output">
+  <div class="label"><span>echo server, the trap</span></div>
+<pre><code>--- POST /try HTTP/1.1
+Host: 127.0.0.1:8000
+User-Agent: curl/8.21.0
+Accept: */*
+Content-Length: 10
+Content-Type: application/x-www-form-urlencoded
+
+{model: x}</code></pre>
+</div>
+<p>שתי בעיות. PowerShell 5.1 מעביר ארגומנטים לתוכנות חיצוניות (<code>.exe</code>) בצורה שמוחקת מירכאות כפולות שבתוך הטקסט, ולכן <code>curl</code> קיבל <code>{model: x}</code>, שאינו <span class="en">JSON</span>. ו-<code>-d</code> לבד מסמן את ה-<span class="en">body</span> כנתוני טופס (<code>x-www-form-urlencoded</code>), לא כ-<span class="en">JSON</span>. הפתרון לשתיהן: <span class="en">body</span> בקובץ, ו-<code>Content-Type</code> מפורש.</p>
+<div class="codebox">
+  <div class="label"><span>body.json</span></div>
+<pre><code>{"model": "claude-opus-5-5", "max_tokens": 100,
+ "messages": [{"role": "user", "content": "שלום"}]}</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>HTTP/1.0 200 OK
+Server: BaseHTTP/0.6 Python/3.12.13
+Date: Wed, 18 Nov 2026 11:40:13 GMT
+Content-Type: application/json
+Content-Length: 263
+
+{"id": "msg_echo", "type": "message", "role": "assistant", "model": "claude-opus-5-5", "content": [{"type": "text", "text": "[echo server] messages received: 1"}], "stop_reason": "end_turn", "stop_sequence": null, "usage": {"input_tokens": 0, "output_tokens": 0}}</code></pre>
+</div>
+<p>ב-<span class="en">terminal</span> של השרת הבקשה הגיעה עם <code>Content-Length: 104</code> וה-<span class="en">JSON</span> שלם. <code>--data-binary</code> שולח את הקובץ בדיוק כמו שהוא. (<code>-d "@body.json"</code> כמעט זהה, אבל מוחק ממנו ירידות שורה: אצלנו 102 בתים במקום 104.) ב-<code>"@body.json"</code> המירכאות חשובות, כי ב-PowerShell <code>@</code> בתחילת מילה הוא תחביר מיוחד.</p>
+<p><strong>תווים מול בתים:</strong> ב-<code>שלום</code> ארבעה תווים, אבל כל אות עברית היא שני בתים ב-<span class="en">UTF-8</span>, ולכן היא תרמה 8 בתים ל-<code>Content-Length</code>. ראינו את זה גם עם הסוכן עצמו: אותה בקשה עם <code>hello</code> (5 תווים, 5 בתים) הייתה <code>Content-Length: 212</code>, ועם <code>שלום</code> <code>215</code>. מי שמחשב <code>Content-Length</code> עם <code>len()</code> של מחרוזת, ולא של <code>bytes</code>, ישבור כל הודעה בעברית. לכן ב-<code>echo_server.py</code> ה-<code>len</code> הוא של <code>payload</code>, אחרי <code>encode</code>.</p>
+
+<h2><span class="sec">6</span><code>probe.py</code>: איפה זה נשבר?</h2>
+<p>פתרון אפשרי אחד. שלכם יכול להיראות אחרת לגמרי, כל עוד הוא עוצר בשלב הראשון שנכשל ואומר מה כנראה הבעיה.</p>
+<div class="codebox">
+  <div class="label"><span>scripts\probe.py</span></div>
+<pre><code>"""Find out at which step a request to a URL fails: DNS, connection, or HTTP.
+
+Run it with: uv run python scripts/probe.py http://127.0.0.1:8000/
+"""
+
+import socket
+import sys
+from http.client import HTTPConnection, HTTPSConnection
+from urllib.parse import urlsplit
+
+
+def probe(url: str) -&gt; bool:
+    """Walk the steps one by one and stop at the first that fails."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    path = parts.path or "/"
+
+    print(f"1. DNS      {host}")
+    try:
+        found = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as error:
+        print(f"   FAILED   the name does not resolve: {error}")
+        return False
+    print(f"   ok       {', '.join(str(info[4][0]) for info in found)}")
+
+    print(f"2. CONNECT port {port}")
+    try:
+        socket.create_connection((host, port), timeout=5).close()
+    except OSError as error:
+        print(f"   FAILED   nobody answers on this port: {error}")
+        return False
+    print("   ok")
+
+    step = "TLS + HTTP" if parts.scheme == "https" else "HTTP"
+    print(f"3. {step}  GET {path}")
+    connection_type = HTTPSConnection if parts.scheme == "https" else HTTPConnection
+    connection = connection_type(host, port, timeout=10)
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+    except OSError as error:
+        print(f"   FAILED   {error}")
+        return False
+    finally:
+        connection.close()
+    print(f"   answer   {response.status} {response.reason}")
+    return response.status &lt; 400
+
+
+if __name__ == "__main__":
+    sys.exit(0 if probe(sys.argv[1]) else 1)</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>PS&gt; uv run python scripts\probe.py http://no-such-host.invalid/
+1. DNS      no-such-host.invalid
+   FAILED   the name does not resolve: [Errno 11001] getaddrinfo failed
+PS&gt; uv run python scripts\probe.py http://127.0.0.1:9/
+1. DNS      127.0.0.1
+   ok       127.0.0.1
+2. CONNECT port 9
+   FAILED   nobody answers on this port: [WinError 10061] No connection could be made because the target machine actively refused it
+PS&gt; uv run python scripts\probe.py http://localhost:8000/missing.html
+1. DNS      localhost
+   ok       ::1, 127.0.0.1
+2. CONNECT port 8000
+   ok
+3. HTTP  GET /missing.html
+   answer   404 File not found
+PS&gt; uv run python scripts\probe.py http://localhost:8000/
+...
+3. HTTP  GET /
+   answer   200 OK
+PS&gt; uv run python scripts\probe.py https://api.anthropic.com/
+1. DNS      api.anthropic.com
+   ok       160.79.104.10
+2. CONNECT port 443
+   ok
+3. TLS + HTTP  GET /
+   answer   404 Not Found</code></pre>
+</div>
+<p><strong><span class="en">Exit code</span>:</strong> 0 רק אם הגענו לתשובה מתחת ל-400, ו-1 בכל כישלון. כך אפשר להשתמש בו בסקריפט אחר, או בבדיקה אוטומטית לפני הרצה (<code>if ($LASTEXITCODE -ne 0) ...</code>). החלטה סבירה אחרת: קוד שונה לכל שלב (2 ל-<span class="en">DNS</span>, 3 לחיבור, 4 ל-<span class="en">HTTP</span>), כמו ש-<code>curl</code> מחזיר 6 ו-7.</p>
+<p><strong>מה הוא לא יודע:</strong> הוא שולח רק <code>GET</code>, ולכן ל-<code>api.anthropic.com</code> הוא מקבל <code>404</code>, למרות שה-<span class="en">API</span> תקין לגמרי: מה שקיים שם הוא <code>POST /v1/messages</code>, עם מפתח. הוא לא יודע אם יש <span class="en">proxy</span> בדרך, לא מבדיל בין "אין תשובה" לבין "תשובה איטית" מעבר ל-<span class="en">timeout</span>, ולא בודק את שתי הכתובות של <code>localhost</code> בנפרד, כך שאת שתי השניות של <code>::1</code> הוא מסתיר. כלי אבחון עונה על השאלה שבנו אותו לשאול, ותו לא.</p>
+<p>ב-<code>README.md</code> נוסף פרק "Network scripts" עם הסקריפטים ועם הדרך להפנות את הסוכן לשרת, ו-<code>ANTHROPIC_BASE_URL</code> נכנס לטבלת המשתנים וגם, כהערה, ל-<code>.env.example</code>. פקודת <code>mypy</code> ב-<span class="en">Checks</span> הפכה ל-<code>uv run mypy agent scripts</code>, כי גם הסקריפטים עם <span class="en">type hints</span> מלאים. ראו <code>checkpoints\chapter-04</code>.</p>
+
+<h2><span class="sec">*</span>ההיסטוריה בסוף הפרק</h2>
+<p>להשוואה עם שלכם. הצורה צריכה להיות קו ישר (האיחוד היה <span class="en">fast-forward</span>), המזהים לא. מתחת לחמשת ה-<span class="en">commits</span> האלה נמצאת ההיסטוריה מפרק 3.</p>
+<div class="codebox output">
+  <div class="label"><span>git log --oneline --graph</span></div>
+<pre><code>* adb34f9 Document the network scripts and ANTHROPIC_BASE_URL
+* 034ef73 Add probe.py: find the step where a request fails
+* 0e129bf Let the echo server answer with any status code
+* f06943f Add an echo server that shows what the SDK sends
+* 9bb2c9a Send an HTTP request by hand with raw_http.py
+* ...</code></pre>
+</div>
+<p>בסוף, מתיקייה נקייה: <code>uv run pytest</code> מדווח <code>42 passed</code> (הקוד של הסוכן לא השתנה), ו-<code>ruff check</code>, <code>ruff format --check</code> ו-<code>mypy agent scripts</code> נקיים.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-04.html">→ חזרה לפרק 4</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

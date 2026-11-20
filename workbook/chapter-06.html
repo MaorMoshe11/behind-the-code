@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 6 · בסיסי נתונים | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="06">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 6 · בסיסי נתונים</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 6 מתוך 21</div>
+  <h1>בסיסי נתונים</h1>
+  <p class="lead">איך הסוכן מפסיק לשכוח: שומרים כל שיחה במקום שחי מחוץ לתהליך, ושואלים אותו שאלות בשפה שנבנתה בשביל זה.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>להסביר מה זה בסיס נתונים רלציוני: טבלאות, שורות, עמודות, <span class="en">primary key</span> ו-<span class="en">foreign key</span>.</li>
+    <li>לכתוב ביד <span class="en">SQL</span> בסיסי: <code>CREATE TABLE</code>, <code>INSERT</code>, <code>SELECT</code> עם <code>WHERE</code>, <code>ORDER BY</code>, <code>JOIN</code> ו-<code>GROUP BY</code>, <code>UPDATE</code> ו-<code>DELETE</code>.</li>
+    <li>להסביר מה <span class="en">index</span> עושה ומה הוא עולה, ולמדוד את ההבדל בעצמכם.</li>
+    <li>להשתמש ב-<span class="en">transaction</span> כדי ששני שינויים יקרו יחד או לא יקרו בכלל.</li>
+    <li>לעבוד עם <span class="en">ORM</span> (SQLAlchemy), ולהבין איזה <span class="en">SQL</span> הוא כותב בשבילכם.</li>
+    <li>להסביר מתי בוחרים <span class="en">document store</span>, מאגר אנליטי או <span class="en">cache</span>, ומתי לא.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> ארבע עד חמש שעות, כולל התרגילים. <strong>מה צריך:</strong> הפרויקט מסוף פרק 5. אין צורך להתקין שרת בסיס נתונים, ואין צורך במפתח של Anthropic: הכול רץ במצב <span class="en">mock</span>.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.1</span>הבעיה: הסוכן שוכח בכל הפעלה מחדש</h2>
+
+<p>בצעד 4 של הדוגמה המודרכת בפרק 5 שלחתם שתי הודעות בדף הצ'אט, הפעלתם את השרת מחדש, ושלחתם הודעה שלישית. התשובה הייתה:</p>
+
+<div class="codebox output">
+  <div class="label"><span>the chat page, after a server restart</span></div>
+<pre><code>שגיאה 404: "No conversation with this id."</code></pre>
+</div>
+
+<p>הדף זכר את המזהה, אבל השרת שכח הכול. השיחות חיו במילון אחד, <code>_messages</code>, בזיכרון של תהליך אחד. כל עדכון גרסה, כל קריסה וכל <code>--reload</code> מוחקים את כל השיחות של כל המשתמשים. ובפרק 1, כשהסתכלתם ב-<span class="en">debugger</span> על הרשימה <code>messages</code>, הבטחנו שהבעיה הזו תיפתר כאן.</p>
+
+<p>הפתרון הנאיבי הוא לכתוב את המילון לקובץ <span class="en">JSON</span> בכל הודעה. זה עובד עם משתמש אחד, ונשבר מהר: שני לקוחות שכותבים באותו רגע דורסים זה את זה, קריסה באמצע כתיבה משאירה קובץ חצי-כתוב, וכדי למצוא שיחה אחת צריך לקרוא את כל הקובץ. <strong>בסיס נתונים</strong> (<span class="en">database</span>) הוא תוכנה שפותרת בדיוק את שלוש הבעיות האלה, ועשרות שנים של עבודה הושקעו בזה. בפרק הזה תלמדו לדבר איתו בשפה שלו, ואז תעבירו אליו את השיחות של הסוכן.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.2</span>המפה: מהליבה ועד הקובץ</h2>
+
+<div class="diagram">
+  <div class="flow">
+    <div class="layer l4">
+      <div class="name">api.py, cli.py</div>
+      <div class="what">לא משתנים: מדברים עם הליבה כמו קודם</div>
+    </div>
+    <div class="hop">&rarr;</div>
+    <div class="layer l3">
+      <div class="name">Conversations</div>
+      <div class="what">אותן מתודות: <code>start</code>, <code>send</code>, <code>messages</code>, <code>reset</code>, <code>delete</code></div>
+    </div>
+    <div class="hop">&rarr;<b>Python objects</b></div>
+    <div class="layer l2">
+      <div class="name">SQLAlchemy (ORM)</div>
+      <div class="what">מחלקה לכל טבלה. הופך פעולות על אובייקטים ל-SQL</div>
+    </div>
+    <div class="hop">&rarr;<b>SQL</b></div>
+    <div class="layer">
+      <div class="name">SQLite: agent.db</div>
+      <div class="what">קובץ אחד בתיקיית הפרויקט. <code>DATABASE_URL</code> בוחר אחר (Postgres בפרק 8)</div>
+    </div>
+  </div>
+  <div class="caption">רק השכבה האמצעית משתנה. ה-API, הדף וה-CLI מקבלים זיכרון בלי לדעת על כך.</div>
+</div>
+
+<p>זה התשלום על החלוקה מפרק 5: <code>api.py</code> לא יודע איפה השיחות נשמרות, ולכן אפשר להחליף את המקום בלי לגעת בו. אבל לפני שנותנים לספרייה לכתוב <span class="en">SQL</span> בשבילכם, תכתבו אותו בעצמכם. מי שלא ראה מה ה-<span class="en">ORM</span> עושה לא יבין גם את השגיאות שלו.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.3</span>המודל הרלציוני: טבלאות, שורות ומפתחות</h2>
+
+<p>בסיס נתונים <strong>רלציוני</strong> (<span class="en">relational database</span>) שומר הכול בטבלאות. לכל <strong>טבלה</strong> (<span class="en">table</span>) יש עמודות קבועות (<span class="en">columns</span>), ולכל עמודה <span class="en">type</span>. כל רשומה היא <strong>שורה</strong> (<span class="en">row</span>). כך ייראו השיחות של הסוכן, בשתי טבלאות:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th colspan="2"><code>conversations</code></th><th colspan="4"><code>messages</code></th></tr>
+  <tr><th><code>id</code> (PK)</th><th><code>created_at</code></th><th><code>id</code> (PK)</th><th><code>conversation_id</code> (FK)</th><th><code>role</code></th><th><code>content</code></th></tr>
+  <tr><td><code>c1</code></td><td>10:00</td><td>1</td><td><code>c1</code></td><td>user</td><td>hello</td></tr>
+  <tr><td><code>c2</code></td><td>11:30</td><td>2</td><td><code>c1</code></td><td>assistant</td><td>Hi! How can I help?</td></tr>
+  <tr><td></td><td></td><td>3</td><td><code>c2</code></td><td>user</td><td>good morning</td></tr>
+</table>
+</div>
+
+<ul>
+  <li><strong><span class="en">Primary key</span></strong> (PK): עמודה שהערך בה שונה בכל שורה, ולכן מזהה אותה. בשיחות זה ה-<code>conversation_id</code> שכבר נוסע בכל בקשה מפרק 5. בהודעות זה מספר רץ שבסיס הנתונים נותן לבד.</li>
+  <li><strong><span class="en">Foreign key</span></strong> (FK): עמודה שמצביעה על <span class="en">primary key</span> בטבלה אחרת. <code>messages.conversation_id</code> אומר לאיזו שיחה ההודעה שייכת, ובסיס הנתונים יכול לסרב להודעה של שיחה שלא קיימת.</li>
+</ul>
+
+<p>למה שתי טבלאות, ולא עמודה אחת של "כל ההודעות" בשורה של השיחה? כי כך כל שאלה פשוטה: "ההודעות של <code>c1</code> לפי הסדר", "כמה הודעות בכל שיחה", "כל ההודעות של היום". הכלל נקרא <span class="en">normalization</span>: כל עובדה נשמרת פעם אחת, במקום אחד, והקשרים נבנים מהמפתחות. ושימו לב שאין כאן קיצוץ: הטבלה שומרת את כל ההודעות, גם אם למודל נשלחות רק האחרונות.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.4</span><span class="en">SQL</span> ביד, ב-SQLite</h2>
+
+<p><strong><span class="en">SQL</span></strong> (<span class="en">Structured Query Language</span>) היא השפה שבה מדברים עם כמעט כל בסיס נתונים רלציוני. היא <em>הצהרתית</em>: אתם כותבים <em>מה</em> אתם רוצים, ובסיס הנתונים מחליט <em>איך</em> להשיג את זה. <strong>SQLite</strong> הוא בסיס הנתונים הפשוט ביותר להתחיל איתו: אין שרת, כל בסיס הנתונים הוא קובץ אחד, והוא מגיע מובנה בתוך Python. גם הכלי להסתכל לתוכו מובנה: <code>python -m sqlite3</code>, מגרסה 3.12. ענף חדש, ודבר ראשון: לוודא שקבצי בסיס נתונים לא ייכנסו ל-git.</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects\my-agent
+git switch main
+git pull
+git switch -c feature/database</code></pre>
+</div>
+
+<p>פתחו את <code>.gitignore</code> ב-VS Code והוסיפו בסופו (לא עם <code>&gt;</code> של PowerShell: פרק 2 הראה מה הוא עושה לקידוד):</p>
+
+<div class="codebox">
+  <div class="label"><span>.gitignore (add at the end)</span></div>
+<pre><code># Local databases (SQLite files) and their temporary journal files
+*.db
+*.db-journal</code></pre>
+</div>
+
+<p>שמרו: <code>git add .gitignore</code>, <code>git commit -m "Ignore local database files"</code>. בסיס נתונים מקומי מכיל נתונים, לא קוד: הוא כבד, משתנה כל הזמן, ועלול להכיל דברים פרטיים שמשתמשים כתבו. עכשיו פתחו מעבדה:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python -m sqlite3 lab.db</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>sqlite3 shell, running on SQLite version 3.50.4
+Connected to 'lab.db'
+
+Each command will be run using execute() on the cursor.
+Type ".help" for more information; type ".quit" or CTRL-Z to quit.
+sqlite&gt;</code></pre>
+</div>
+
+<p>הקובץ <code>lab.db</code> נוצר כי לא היה קיים. כל פקודת <span class="en">SQL</span> מסתיימת ב-<code>;</code>, ובלעדיו ה-<span class="en">shell</span> מחכה להמשך עם <code>...</code>. מילות המפתח באותיות גדולות הן הרגל, לא חובה. צרו את שתי הטבלאות:</p>
+
+<div class="codebox">
+  <div class="label"><span>sqlite&gt;</span></div>
+<pre><code>CREATE TABLE conversations (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE messages (
+  id INTEGER PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations (id),
+  role TEXT NOT NULL,
+  content TEXT NOT NULL
+);</code></pre>
+</div>
+
+<p><code>NOT NULL</code> אומר שאסור לשורה להגיע בלי ערך בעמודה. <code>INTEGER PRIMARY KEY</code> ב-SQLite הוא מספר רץ: לא נותנים ערך, ובסיס הנתונים בוחר את הבא. <code>REFERENCES</code> הופך את <code>conversation_id</code> ל-<span class="en">foreign key</span>. עכשיו נתונים, ושורה אחת שגויה בכוונה:</p>
+
+<div class="codebox">
+  <div class="label"><span>sqlite&gt;</span></div>
+<pre><code>INSERT INTO conversations (id, created_at) VALUES ('c1', '2026-11-18 10:00');
+INSERT INTO conversations (id, created_at) VALUES ('c2', '2026-11-18 11:30');
+INSERT INTO conversations (id, created_at) VALUES ('c1', '2026-11-18 12:00');
+INSERT INTO messages (conversation_id, role, content) VALUES
+  ('c1', 'user', 'hello'),
+  ('c1', 'assistant', 'Hi! How can I help?'),
+  ('c1', 'user', 'what is SQL?'),
+  ('c1', 'assistant', 'A language for asking questions about tables.'),
+  ('c2', 'user', 'good morning');</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (the third INSERT)</span></div>
+<pre><code>IntegrityError (SQLITE_CONSTRAINT_PRIMARYKEY): UNIQUE constraint failed: conversations.id</code></pre>
+</div>
+
+<p>זה ה-<span class="en">primary key</span> בעבודה: שתי שיחות עם אותו מזהה הן בדיוק הבאג שבסיס הנתונים מונע בשבילכם. מחרוזות ב-<span class="en">SQL</span> נכתבות במירכאות בודדות. ועכשיו שאלות. כל אחת מהן היא <code>SELECT</code>: אילו עמודות, מאיזו טבלה, אילו שורות (<code>WHERE</code>) ובאיזה סדר (<code>ORDER BY</code>):</p>
+
+<div class="codebox">
+  <div class="label"><span>sqlite&gt;</span></div>
+<pre><code>SELECT role, content FROM messages WHERE conversation_id = 'c1' ORDER BY id;
+SELECT conversation_id, COUNT(*) FROM messages GROUP BY conversation_id;
+SELECT c.created_at, m.content
+  FROM messages AS m JOIN conversations AS c ON c.id = m.conversation_id
+  WHERE m.role = 'user';</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>('user', 'hello')
+('assistant', 'Hi! How can I help?')
+('user', 'what is SQL?')
+('assistant', 'A language for asking questions about tables.')
+('c1', 4)
+('c2', 1)
+('2026-11-18 10:00', 'hello')
+('2026-11-18 10:00', 'what is SQL?')
+('2026-11-18 11:30', 'good morning')</code></pre>
+</div>
+
+<p>השאלה הראשונה היא בדיוק מה שהסוכן צריך לפני כל תשובה. בלי <code>ORDER BY</code>, הסדר לא מובטח, גם אם היום הוא נראה נכון. השנייה מקבצת שורות (<code>GROUP BY</code>) ומפעילה על כל קבוצה פונקציה (<code>COUNT</code>). השלישית מחברת שתי טבלאות (<code>JOIN</code>): לכל הודעה, השורה של השיחה שה-<span class="en">foreign key</span> שלה מצביע עליה. <code>AS m</code> ו-<code>AS c</code> הם כינויים קצרים. הפלט מגיע כ-<span class="en">tuples</span> של Python, כי זה ה-<span class="en">shell</span> של Python.</p>
+
+<h3>ה-<span class="en">foreign key</span> שלא שמר על כלום</h3>
+
+<div class="codebox">
+  <div class="label"><span>sqlite&gt;</span></div>
+<pre><code>INSERT INTO messages (conversation_id, role, content) VALUES ('nope', 'user', 'orphan');
+SELECT id, conversation_id, content FROM messages WHERE conversation_id = 'nope';</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>(6, 'nope', 'orphan')</code></pre>
+</div>
+
+<p>אין שיחה <code>nope</code>, וההודעה נכנסה בכל זאת. זו מלכודת ידועה של SQLite: מסיבות של תאימות לאחור, הוא בודק <span class="en">foreign keys</span> רק אם מבקשים, ובכל חיבור מחדש:</p>
+
+<div class="codebox">
+  <div class="label"><span>sqlite&gt;</span></div>
+<pre><code>DELETE FROM messages WHERE conversation_id = 'nope';
+PRAGMA foreign_keys = ON;
+INSERT INTO messages (conversation_id, role, content) VALUES ('nope', 'user', 'orphan');</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>IntegrityError (SQLITE_CONSTRAINT_FOREIGNKEY): FOREIGN KEY constraint failed</code></pre>
+</div>
+
+<p>זכרו את זה: בסעיף 6.8 הקוד יבקש את זה בכל חיבור. ושימו לב ל-<code>DELETE</code> הראשון. <code>UPDATE messages SET content = 'x' WHERE id = 3;</code> משנה שורה אחת, ו-<code>DELETE FROM messages WHERE ...</code> מוחק את מה שמתאים. בלי <code>WHERE</code>, שתי הפקודות פועלות על <em>כל</em> השורות, בלי לשאול "בטוח?". מתכנתים מנוסים כותבים קודם <code>SELECT</code> עם אותו <code>WHERE</code>, בודקים מה חוזר, ורק אז מחליפים אותו ב-<code>DELETE</code>.</p>
+
+<p>בסיס הנתונים זוכר גם את המבנה של עצמו, בטבלה מיוחדת. כך רואים אילו טבלאות קיימות (לכלי של Python אין פקודה <code>.tables</code>):</p>
+
+<div class="codebox">
+  <div class="label"><span>sqlite&gt;</span></div>
+<pre><code>SELECT name FROM sqlite_master WHERE type = 'table';</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>('conversations',)
+('messages',)</code></pre>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.5</span>אינדקסים: למה שאלה אחת מהירה ואחרת איטית</h2>
+
+<p>איך SQLite מוצא את ההודעות של <code>c1</code>? אפשר לשאול אותו:</p>
+
+<div class="codebox">
+  <div class="label"><span>sqlite&gt;</span></div>
+<pre><code>EXPLAIN QUERY PLAN SELECT * FROM messages WHERE conversation_id = 'c1';
+CREATE INDEX ix_messages_conversation_id ON messages (conversation_id);
+EXPLAIN QUERY PLAN SELECT * FROM messages WHERE conversation_id = 'c1';</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>(2, 0, 216, 'SCAN messages')
+(3, 0, 62, 'SEARCH messages USING INDEX ix_messages_conversation_id (conversation_id=?)')</code></pre>
+</div>
+
+<p><code>SCAN</code> פירושו לקרוא את <em>כל</em> הטבלה ולבדוק כל שורה. עם ארבע שורות זה לא משנה. עם מיליון הודעות, כל תשובה של הסוכן הייתה מתחילה בקריאה של מיליון שורות. <strong><span class="en">Index</span></strong> הוא מבנה נוסף שבסיס הנתונים מתחזק לצד הטבלה, ממוין לפי עמודה, כמו אינדקס בסוף ספר: במקום לדפדף בכל הספר, קופצים לעמוד. אחרי <code>CREATE INDEX</code> התוכנית היא <code>SEARCH</code>. בתרגיל 3 תמדדו כמה זה שווה על חצי מיליון הודעות.</p>
+
+<p>אז למה לא <span class="en">index</span> על כל עמודה? כי הוא עולה. כל <code>INSERT</code> ו-<code>UPDATE</code> צריך לעדכן גם אותו, והוא תופס מקום בקובץ. הכלל: <span class="en">index</span> על עמודות שמחפשים לפיהן, מסננים לפיהן או מחברים לפיהן הרבה, כמו <code>conversation_id</code>. על ה-<span class="en">primary key</span> יש <span class="en">index</span> אוטומטית.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.6</span><span class="en">Transactions</span>: הכול או כלום</h2>
+
+<p>כשהסוכן עונה, נוספות שתי שורות: ההודעה שלכם והתשובה. מה אם השרת קורס אחרי הראשונה? בשיחה יש שאלה בלי תשובה, ובפרק 1 ראיתם שה-<span class="en">API</span> של Claude דורש שהתורות יתחלפו. <strong><span class="en">Transaction</span></strong> היא קבוצת פקודות שבסיס הנתונים מבטיח שיקרו כיחידה אחת: או כולן, או אף אחת. נסו:</p>
+
+<div class="codebox">
+  <div class="label"><span>sqlite&gt;</span></div>
+<pre><code>BEGIN;
+DELETE FROM messages;
+SELECT COUNT(*) FROM messages;
+ROLLBACK;
+SELECT COUNT(*) FROM messages;</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>(0,)
+(5,)</code></pre>
+</div>
+
+<p>בתוך ה-<span class="en">transaction</span> הטבלה ריקה. <code>ROLLBACK</code> ביטל הכול, כאילו לא קרה. <code>COMMIT</code> היה הופך את השינוי לקבוע. ה-<span class="en">shell</span> הזה עובד במצב <span class="en">autocommit</span>: כל פקודה מחוץ ל-<code>BEGIN</code> היא <span class="en">transaction</span> קטנה משלה. כתבו <code>.quit</code> כדי לצאת.</p>
+
+<p>מאחורי זה ארבע הבטחות שנקראות יחד <strong><span class="en">ACID</span></strong>: <span class="en">atomicity</span> (הכול או כלום), <span class="en">consistency</span> (חוקים כמו <span class="en">foreign keys</span> נשמרים), <span class="en">isolation</span> (מי שקורא באמצע לא רואה חצי שינוי) ו-<span class="en">durability</span> (מה שעבר <code>COMMIT</code> שורד גם הפסקת חשמל). זה ההבדל העיקרי מקובץ <span class="en">JSON</span>.</p>
+
+<div class="callout warn">
+  <span class="title">לא מחזיקים <span class="en">transaction</span> פתוחה בזמן שמחכים לרשת</span>
+  <p>שאלה ל-Claude לוקחת שניות. אם <span class="en">transaction</span> פתוחה כל הזמן הזה, היא עלולה לחסום כותבים אחרים: ב-SQLite רק כותב אחד יכול להחזיק את הקובץ בכל רגע. לכן הסוכן יקרא את ההיסטוריה, יסגור, ישאל את המודל, ורק כשהתשובה ביד יכתוב את שתי ההודעות ב-<span class="en">transaction</span> אחת קצרה. ואם המודל נכשל, אין מה לבטל: עוד לא נכתב כלום.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.7</span><span class="en">ORM</span>: SQLAlchemy</h2>
+
+<p>אפשר לכתוב את כל הסוכן עם <span class="en">SQL</span> במחרוזות ומודול <code>sqlite3</code>. בפרויקט אמיתי זה נהיה מסורבל: להמיר כל שורה למילון ובחזרה, לכתוב <code>CREATE TABLE</code> שמתאים לקוד, ולכתוב <span class="en">SQL</span> קצת שונה לכל בסיס נתונים. <strong><span class="en">ORM</span></strong> (<span class="en">Object-Relational Mapper</span>) הוא ספרייה שמחברת בין מחלקות Python לטבלאות. ב-Python, הנפוצה היא <strong>SQLAlchemy</strong>. ארבעה מושגים:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מושג</th><th>מה הוא</th><th>אצלנו</th></tr>
+  <tr><td><span class="en">Model</span> (מחלקת טבלה)</td><td>מחלקה שכל <span class="en">attribute</span> שלה הוא עמודה, וכל מופע שלה הוא שורה</td><td><code>ConversationRow</code>, <code>MessageRow</code></td></tr>
+  <tr><td><span class="en">Engine</span></td><td>יודע לאיזה בסיס נתונים מתחברים, ומחזיק את החיבורים</td><td>נבנה מ-<code>DATABASE_URL</code></td></tr>
+  <tr><td><span class="en">Session</span></td><td>יחידת עבודה: אוספת שינויים, ושולחת אותם ב-<span class="en">transaction</span> אחת</td><td><code>with self.sessions.begin() as session:</code></td></tr>
+  <tr><td><code>select(...)</code></td><td><span class="en">SQL</span> שנבנה מביטויי Python, ולא ממחרוזות</td><td><code>select(MessageRow).where(...)</code></td></tr>
+</table>
+</div>
+
+<p>ה-<span class="en">URL</span> של בסיס הנתונים נראה כמו כתובת: <code>sqlite:///agent.db</code> הוא קובץ <code>agent.db</code> בתיקיית העבודה, <code>sqlite://</code> הוא בסיס נתונים בזיכרון, ו-<code>postgresql+psycopg://user:password@host/db</code> הוא שרת Postgres. הקוד לא משתנה, רק המחרוזת. בפרק 8 זה יהיה כל המעבר ל-Postgres.</p>
+
+<div class="callout">
+  <span class="title">למה לא פשוט <span class="en">f-string</span>?</span>
+  <p>אם הייתם כותבים <code class="wrap">f"SELECT * FROM messages WHERE conversation_id = '{cid}'"</code>, מזהה שמכיל מירכאה היה משנה את משמעות השאלה. משתמש זדוני יכול לשלוח "מזהה" שהוא בעצם פקודה. זו <strong><span class="en">SQL injection</span></strong>, מהפרצות הוותיקות והנפוצות שיש. הפתרון: <span class="en">parameters</span>. ה-<span class="en">SQL</span> נשלח עם <code>?</code>, והערכים נשלחים בנפרד, כך שהם תמיד נתונים ואף פעם לא קוד. SQLAlchemy עושה את זה תמיד, וכשתכתבו <span class="en">SQL</span> ביד ב-Python, תעשו את זה גם אתם (תרגיל 3). נחזור לזה בפרק 14.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.8</span>דוגמה מודרכת: השיחות עוברות לבסיס הנתונים</h2>
+
+<div class="step">
+  <h3><span class="step-num">1</span>החבילה, והטבלאות כמחלקות</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv add sqlalchemy</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Resolved 40 packages in 1.02s
+Installed 1 package in 258ms
+ + sqlalchemy==2.1.9</code></pre>
+</div>
+  <p>צרו <code>agent\db.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\db.py</span></div>
+<pre><code>"""The database: two tables, and the engine that connects to them.
+
+DATABASE_URL says which database. The default is a SQLite file, agent.db.
+"""
+
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import Engine, ForeignKey, String, Text, create_engine, event
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.pool import StaticPool
+
+
+def now() -&gt; datetime:
+    return datetime.now(UTC)
+
+
+class Base(DeclarativeBase):
+    """Every table class inherits from this, so SQLAlchemy knows about all of them."""
+
+
+class ConversationRow(Base):
+    """One row of the conversations table."""
+
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(default=now)
+
+
+class MessageRow(Base):
+    """One row of the messages table: one message, in one conversation."""
+
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(ForeignKey("conversations.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=now)
+
+
+def turn_on_foreign_keys(connection: Any, record: Any) -&gt; None:
+    """SQLite ignores foreign keys unless every new connection asks for them."""
+    connection.execute("PRAGMA foreign_keys = ON")
+
+
+def make_engine(url: str) -&gt; Engine:
+    """Connect to the database at `url`, and create the tables that do not exist yet."""
+    if url in ("sqlite://", "sqlite:///:memory:"):
+        # An in-memory database lives inside one connection, so everyone shares that one.
+        engine = create_engine(url, poolclass=StaticPool, connect_args={"check_same_thread": False})
+    else:
+        engine = create_engine(url)
+    if engine.dialect.name == "sqlite":
+        event.listen(engine, "connect", turn_on_foreign_keys)
+    # create_all adds missing tables. It never changes a table that already exists.
+    Base.metadata.create_all(engine)
+    return engine</code></pre>
+</div>
+  <p>השוו ל-<code>CREATE TABLE</code> שכתבתם: <code>Mapped[str]</code> הוא עמודה <code>NOT NULL</code>, <code>Mapped[str | None]</code> הייתה מתירה ריק, <code>index=True</code> הוא ה-<code>CREATE INDEX</code>, ו-<code>default=now</code> ממלא את <code>created_at</code> בזמן <span class="en">UTC</span>. השם <code>ConversationRow</code> ולא <code>Conversation</code>, כדי לא להתבלבל עם ה-<span class="en">schema</span> <code>Message</code> של <code>api.py</code>: זה שורה בטבלה, וזה מה שנוסע ב-<span class="en">HTTP</span>. <code>turn_on_foreign_keys</code> היא ה-<code>PRAGMA</code> מסעיף 6.4, שרצה בכל חיבור חדש.</p>
+  <p>שתי החלטות פשוטות במכוון. <code>create_all</code> יוצר טבלאות שחסרות, וזו הדרך הפשוטה והכנה ליצור אותן היום. ובסיס נתונים בזיכרון (<code>sqlite://</code>) קיים רק בתוך החיבור שיצר אותו, ולכן <code>StaticPool</code> גורם לכולם, גם ל-<span class="en">threads</span> של FastAPI, להשתמש באותו חיבור. זה בשביל הבדיקות. שמרו: <code>git add pyproject.toml uv.lock agent\db.py</code>, <code>git commit -m "Add SQLAlchemy and the database tables"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>הליבה, עם אותו ממשק</h3>
+  <p>החליפו את <code>agent\conversations.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\conversations.py</span></div>
+<pre><code>"""The core of the agent: conversations and their messages.
+
+The terminal chat and the HTTP API both use this module, so they behave the same.
+Every message is saved in the database, so conversations survive a restart.
+"""
+
+import logging
+import uuid
+
+from anthropic.types import MessageParam
+from sqlalchemy import Engine, delete, select
+from sqlalchemy.orm import Session, sessionmaker
+
+from agent.db import ConversationRow, MessageRow
+from agent.history import trim_history
+from agent.llm import ChatClient
+
+log = logging.getLogger(__name__)
+
+
+class ConversationNotFound(Exception):
+    """No conversation has this id (it was deleted, or never existed)."""
+
+
+def to_param(row: MessageRow) -&gt; MessageParam:
+    """A row from the database, in the shape the model client expects."""
+    if row.role == "user":
+        return {"role": "user", "content": row.content}
+    return {"role": "assistant", "content": row.content}
+
+
+class Conversations:
+    """Every conversation, by id, and the one way to add a message to it."""
+
+    def __init__(self, client: ChatClient, max_turns: int, <span class="hl">engine: Engine</span>) -&gt; None:
+        self.client = client
+        self.max_turns = max_turns
+        self.sessions = sessionmaker(engine)
+
+    def _require(self, session: Session, conversation_id: str) -&gt; None:
+        if session.get(ConversationRow, conversation_id) is None:
+            raise ConversationNotFound(conversation_id)
+
+    def start(self) -&gt; str:
+        """Open a new, empty conversation and return its id."""
+        conversation_id = uuid.uuid4().hex
+        with self.sessions.begin() as session:
+            session.add(ConversationRow(id=conversation_id))
+        return conversation_id
+
+    def messages(self, conversation_id: str) -&gt; list[MessageParam]:
+        """Every message in this conversation, oldest first."""
+        with self.sessions() as session:
+            self._require(session, conversation_id)
+            rows = session.scalars(
+                select(MessageRow)
+                .where(MessageRow.conversation_id == conversation_id)
+                .order_by(MessageRow.id)
+            )
+            return [to_param(row) for row in rows]
+
+    def send(self, conversation_id: str, text: str) -&gt; str:
+        """Send the user's message with the recent history, and save both messages."""
+        history = self.messages(conversation_id)
+        # The model sees only the last turns; the database keeps all of them.
+        prompt = trim_history(history, self.max_turns) + [{"role": "user", "content": text}]
+        log.info("sending %d messages", len(prompt))
+        reply = self.client.reply(prompt)  # if this fails, nothing was saved
+        <span class="hl"># One transaction: both messages are saved, or neither is.</span>
+        with self.sessions.begin() as session:
+            session.add(MessageRow(conversation_id=conversation_id, role="user", content=text))
+            session.add(
+                MessageRow(conversation_id=conversation_id, role="assistant", content=reply)
+            )
+        return reply
+
+    def reset(self, conversation_id: str) -&gt; None:
+        """Delete every message in this conversation, but keep the conversation."""
+        with self.sessions.begin() as session:
+            self._require(session, conversation_id)
+            session.execute(delete(MessageRow).where(MessageRow.conversation_id == conversation_id))
+
+    def delete(self, conversation_id: str) -&gt; None:
+        """Delete the conversation and its messages. Its id stops working."""
+        with self.sessions.begin() as session:
+            self._require(session, conversation_id)
+            session.execute(delete(MessageRow).where(MessageRow.conversation_id == conversation_id))
+            session.execute(delete(ConversationRow).where(ConversationRow.id == conversation_id))</code></pre>
+</div>
+  <p>אותן חמש מתודות, אותן חתימות, אותה חריגה. השינוי היחיד בממשק הוא <code>engine</code> בבנאי. <code>sessions.begin()</code> פותח <span class="en">session</span> ו-<span class="en">transaction</span>: ביציאה מה-<code>with</code> בלי חריגה הוא עושה <code>COMMIT</code>, ועם חריגה <code>ROLLBACK</code>. <code>send</code> בנוי לפי ה-<span class="en">callout</span> מסעיף 6.6: קריאה, שאלה למודל מחוץ ל-<span class="en">transaction</span>, ואז כתיבה אחת של שתי השורות. ה-<code>messages.pop()</code> מפרק 5 נעלם, כי כבר אין מה לבטל. ו-<code>delete</code> מוחק הודעות ושיחה באותה <span class="en">transaction</span>: את השיחה אי אפשר למחוק קודם, כי ה-<span class="en">foreign key</span> של ההודעות מצביע עליה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span><code>DATABASE_URL</code>, ושלוש שורות חיבור</h3>
+  <p>ב-<code>config.py</code>, שדה חדש ב-<code>Settings</code> ושורה ב-<code>load_settings</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\config.py (the additions)</span></div>
+<pre><code>    # Settings built in code (as in the tests) get a database in memory, never a file.
+    database_url: str = "sqlite://"
+...
+        database_url=os.getenv("DATABASE_URL", "sqlite:///agent.db"),</code></pre>
+</div>
+  <p>שתי ברירות מחדל, בכוונה. מי שמריץ את התוכנית מקבל קובץ, <code>agent.db</code>, בתיקייה שממנה הריץ (כמו <code>agent.log</code>). מי שבונה <code>Settings</code> בקוד, כמו הבדיקות מפרקים 3 ו-5, מקבל בסיס נתונים בזיכרון שנעלם בסוף הבדיקה, וכך אף בדיקה לא משאירה קובץ ולא רואה שיחות של בדיקה אחרת. ב-<code>cli.py</code> וב-<code>api.py</code>, ייבאו <code>from agent.db import make_engine</code>, ובנו את הליבה עם <span class="en">engine</span>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\cli.py, in chat_loop</span></div>
+<pre><code>    engine = make_engine(settings.database_url)
+    conversations = Conversations(client, settings.max_turns, engine)</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>agent\api.py, in create_app</span></div>
+<pre><code>    engine = make_engine(settings.database_url)
+    conversations = Conversations(client or make_client(settings), settings.max_turns, engine)
+    app = FastAPI(title="my-agent", version="0.6.0")</code></pre>
+</div>
+  <p>הריצו את ארבעת הכלים. <code>uv run pytest</code> מדווח <code>59 passed</code>: כל הבדיקות מפרקים 3 ו-5, בלי שינוי, עברו על הליבה החדשה. וודאו שלא נוצר קובץ: <code>ls *.db</code> מראה רק את <code>lab.db</code>. שמרו: <code>git add agent</code>, <code>git commit -m "Store conversations in the database"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>הניסוי מפרק 5, שוב</h3>
+  <p>הפעילו את השרת (<code>uv run uvicorn agent.api:create_app --factory</code>). בחלון שני, עם <code>ask.py</code> מתרגיל 5 בפרק 5:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python scripts\ask.py "hello"
+uv run python scripts\ask.py "my name is Dana" --conversation 51c950d25f8946ec883c0c66d8bb2832</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>[mock reply, turn 1] You said: hello
+(conversation 51c950d25f8946ec883c0c66d8bb2832, turns: 1)
+[mock reply, turn 2] You said: my name is Dana
+(conversation 51c950d25f8946ec883c0c66d8bb2832, turns: 2)</code></pre>
+</div>
+  <p>(המזהה אצלכם אחר: העתיקו את שלכם.) עכשיו <kbd>Ctrl</kbd>+<kbd>C</kbd> בחלון השרת, הפעילו אותו שוב, ושלחו הודעה שלישית לאותה שיחה:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python scripts\ask.py "do you remember me?" --conversation 51c950d25f8946ec883c0c66d8bb2832</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>[mock reply, turn 3] You said: do you remember me?
+(conversation 51c950d25f8946ec883c0c66d8bb2832, turns: 3)</code></pre>
+</div>
+  <p><code>turn 3</code>, לא <code>404</code>. תהליך חדש, ריק לגמרי, מצא את השיחה בקובץ. נסו גם בדף: שלחו הודעות, הפעילו מחדש, ורעננו. הקוד שכתבתם בתרגיל 6 בפרק 5 מביא את ההיסטוריה עם <code>GET /conversations/{id}</code>, והפעם היא שם.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>מסתכלים לתוך <code>agent.db</code></h3>
+  <p>כשמשהו נראה לא נכון, הדבר הראשון הוא להסתכל בנתונים עצמם, לא בקוד. בחלון השני:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python -m sqlite3 agent.db</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>sqlite&gt;</span></div>
+<pre><code>SELECT * FROM conversations;
+SELECT id, role, content FROM messages;
+SELECT sql FROM sqlite_master WHERE name = 'messages';</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>('51c950d25f8946ec883c0c66d8bb2832', '2026-11-18 12:31:23.369978')
+(1, 'user', 'hello')
+(2, 'assistant', '[mock reply, turn 1] You said: hello')
+(3, 'user', 'my name is Dana')
+(4, 'assistant', '[mock reply, turn 2] You said: my name is Dana')
+(5, 'user', 'do you remember me?')
+(6, 'assistant', '[mock reply, turn 3] You said: do you remember me?')
+('CREATE TABLE messages (\n\tid INTEGER NOT NULL, \n\tconversation_id VARCHAR(32) NOT NULL, \n\trole VARCHAR(16) NOT NULL, \n\tcontent TEXT NOT NULL, \n\tcreated_at DATETIME NOT NULL, \n\tPRIMARY KEY (id), \n\tFOREIGN KEY(conversation_id) REFERENCES conversations (id)\n)',)</code></pre>
+</div>
+  <p>השורה האחרונה היא ה-<code>CREATE TABLE</code> ש-SQLAlchemy כתב בשבילכם מתוך <code>MessageRow</code>. הזמן ב-<code>created_at</code> הוא <span class="en">UTC</span>, ולכן אולי שונה מהשעון שלכם. אפשר להשאיר את ה-<span class="en">shell</span> פתוח בזמן שהשרת רץ, כל עוד לא פתחתם בו <code>BEGIN</code>. יש גם תוספים ל-VS Code שמציגים קובץ SQLite כטבלה (חפשו <code>SQLite</code> ב-<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>); הכלי של Python מספיק לכל הפרק.</p>
+  <p>רוצים לראות את ה-<span class="en">SQL</span> של <code>send</code>? צרו בתיקיית הפרויקט קובץ זמני <code>try_orm.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>try_orm.py (delete it afterwards)</span></div>
+<pre><code>import logging
+
+from agent.conversations import Conversations
+from agent.db import make_engine
+from agent.llm import MockClient
+
+conversations = Conversations(MockClient(), 10, make_engine("sqlite://"))
+conversation_id = conversations.start()
+logging.basicConfig(format="%(message)s")
+logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)  # print every SQL statement
+conversations.send(conversation_id, "hello")</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>uv run python try_orm.py (shortened)</span></div>
+<pre><code>BEGIN (implicit)
+SELECT conversations.id, conversations.created_at
+FROM conversations
+WHERE conversations.id = ?
+SELECT messages.id, messages.conversation_id, messages.role, messages.content, messages.created_at
+FROM messages
+WHERE messages.conversation_id = ? ORDER BY messages.id
+ROLLBACK
+BEGIN (implicit)
+INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?) RETURNING id
+INSERT INTO messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?) RETURNING id
+[insertmanyvalues 2/2 (ordered; batch not supported)] ('6383e366de6d4cd8a341f61a26a1a72b', 'assistant', '[mock reply, turn 1] You said: hello', '2026-11-18 12:52:06.251721')
+COMMIT</code></pre>
+</div>
+  <p>כל מה שלמדתם בסעיפים 6.4 עד 6.6, בפלט אחד: <code>WHERE</code> עם <code>?</code> (<span class="en">parameters</span>, לא <span class="en">f-string</span>), <code>ORDER BY</code>, ושתי ה-<code>INSERT</code> בין <code>BEGIN</code> ל-<code>COMMIT</code>. השורה בסוגריים המרובעים היא הערכים שנשלחו בנפרד לשורה השנייה. הקריאה מסתיימת ב-<code>ROLLBACK</code> כי לא שונה בה כלום, וזו הדרך הזולה לסגור אותה. מחקו את <code>try_orm.py</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">6</span>בדיקה שהשיחה שורדת "הפעלה מחדש"</h3>
+  <p>הבדיקות מפרק 5 בודקות שהממשק לא נשבר, אבל אף אחת מהן לא בודקת את מה שבנינו: זיכרון אחרי הפעלה מחדש. צרו <code>tests\test_conversations.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_conversations.py</span></div>
+<pre><code>"""Tests for the core with a real database: in memory, or a file in a temporary folder."""
+
+from agent.conversations import Conversations
+from agent.db import make_engine
+from agent.llm import MockClient
+
+
+def test_a_conversation_survives_a_restart(tmp_path):
+    url = f"sqlite:///{tmp_path / 'test.db'}"  # pytest gives every test its own empty folder
+    first_run = make_engine(url)
+    before = Conversations(MockClient(), 10, first_run)
+    conversation_id = before.start()
+    before.send(conversation_id, "remember me")
+    first_run.dispose()  # close every connection, as a stopped server does
+
+    second_run = make_engine(url)  # a new engine on the same file: a restarted server
+    after = Conversations(MockClient(), 10, second_run)
+    messages = after.messages(conversation_id)
+    second_run.dispose()
+    assert len(messages) == 2
+    assert messages[0]["content"] == "remember me"
+
+
+def test_everything_is_saved_but_the_model_sees_only_recent_turns():
+    conversations = Conversations(MockClient(), 2, make_engine("sqlite://"))
+    conversation_id = conversations.start()
+    for message in ["one", "two", "three", "four"]:
+        reply = conversations.send(conversation_id, message)
+    # The mock counts the messages it was sent: two earlier turns plus the new message.
+    assert reply == "[mock reply, turn 3] You said: four"
+    assert len(conversations.messages(conversation_id)) == 8</code></pre>
+</div>
+  <p><code>tmp_path</code> הוא <span class="en">fixture</span> של pytest: תיקייה ריקה בתיקיית ה-<span class="en">temp</span> של Windows, שונה לכל בדיקה, מחוץ לפרויקט. הבדיקה הראשונה צריכה קובץ אמיתי, כי בסיס נתונים בזיכרון לא שורד את סגירת החיבור. זו בדיוק הנקודה. <code>uv run pytest</code>: <code>61 passed</code>. שמרו: <code>git add tests</code>, <code>git commit -m "Test that conversations survive a restart"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">7</span>הגבול של <code>create_all</code></h3>
+  <p>נניח שרוצים לתת לכל שיחה כותרת. ב-<code>ConversationRow</code>, הוסיפו מתחת ל-<code>id</code> את השורה <code>title: Mapped[str | None] = mapped_column(String(200))</code>, והריצו את הבדיקות: <code>61 passed</code>. ועכשיו את הסוכן, עם <code>agent.db</code> הקיים:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python -m agent</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (the end of the traceback)</span></div>
+<pre><code>sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) table conversations has no column named title
+[SQL: INSERT INTO conversations (id, title, created_at) VALUES (?, ?, ?)]</code></pre>
+</div>
+  <p>הבדיקות ירוקות כי כל בדיקה יוצרת בסיס נתונים חדש, עם הטבלה החדשה. אבל <code>agent.db</code> כבר מכיל טבלה ישנה, ו-<code>create_all</code> לא נוגע בטבלה שקיימת. אצלכם אפשר למחוק את הקובץ. בשרת אמיתי הקובץ הוא השיחות של כל המשתמשים, ומחיקה היא לא אפשרות. <strong>הגישה של הפרק הזה לא יודעת לשנות טבלה שכבר מכילה נתונים.</strong> זו הבעיה שפרק 7 פותר. בינתיים, בטלו את השינוי: <code>git restore agent\db.py</code>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.9</span>לא רק טבלאות: מאגרים אחרים, ואיך בוחרים</h2>
+
+<p>בעבודה תשמעו על עוד סוגים של מאגרי נתונים. כל אחד מהם נבנה כדי להיות מצוין בדבר אחד, על חשבון דברים אחרים. בחוברת לא נבנה אותם, אבל צריך לדעת מתי מישהו בצוות צודק כשהוא מציע אחד:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>סוג</th><th>דוגמאות</th><th>צורת הנתונים</th><th>מצוין ב</th><th>חלש ב</th></tr>
+  <tr><td>רלציוני</td><td>PostgreSQL, SQLite, MySQL</td><td>טבלאות, עמודות קבועות, מפתחות</td><td>נכונות: <span class="en">transactions</span>, <span class="en">foreign keys</span>, <code>JOIN</code>. שאלות שלא תכננתם מראש</td><td>שינוי מבנה דורש <span class="en">migration</span> (פרק 7)</td></tr>
+  <tr><td><span class="en">Document store</span></td><td>MongoDB</td><td>מסמכי <span class="en">JSON</span>, צורה שונה לכל מסמך</td><td>לקרוא ולכתוב רשומה שלמה לפי מזהה, כשהמבנה משתנה הרבה</td><td><code>JOIN</code> ועקביות בין מסמכים. הסדר עובר מבסיס הנתונים אל הקוד שלכם</td></tr>
+  <tr><td>אנליטי (<span class="en">columnar</span>)</td><td>ClickHouse, DuckDB, BigQuery</td><td>טבלאות ענק, שמורות עמודה-עמודה</td><td>סיכומים על מאות מיליוני שורות: "כמה הודעות ביום, לפי מודל"</td><td>עדכון ומחיקה של שורה בודדת, ו-<span class="en">transactions</span> קטנות ותכופות</td></tr>
+  <tr><td><span class="en">Cache (key-value)</span></td><td>Redis</td><td>מפתח וערך, בזיכרון</td><td>מהירות: אותה תשובה יקרה, נקראת שוב ושוב. מונים ותפוגה (<span class="en">TTL</span>)</td><td>אחסון שאסור לאבד. שאלות שאינן "תן לי את המפתח הזה"</td></tr>
+</table>
+</div>
+
+<p>מאגר אנליטי מהיר בסיכומים כי שאלה כמו "ממוצע אורך הודעה" צריכה עמודה אחת מתוך עשרים, והוא קורא רק אותה, דחוסה. <span class="en">Cache</span> מהיר כי הוא בזיכרון ולא שואל שאלות: אצל הסוכן, למשל, אפשר היה לשמור בו תשובה לשאלה שנשאלת מאה פעם ביום. אבל זיכרון נמחק, ולכן <span class="en">cache</span> הוא תמיד <em>עותק</em> של משהו שיש לו מקור אחר. ומאגר מסמכים נוח כשכל רשומה היא עולם בפני עצמו, אבל ההבטחות שקיבלתם בחינם בסעיף 6.4, כמו "אין הודעה בלי שיחה", עוברות לקוד שלכם.</p>
+
+<div class="callout good">
+  <span class="title">הכלל לבחירה</span>
+  <p>מתחילים מבסיס נתונים רלציוני, ובפרויקט שרץ על שרת, Postgres. מוסיפים מאגר אחר רק כשיש צורך מסוים שהוא לא עונה עליו, ושמדדתם: שאלות סיכום שלוקחות דקות (אנליטי), אותה קריאה יקרה שחוזרת אלפי פעמים (<span class="en">cache</span>), רשומות בלי מבנה משותף שנקראות תמיד בשלמותן (מסמכים, ולפעמים עמודת <span class="en">JSON</span> ב-Postgres מספיקה). כל מאגר נוסף הוא עוד דבר להריץ, לגבות, לנטר ולשמור מסונכרן. שאלו "מה יישבר אם לא נוסיף אותו?", לא "מה נוסיף?".</p>
+</div>
+
+<p>ומה עם שני תהליכים של השרת, שבפרק 5 ראינו שכל אחד מהם היה מכיר רק חצי מהשיחות? עכשיו שניהם קוראים את אותו בסיס נתונים. עם SQLite זה עובד כל עוד הם על אותו מחשב, וכותב אחד בכל רגע. כשהשרתים על מחשבים שונים, צריך בסיס נתונים שהוא שרת בעצמו, כמו Postgres. נגיע לזה בפרק 8.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.10</span>תרגילים</h2>
+
+<p>כל התרגילים על הענף <code>feature/database</code>. בתרגילים שמשנים קוד, הריצו בסוף את ארבעת הכלים ו-<span class="en">commit</span>. פתרונות, כולל הפלטים, נמצאים <a href="solutions/chapter-06.html">בדף נפרד</a>.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · ארבע שאלות ב-<span class="en">SQL</span></h3><span class="level">מודרך</span></div>
+  <p>פתחו שוב את <code>lab.db</code> וכתבו, כל אחת בפקודה אחת:</p>
+  <ol>
+    <li>התוכן של ההודעות בשיחה <code>c1</code>, מהחדשה לישנה (רמז: <code>DESC</code>).</li>
+    <li>כמה הודעות יש מכל <code>role</code>.</li>
+    <li>הוסיפו שיחה <code>c3</code> בלי הודעות, ומצאו בשאלה אחת את כל השיחות שאין בהן אף הודעה (רמז: <code>LEFT JOIN</code> ו-<code>IS NULL</code>).</li>
+    <li>מחקו את השיחה <code>c2</code> ואת ההודעות שלה. נסו קודם למחוק רק את השיחה, אחרי <code>PRAGMA foreign_keys = ON;</code>. מה קרה? עשו את זה נכון, ב-<span class="en">transaction</span> אחת.</li>
+  </ol>
+  <label class="answer-label" for="n-ex1">השאלות שכתבתם, ומה קרה במשימה 4 בניסיון הראשון:</label>
+  <textarea class="answer" id="n-ex1" data-id="c06-n1" dir="ltr"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c06-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · מה באמת נשמר</h3><span class="level">מודרך</span></div>
+  <p>הגדירו בחלון <code>$env:CHAT_MAX_TURNS = "2"</code>, הריצו את הסוכן ב-<span class="en">terminal</span> (<code>uv run python -m agent</code>, עם <code>CHAT_MOCK=1</code> ב-<code>.env</code>), וכתבו חמש הודעות. פתחו את <code>agent.db</code> וכתבו שאלה אחת שמחזירה לכל שיחה את המזהה, את <code>created_at</code> ואת מספר ההודעות, מהישנה לחדשה. בסוף, <code>Remove-Item Env:CHAT_MAX_TURNS</code>.</p>
+  <label class="answer-label" for="n-ex2">כמה הודעות נשמרו בשיחה, ומה אמרה תשובת ה-<span class="en">mock</span> האחרונה על מה שהמודל ראה? השוו את ה-<code>CREATE TABLE</code> של SQLAlchemy לזה שכתבתם ביד בסעיף 6.4: מצאו שלושה הבדלים.</label>
+  <textarea class="answer" id="n-ex2" data-id="c06-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c06-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · כמה שווה <span class="en">index</span></h3><span class="level mid">בינוני</span></div>
+  <p>כתבו <code>scripts\index_lab.py</code> עם המודול <code>sqlite3</code> של Python בלבד, ובסיס נתונים בזיכרון (<code>sqlite3.connect(":memory:")</code>), כדי שלא יישאר קובץ. הסקריפט יוצר טבלת <code>messages</code>, ממלא אותה ב-500,000 הודעות מזויפות ב-10,000 שיחות (<code>executemany</code> עם <code>?</code>, לא <span class="en">f-string</span>), ומודד את הזמן הממוצע של <code>SELECT content FROM messages WHERE conversation_id = ? ORDER BY id</code> על 200 שיחות שונות, לפני <code>CREATE INDEX</code> ואחריו. הדפיסו גם את ה-<code>EXPLAIN QUERY PLAN</code> ואת הזמן שלקח לבנות את ה-<span class="en">index</span>. <code>mypy agent scripts</code> צריך לעבור.</p>
+  <label class="answer-label" for="n-ex3">מה מדדתם? פי כמה מהר יותר, ומה המחיר ששילמתם?</label>
+  <textarea class="answer" id="n-ex3" data-id="c06-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c06-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · <code>--continue</code></h3><span class="level mid">בינוני</span></div>
+  <p>ב-<span class="en">terminal</span>, כל הרצה פותחת שיחה חדשה. הוסיפו ל-<code>Conversations</code> מתודה <code>latest()</code> שמחזירה את המזהה של השיחה החדשה ביותר, או <code>None</code>, בשאלה אחת (רמז: <code>order_by(...desc())</code> ו-<code>limit(1)</code>). הוסיפו ל-<code>chat_loop</code> פרמטר <code>resume: bool = False</code>, ול-<code>main</code> דגל <code>--continue</code> עם <code>argparse</code> (<code>continue</code> היא מילה שמורה: <code>dest="resume"</code>). בהמשך שיחה, הדפיסו <code>Continuing the last conversation (N turns).</code>. כתבו בדיקה ב-<code>test_cli.py</code> שמריצה <code>chat_loop</code> פעמיים על אותו קובץ ב-<code>tmp_path</code> (רמז: <code>dataclasses.replace</code> על <code>SETTINGS</code>).</p>
+  <label class="answer-label" for="n-ex4">למה הבדיקה הזו צריכה קובץ ב-<code>tmp_path</code>, ולא עובדת עם ברירת המחדל של <code>Settings</code>?</label>
+  <textarea class="answer" id="n-ex4" data-id="c06-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c06-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · בדיקות ל-<span class="en">transactions</span></h3><span class="level mid">בינוני</span></div>
+  <p>כתבו ב-<code>test_conversations.py</code> שלוש בדיקות, שבודקות את בסיס הנתונים <em>ישירות</em>, ב-<span class="en">SQL</span> (<code>engine.connect()</code> ו-<code>text("SELECT COUNT(*) FROM messages")</code>), ולא דרך הקוד שנבדק: (א) מודל שנכשל (<code>BrokenClient</code>) לא משאיר אף שורה; (ב) <code>delete</code> מוחק גם את ההודעות של השיחה, ולא נוגע בשיחה אחרת; (ג) בסיס הנתונים מסרב ל-<code>MessageRow</code> של שיחה שלא קיימת (<code>IntegrityError</code>). אחר כך שברו בכוונה את <code>send</code>: שמרו את הודעת המשתמש ב-<span class="en">transaction</span> משלה, <em>לפני</em> השאלה למודל. איזו בדיקה נכשלה? החזירו.</p>
+  <label class="answer-label" for="n-ex5">מה הייתה ההודעה של הבדיקה שנכשלה? ומה היה קורה למשתמש אמיתי עם הגרסה השבורה?</label>
+  <textarea class="answer" id="n-ex5" data-id="c06-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c06-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · לבחור מאגר</h3><span class="level open">פתוח</span></div>
+  <p>לכל אחד מהתרחישים, בחרו איפה הייתם שומרים את הנתונים, והסבירו לפי הכלל מסעיף 6.9. מותר לענות "באותו Postgres", ומותר להציע שני מאגרים.</p>
+  <ol>
+    <li>מנהלת המוצר רוצה גרף יומי: כמה הודעות, כמה <span class="en">tokens</span> ומאיזה מודל, על שנתיים של שיחות, 300 מיליון הודעות.</li>
+    <li>הסוכן יקבל כלים (פרק 18). כל קריאה לכלי מחזירה <span class="en">JSON</span> בצורה אחרת, ורוצים לשמור אותו ליד ההודעה.</li>
+    <li>שאלת "מה שעות הפתיחה?" נשאלת אלף פעם ביום, ותשובה של Claude עולה כסף.</li>
+    <li>צריך להגביל כל <span class="en">API key</span> ל-60 בקשות בדקה (פרק 14).</li>
+  </ol>
+  <p>בסוף, עדכנו את <code>README.md</code> (<code>DATABASE_URL</code> בטבלת המשתנים, איך מסתכלים לתוך <code>agent.db</code>, <code>--continue</code>, הקבצים החדשים) ואת <code>.env.example</code>, <span class="en">commit</span>, ואחדו: <code>git switch main</code>, <code>git merge feature/database</code>, <code>git push</code>, <code>git branch -d feature/database</code>.</p>
+  <label class="answer-label" for="n-ex6">הבחירות שלכם, והמחיר של כל מאגר נוסף שהצעתם:</label>
+  <textarea class="answer" id="n-ex6" data-id="c06-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c06-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.11</span>בדקו את עצמכם</h2>
+
+<p>סמנו רק מה שאתם מסוגלים להסביר בקול רם לאדם אחר, בלי להציץ בפרק.</p>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c06-chk1"><span>אני יודע/ת להסביר מה <span class="en">primary key</span> ו-<span class="en">foreign key</span>, ולמה ההודעות בטבלה נפרדת מהשיחות.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c06-chk2"><span>אני יודע/ת לכתוב <code>SELECT</code> עם <code>WHERE</code>, <code>ORDER BY</code>, <code>JOIN</code> ו-<code>GROUP BY</code>, ולמה <code>DELETE</code> בלי <code>WHERE</code> מסוכן.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c06-chk3"><span>אני יודע/ת מה ההבדל בין <code>SCAN</code> ל-<code>SEARCH</code>, ומה <span class="en">index</span> עולה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c06-chk4"><span>אני יודע/ת להסביר <span class="en">transaction</span>, <code>COMMIT</code> ו-<code>ROLLBACK</code>, ולמה <code>send</code> לא מחזיקה <span class="en">transaction</span> בזמן השאלה למודל.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c06-chk5"><span>אני יודע/ת מה <span class="en">ORM</span> עושה, ומה התפקיד של <span class="en">model</span>, <span class="en">engine</span> ו-<span class="en">session</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c06-chk6"><span>אני יודע/ת מה זה <span class="en">SQL injection</span>, ואיך <span class="en">parameters</span> מונעים אותו.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c06-chk7"><span>אני יודע/ת למה הבדיקות לא משאירות קובץ בסיס נתונים, ואיך בדיקה מדמה הפעלה מחדש.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c06-chk8"><span>אני יודע/ת להסביר מה <code>create_all</code> לא יודע לעשות, ולמה בדיקות ירוקות לא הוכיחו כאן כלום.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c06-chk9"><span>אני יודע/ת מתי לבחור <span class="en">document store</span>, מאגר אנליטי או <span class="en">cache</span>, ומה כל מאגר נוסף עולה.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.12</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td><code>sqlite3 : The term 'sqlite3' is not recognized</code></td><td>הכלי <code>sqlite3</code> הנפרד לא מותקן ב-Windows</td><td>השתמשו ב-<code>uv run python -m sqlite3 agent.db</code> מתוך תיקיית הפרויקט</td></tr>
+  <tr><td>ה-<span class="en">shell</span> מציג <code>...</code> ולא מריץ</td><td>חסר <code>;</code> בסוף הפקודה</td><td>הקלידו <code>;</code> ו-<kbd>Enter</kbd></td></tr>
+  <tr><td><code>table conversations has no column named title</code></td><td>שיניתם מחלקה ב-<code>db.py</code>, ו-<code>create_all</code> לא משנה טבלה קיימת</td><td>במחשב שלכם: עצרו את השרת ומחקו את <code>agent.db</code> (השיחות יימחקו). בשרת אמיתי: פרק 7</td></tr>
+  <tr><td><code>no such table: conversations</code> בבדיקות</td><td>בסיס נתונים בזיכרון בלי <code>StaticPool</code>: כל חיבור מקבל בסיס נתונים ריק משלו</td><td>בנו <span class="en">engines</span> רק עם <code>make_engine</code></td></tr>
+  <tr><td><code>database is locked</code>, אחרי כחמש שניות</td><td>תהליך אחר מחזיק <span class="en">transaction</span> פתוחה, למשל <span class="en">shell</span> שבו כתבתם <code>BEGIN</code></td><td><code>COMMIT;</code> או <code>ROLLBACK;</code> ב-<span class="en">shell</span>, או <code>.quit</code></td></tr>
+  <tr><td><code>The process cannot access the file ... agent.db because it is being used by another process</code></td><td>מנסים למחוק את <code>agent.db</code> כשהשרת או ה-<span class="en">shell</span> עוד פתוחים</td><td>עצרו את השרת (<kbd>Ctrl</kbd>+<kbd>C</kbd>) וצאו מה-<span class="en">shell</span>, ואז מחקו</td></tr>
+  <tr><td>הודעה של שיחה שלא קיימת נכנסה בלי שגיאה ב-<span class="en">shell</span></td><td>SQLite בודק <span class="en">foreign keys</span> רק אחרי <code>PRAGMA foreign_keys = ON</code>, בכל חיבור מחדש</td><td>הריצו את ה-<code>PRAGMA</code> בכל פתיחה של ה-<span class="en">shell</span>. הקוד עושה זאת לבד</td></tr>
+  <tr><td>השיחות "נעלמו", ויש <code>agent.db</code> חדש בתיקייה אחרת</td><td><code>sqlite:///agent.db</code> יחסי לתיקיית העבודה (פרק 1)</td><td>הריצו מתיקיית הפרויקט, או נתיב מלא ב-<code>DATABASE_URL</code></td></tr>
+  <tr><td><code>agent.db</code> מופיע ב-<code>git status</code></td><td>חסר <code>*.db</code> ב-<code>.gitignore</code></td><td>הוסיפו אותו (סעיף 6.4). אם כבר עשיתם <span class="en">commit</span>: <code>git rm --cached agent.db</code></td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.13</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>database</dt><dd>תוכנה ששומרת נתונים מחוץ לתהליך, ומבטיחה גישה בטוחה, מהירה ובו-זמנית אליהם.</dd>
+  <dt>relational</dt><dd>מודל שבו הכול בטבלאות, והקשרים בין טבלאות נבנים ממפתחות.</dd>
+  <dt>table / row / column</dt><dd>טבלה / רשומה אחת / שדה עם שם ו-<span class="en">type</span> קבועים.</dd>
+  <dt>primary key</dt><dd>עמודה שהערך בה שונה בכל שורה, ומזהה אותה.</dd>
+  <dt>foreign key</dt><dd>עמודה שמצביעה על <span class="en">primary key</span> בטבלה אחרת.</dd>
+  <dt>SQL</dt><dd>שפה הצהרתית לשאילת שאלות ולשינוי נתונים בבסיס נתונים רלציוני.</dd>
+  <dt>SQLite</dt><dd>בסיס נתונים רלציוני שכולו קובץ אחד, בלי שרת. מובנה ב-Python.</dd>
+  <dt>index</dt><dd>מבנה ממוין לצד הטבלה, שמאפשר למצוא שורות בלי לקרוא את כולה. מאט כתיבה.</dd>
+  <dt>transaction</dt><dd>קבוצת שינויים שמתקיימת כולה (<code>COMMIT</code>) או לא בכלל (<code>ROLLBACK</code>).</dd>
+  <dt>ACID</dt><dd>ארבע ההבטחות של <span class="en">transaction</span>: <span class="en">atomicity, consistency, isolation, durability</span>.</dd>
+  <dt>ORM</dt><dd>ספרייה שממפה מחלקות לטבלאות ואובייקטים לשורות, וכותבת את ה-SQL.</dd>
+  <dt>engine / session</dt><dd>ב-SQLAlchemy: החיבור לבסיס הנתונים / יחידת עבודה אחת מולו.</dd>
+  <dt>SQL injection</dt><dd>פרצה שבה קלט של משתמש הופך לחלק מפקודת SQL. נמנעת עם <span class="en">parameters</span>.</dd>
+  <dt>document store</dt><dd>מאגר ששומר מסמכי JSON, בלי מבנה קבוע. למשל MongoDB.</dd>
+  <dt>columnar / analytical</dt><dd>מאגר ששומר עמודה-עמודה, ומהיר בסיכומים על המון שורות. למשל ClickHouse.</dd>
+  <dt>cache</dt><dd>עותק מהיר, בזיכרון, של נתונים שיש להם מקור אחר. למשל Redis.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">6.14</span>מה הלאה</h2>
+
+<p>הסוכן זוכר: כל הודעה נשמרת ב-<span class="en">transaction</span>, שיחות שורדות הפעלה מחדש, ה-<span class="en">API</span>, הדף וה-<span class="en">CLI</span> לא השתנו, והבדיקות רצות על בסיס נתונים בזיכרון. אבל בצעד 7 ראיתם את הגבול: ברגע ש-<code>agent.db</code> מכיל נתונים, כל שינוי במבנה של טבלה, כמו כותרת לשיחה או מזהה משתמש, שובר את התוכנית. למחוק את הקובץ זה למחוק את השיחות של כולם.</p>
+
+<p>איך משנים מבנה של טבלה שכבר מלאה, בלי לאבד דבר, ממלאים ערך לשורות הישנות, ויכולים לחזור אחורה אם משהו השתבש? זה <strong>פרק 7: <span class="en">Migrations</span></strong>, עם Alembic. ו-<code>create_all</code> יפנה שם את מקומו.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-06</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים, בלי <code>.git</code> ובלי קובץ בסיס נתונים. <code>uv run pytest</code> מדווח על 65 בדיקות שעוברות, ו-<code>ruff</code> ו-<code>mypy agent scripts</code> נקיים.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-06.html">פתרונות לפרק 6</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

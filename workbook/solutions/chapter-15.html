@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 15 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-15.html">→ חזרה לפרק 15</a>
+    <span>פתרונות לפרק 15</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 15 · עבודה בצוות</h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. ברוב התרגילים כאן אין תשובה אחת נכונה: מה שמוצג הוא דוגמה אחת סבירה, והפלטים הם מה שהתקבל באמת. הקבצים המלאים נמצאים ב-<code>checkpoints\chapter-15</code>.</p>
+</header>
+
+<h2><span class="sec">1</span>מכרטיס עמום לכרטיס טוב</h2>
+<div class="codebox">
+  <div class="label"><span>the message to the security reviewer</span></div>
+<pre><code>About AGENT-43 (delete old conversations). Six questions, numbers are fine:
+1. How old is "old", and counted from what: the start, or the last message?
+2. One period for everyone, or per client?
+3. Deleted the same way as DELETE /conversations/{id}, with the notes?
+4. What about the usage statistics, the Kafka events (7 days) and backups?
+5. When should it run, and how often?
+6. Must users be told? Is that part of this ticket?</code></pre>
+</div>
+<p>התשובות, והכרטיס שנכתב מהן, נמצאים ב-<code>examples\team\ticket-AGENT-43.md</code>. ששת תנאי הקבלה שם: מחיקה אחרי <code>CHAT_RETENTION_DAYS</code> (ברירת מחדל 90) מאז ההודעה <em>האחרונה</em>, דרך ה-<span class="en">saga</span>; שיחה פעילה לא נוגעים בה; פעם בלילה, וריצה שנייה לא מוחקת עוד; לוג ומדד עם מספרים, וכישלון לא עוצר את הריצה; שיחות שנשארו <span class="en">archived</span> נגמרות באותה ריצה; ו-<code>docs\security.md</code> מתעדכן. מחוץ לכרטיס: גיבויים, תקופה לכל לקוח, והודעה למשתמשים.</p>
+<p>השאלה שהכי שינתה היא הראשונה. "שיחות ישנות" לפי <code>created_at</code> הייתה מוחקת שיחה שהמשתמש פתח לפני חצי שנה וכתב בה אתמול. התשובה "מההודעה האחרונה" הופכת שאילתה פשוטה לשאילתה עם <code>GROUP BY</code> על <code>messages</code>, ומשנה את ההערכה. השאלה השלישית קבעה שההערות נמחקות יחד עם השיחה: בלעדיה, מחיקה ישירה מהטבלה הייתה משאירה הערות יתומות בשירות ההערות.</p>
+
+<h2><span class="sec">2</span>הערכה, ועדכון כשהיא לא מחזיקה</h2>
+<div class="codebox output">
+  <div class="label"><span>docs\design\2026-11-20-conversation-retention.md, "Estimate"</span></div>
+<pre><code>| Task                                                          | Estimate (hours) | Unknown?               |
+| Spike: the query on Postgres and SQLite, with naive UTC times | 1 to 2           | yes: do it first       |
+| PR 1: query, --dry-run, tests                                 | 2 to 3           |                        |
+| PR 2: delete through the saga, log, metric, tests             | 2 to 4           | the saga with many ids |
+| PR 3: compose service, schedule, runbook, security.md         | 2 to 4           | the scheduler on Windows |
+| PR 4: archived conversations                                  | 1 to 2           |                        |
+| Review rounds                                                 | 2 to 3           |                        |
+| Total                                                         | 10 to 18 (two to three days) |            |</code></pre>
+</div>
+<p>הטווח הכולל רחב, כי יש בו שלושה לא-ידועים. מתחילים ב-<span class="en">spike</span>, והשאלה שלו: "האם שאילתה אחת מוצאת את השיחות שההודעה האחרונה שלהן ישנה מ-90 יום, באותה תוצאה ב-SQLite וב-Postgres, כשהזמנים שמורים בלי אזור זמן?" כל <span class="en">pull request</span> עומד לבד: הראשון רק מוצא ומדפיס (<code>--dry-run</code>), כך שגם אם השני מתעכב, שום דבר לא נמחק ו-<code>main</code> לא נשבר.</p>
+<div class="codebox">
+  <div class="label"><span>the status update</span></div>
+<pre><code>AGENT-43 (retention): spike done. created_at is stored as UTC without a time zone, so the
+cutoff must be naive UTC too, or SQLite and Postgres disagree by the local offset.
+New estimate: 11 to 19 hours (+1 for tests at the 90-day edge). Still in this sprint.
+Next: PR 1 (query and --dry-run). Blocked: nothing.</code></pre>
+</div>
+<p>שימו לב למה שיש בעדכון: מה התגלה, מה זה משנה, ההערכה החדשה כטווח, והאם זה משנה תוכניות של מישהו אחר. מה שאין בו: התנצלות, או פירוט של איך גיליתם.</p>
+
+<h2><span class="sec">3</span>ה-<span class="en">ADR</span> הראשון</h2>
+<div class="codebox">
+  <div class="label"><span>docs\adr\0001-migrations-run-as-a-separate-step.md (excerpt)</span></div>
+<pre><code>## Decision
+
+Migrations run only as their own step: `alembic upgrade head` by hand, the `migrate` service
+in `compose.yaml`, and step 1 of `scripts/deploy.py`. The app never migrates. At startup it
+checks the database (`check_schema` in `agent/db.py`): behind the code, it refuses to start;
+ahead of the code (a rollback), it logs a warning and runs.
+
+## Consequences
+
+- One process migrates, once, and its output is read before the app starts.
+- A failed migration stops the deploy before any new code serves users.
+- A rollback runs old code on the new schema (`--skip-migrations`), so every migration must
+  work with the version before it: expand first, contract in a later release.
+- One more step to remember on a new machine (`alembic upgrade head`, in the README setup).
+- Data migrations that need Python (like `0008`) cannot be printed with `--sql`.</code></pre>
+</div>
+<p>ההשלכה שכדאי שמצטרף חדש יידע ביום הראשון: כל <span class="en">migration</span> חייב לעבוד עם הגרסה הקודמת של הקוד, כי <span class="en">rollback</span> מריץ קוד ישן על הנתונים החדשים. זה הכלל שהכי קל לשבור בלי לשים לב. ההשלכה שהתגלתה בפרק הזה היא האחרונה ברשימה, וזה בדיוק התפקיד של ADR: הוא נכתב אחרי שההחלטה כבר חיה, ומתעדכן בהשלכות שלה. החלופות שנפסלו: <span class="en">migration</span> בעלייה של האפליקציה (כמה עותקים מתחרים, ובדיקת בריאות שנכשלת באמצע <span class="en">migration</span> ארוך), ו-<code>create_all</code> מפרק 6 (לא משנה טבלאות קיימות).</p>
+
+<h2><span class="sec">4</span>באג אחרי <span class="en">merge</span></h2>
+<div class="codebox output">
+  <div class="label"><span>GET /conversations, the newest one</span></div>
+<pre><code>{"conversation_id":"a647b3aadd1244e6b8a7c5449565dfd0","title":"Please review my plan: 1. Read the ticket 2...."}</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>AGENT-44</span></div>
+<pre><code>A title cut right after a word that ends in a dot ("2.") ends in four dots: "... ticket 2....".
+Expected: the cut ends in exactly "...": "... ticket 2...".
+Titles already saved this way stay as they are (rare; no migration).</code></pre>
+</div>
+<p>המקרה החדש ב-<code>tests\test_titles.py</code>, לפני התיקון:</p>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest tests\test_titles.py (shortened)</span></div>
+<pre><code>E       AssertionError: assert 'Please revie... ticket 2....' == 'Please revie...e ticket 2...'
+E         - ticket 2...
+E         + ticket 2....
+1 failed, 17 passed</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>agent\conversations.py, the last line of make_title</span></div>
+<pre><code>    return words[:end].rstrip(".,;:") + CUT  <span class="cm"># "2." + "..." would read "2...."</span></code></pre>
+</div>
+<p>אחרי התיקון: 18 עוברות בקובץ, 157 בכל הבדיקות (5 מדולגות בלי Postgres). ב-<code>CHANGELOG.md</code>, תחת <span class="en">Unreleased</span>, <span class="en">Fixed</span>: "A title cut after a word that ends in a dot (<code>2.</code>) no longer ends in four dots (AGENT-44). Titles made before keep theirs." וה-<span class="en">docstring</span> של <code>make_title</code> עודכן: ל-<code>0008</code> יש עותק של הכלל כפי שהיה אז, והעותק לא משתנה.</p>
+<p><strong>למה לא נוגעים ב-<code>0008</code>:</strong> הוא כבר רץ, אצלכם וב-<span class="en">staging</span>. שינוי בו לא ירוץ שוב על בסיסי נתונים שכבר ב-<code>0008</code>, ויתנהג אחרת על בסיסי נתונים חדשים: אותו <span class="en">revision</span>, שתי תוצאות. אילו רצינו לתקן כותרות קיימות, זה היה <code>0009</code> חדש. כאן ההחלטה (כתובה בכרטיס) היא לא לתקן: מקרה נדיר, ותיקון של נקודה אחת לא שווה <span class="en">migration</span> על כל הטבלה.</p>
+<p><strong>התנאי שהיה חסר ב-<span class="en">AGENT-42</span>:</strong> <span class="en">"A title never ends in more than the three dots of the cut."</span> הבדיקות בדקו בדיוק את מה שתנאי הקבלה אמרו, ולא יותר. לכן כדאי לכתוב בתנאי הקבלה גם מה <em>לא</em> צריך לקרות, ולנסות מקרים "מכוערים" (פיסוק, רשימות, אימוג'י, טקסט מימין לשמאל) עוד לפני ה-<span class="en">review</span>.</p>
+
+<h2><span class="sec">5</span><span class="en">Review</span> משני הצדדים</h2>
+<div class="codebox output">
+  <div class="label"><span>trying the teammate's change</span></div>
+<pre><code>PS&gt; $env:CHAT_TITLE_LENGTH = "2"
+PS&gt; uv run python -c "from agent.conversations import make_title; t = make_title('hello world'); print(repr(t), len(t))"
+'hello worl...' 13
+
+PS&gt; $env:CHAT_TITLE_LENGTH = "fifty"; uv run python -m agent
+    TITLE_LENGTH = int(os.getenv("CHAT_TITLE_LENGTH", "50"))  # Dana wants longer titles
+ValueError: invalid literal for int() with base 10: 'fifty'
+
+CHAT_TITLE_LENGTH=300, a long first message, on Postgres:
+sqlalchemy.exc.DataError: (psycopg.errors.StringDataRightTruncation) value too long for type character varying(200)</code></pre>
+</div>
+<p>(<code>Remove-Item Env:CHAT_TITLE_LENGTH</code> בסוף.) ה-<span class="en">review</span>:</p>
+<div class="codebox">
+  <div class="label"><span>review comments</span></div>
+<pre><code>Overall: thanks, a setting makes sense if Dana needs longer titles. Is there a ticket? The PR has
+no description, so I am not sure what length she needs, or whether it is per client. Requesting
+changes for the first two points; the rest are suggestions.
+
+must: with CHAT_TITLE_LENGTH=300, Postgres fails on the first message: "value too long for type
+  character varying(200)". SQLite does not check lengths, so the tests pass. Either an upper bound
+  (200) or a migration that widens the column.
+must: the value is not checked. "fifty" crashes at import, before logging is set up; "2" gives
+  a 13-character title ("hello worl..."). Please read it in config.py with read_positive_int,
+  like CHAT_MAX_TURNS, with a lower bound that leaves room for "...", and a ConfigError.
+suggestion: put it in Settings and pass it in, instead of a module constant read at import;
+  tests can then set it without the environment.
+suggestion: a test with a short and a long limit; .env.example and the README table.
+question: should old conversations follow the new length? 0008 used 50 on purpose.
+nit: the comment says why someone asked, not what the line does.</code></pre>
+</div>
+<p>והתשובה להערה על ה-<span class="en">pull request</span> שלכם:</p>
+<div class="codebox">
+  <div class="label"><span>reply</span></div>
+<pre><code>Good point, it does look nicer. I chose three ASCII dots on purpose: titles are printed in the
+terminal (--continue) and written to files, and "…" breaks in some Windows code pages. It is in the
+design doc under Decision. If Dana's app wants "…", it can replace a trailing "..." when it shows
+the title. Leaving it as is; happy to talk if you see a case I missed.</code></pre>
+</div>
+<p>התשובה מודה במה שנכון בהערה, נותנת את הסיבה עם קישור למקום שבו היא כתובה, מציעה דרך אחרת, ומשאירה את הדלת פתוחה. זו <span class="en">suggestion</span>, ולכן ההחלטה של הכותב; על <strong>must</strong> לא עונים "לא" בלי שיחה.</p>
+
+<h2><span class="sec">6</span>מסמך תכנון למחיקת שיחות</h2>
+<p>הדוגמה נמצאת ב-<code>docs\design\2026-11-20-conversation-retention.md</code>. ההחלטה בה: פקודה בתוך ה-<span class="en">image</span> של הצ'אט, <code>python -m agent.retention</code>, שמתזמן חיצוני מריץ פעם בלילה, עם <code>--dry-run</code> ו-<code>--limit</code>. היא משתמשת ב-<code>delete_conversation</code> מ-<code>agent\saga.py</code>, כך שיש דרך אחת בלבד למחוק שיחה. Airflow נפסל כי <code>pipelines\</code> לא מייבא את <code>agent</code> (פרק 12), ולולאה ב-<code>api</code> נפסלה כי היא רצה פעם אחת לכל עותק.</p>
+<p>הסיכון הכי מדאיג: שאילתה שמוחקת את השיחות הלא נכונות, כי מחיקה לא חוזרת. ההגנה היא בשלוש שכבות: בדיקות בקצוות (בדיוק 90 יום, שיחה בלי הודעות, שיחה <span class="en">archived</span>), שחרור ראשון שבו התזמון מריץ רק <code>--dry-run</code> במשך שבוע ב-<span class="en">staging</span> וב-<span class="en">prod</span> (מספרים בלוג ובמדד, בלי למחוק), ורק אז <span class="en">deploy commit</span> שמדליק את המחיקה. ה-<span class="en">rollback</span> הוא לעצור את התזמון; מה שנמחק נשאר מחוק, ולכן השאלה הפתוחה על גיבויים כתובה במסמך.</p>
+<p>מה שהיה צריך לקרוא בקוד כדי לכתוב אותו: <code>agent\saga.py</code> (שלושת השלבים, ומה קורה לשיחה <span class="en">archived</span>), <code>docs\architecture.md</code> (הפער של ה-<span class="en">saga</span> שנכשלה), <code>agent\db.py</code> (<code>created_at</code> עם <code>now()</code> ב-UTC, נשמר בלי אזור זמן), <code>0004</code> (האינדקס על <code>conversations.created_at</code>, ואין אינדקס על <code>messages.created_at</code>), ו-<code>docs\security.md</code>.</p>
+
+<h2><span class="sec">·</span>ההיסטוריה של הפרק</h2>
+<div class="codebox output">
+  <div class="label"><span>git log --oneline v0.14.0..</span></div>
+<pre><code>2c540e8 ADR 0001, and the retention ticket and design (AGENT-43)
+704175a Titles cut after a word that ends in a dot end in three dots, not four (AGENT-44)
+7f361d4 version 0.15.0
+9d11078 AGENT-42: the pull request description, and the estimate against what happened
+8c625d3 Pin the owner backfill test to 0007, like the title test
+e6acd05 Document titles, the definition of done, and a pull request template
+d774309 Migration 0008: cut the titles of existing conversations after a whole word
+207d1e2 New conversations get a one-line title, cut after a whole word
+33ef508 Design: readable conversation titles (AGENT-42)</code></pre>
+</div>
+<p>הענפים: <code>fix/readable-titles</code> (חמשת ה-<span class="en">commits</span> הראשונים ועוד אחד), <code>release/0.15.0</code> ותגית <code>v0.15.0</code>, <code>fix/title-ends-in-four-dots</code>, ו-<code>docs/team-examples</code>; כולם מוזגו ונמחקו. הענף הזמני של תרגיל 5 נמחק בלי <span class="en">merge</span>.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-15.html">→ חזרה לפרק 15</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

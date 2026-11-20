@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 10 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-10.html">→ חזרה לפרק 10</a>
+    <span>פתרונות לפרק 10</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 10 · <span class="en">Deployment</span> וענן</h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. הפלטים כאן הם מה שהתקבל באמת כשהתרגילים נעשו; הזמנים, המזהים והמפתחות אצלכם יהיו אחרים. הקוד המלא נמצא ב-<code>checkpoints\chapter-10</code>.</p>
+</header>
+
+<h2><span class="sec">1</span>חי, אבל לא מוכן</h2>
+<div class="codebox output">
+  <div class="label"><span>step 1 (shortened, some columns left out)</span></div>
+<pre><code>HTTP/1.1 200 OK
+...
+HTTP/1.1 503 Service Unavailable
+content-type: application/json
+
+{"status":"not ready","database":"unreachable","version":"0.10.0","environment":"staging"}
+
+NAME                     IMAGE             SERVICE   STATUS
+my-agent-staging-api-1   my-agent:0.10.0   api       Up About a minute (unhealthy)</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>step 2 (shortened)</span></div>
+<pre><code>4 running
+api-1  | sqlalchemy.exc.OperationalError: (psycopg.OperationalError) failed to resolve host 'db': [Errno -2] Name or service not known
+api-1  | (Background on this error at: https://sqlalche.me/e/21/e3q8)</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>step 3</span></div>
+<pre><code>SERVICE   STATUS
+api       Up 32 seconds (healthy)
+db        Up 30 seconds (healthy)
+5 running
+{"status":"ready","database":"ok","version":"0.10.0","environment":"staging"}</code></pre>
+</div>
+<p><strong>שלב 1:</strong> <code>/health</code> ענה 200 ו-<code>/ready</code> ענה 503. התהליך חי, אבל אין לו איך לשרת צ'אט. אחרי שלושה כישלונות של ה-<code>HEALTHCHECK</code> הסטטוס הפך ל-<code>unhealthy</code>, ו-Docker לא עשה שום דבר מעבר לזה: הוא רק מדווח. (<code>db</code> לא מופיע ב-<code>ps</code> כי הוא עצור; <code>ps -a</code> מראה גם אותו.)</p>
+<p><strong>שלב 2:</strong> בהפעלה, <code>make_engine</code> בודק את ה-<span class="en">migrations</span> ונכשל, uvicorn יוצא, ו-<code>restart: unless-stopped</code> מפעיל אותו שוב. ארבע הפעלות ב-25 שניות; Docker מאריך את ההמתנה בין ניסיונות, כדי לא לשרוף מעבד. בשלב 3 בסיס הנתונים חזר, ההפעלה החמישית הצליחה, ואף אחד לא נגע בשירות. הסוף הטוב הזה הוא בזכות ה-<span class="en">restart policy</span>; בלעדיה ה-<span class="en">container</span> היה נשאר <code>Exited (1)</code>.</p>
+<p><strong>ה-<span class="en">orchestrator</span>:</strong> על <span class="en">liveness</span> שנכשל הוא מפעיל מחדש את העותק. על <span class="en">readiness</span> שנכשל הוא מוציא אותו מה-<span class="en">load balancer</span>, ומחזיר אותו כשהבדיקה עוברת. בשלב 1 הוא היה משאיר את התהליך חי (<code>/health</code> 200) ומפסיק לשלוח אליו בקשות (<code>/ready</code> 503), וזו בדיוק ההתנהגות הנכונה כשבסיס הנתונים נפל: הפעלה מחדש לא הייתה מתקנת כלום.</p>
+
+<h2><span class="sec">2</span>מי רואה את הסוד</h2>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>["PATH=/app/.venv/bin:...","LANG=C.UTF-8",...,"PYTHONUNBUFFERED=1"]
+["AGENT_API_KEY_FILE=/run/secrets/agent_api_key","DATABASE_PASSWORD_FILE=/run/secrets/db_password","CHAT_LOG_LEVEL=DEBUG",...,"APP_ENV=staging","CHAT_MOCK=1","DATABASE_URL=postgresql+psycopg://agent@db:5432/agent",...]
+total 0
+-rwxrwxrwx 1 root root 32 Nov 18 17:27 agent_api_key
+-rwxrwxrwx 1 root root 32 Nov 18 17:27 db_password
+TUCVv57cyO8iQ4W9F8LlFiGpB-jHBDUO
+ls: cannot access 'deploy': No such file or directory</code></pre>
+</div>
+<ul>
+  <li><strong>ב-<span class="en">image</span>:</strong> שום סוד ושום הגדרה של סביבה. את <code>my-agent:0.10.0</code> אפשר לדחוף לכל <span class="en">registry</span>. ב-<code>my-agent:quickfix</code>, לעומת זאת, <code>AGENT_API_KEY=dana-7Qx2-test</code> מופיע ברשימה.</li>
+  <li><strong>בהגדרות ה-<span class="en">container</span>:</strong> רק <em>נתיבים</em> לסודות, והכתובת של בסיס הנתונים בלי סיסמה. מי שמריץ <code>docker inspect</code>, או קורא לוג שמדפיס את הסביבה, לא מקבל סוד.</li>
+  <li><strong>בתוך ה-<span class="en">container</span>:</strong> הסוד קריא, וחייב להיות, אחרת השירות לא היה יכול להשתמש בו. ו-<code>deploy</code> לא קיים שם: <code>.dockerignore</code> עבד.</li>
+</ul>
+<p>מי שיכול להריץ <code>docker compose exec</code> קורא כל סוד, ולמעשה שולט בשרת. גישה ל-Docker היא גישת מנהל. לכן בשרת אמיתי מעט מאוד אנשים מקבלים אותה, ובענן גם הגישה לסודות עצמם מוגבלת לשירות שצריך אותם (פרק 14). ההרשאות <code>rwxrwxrwx</code> הן תוצאה של קבצי Windows שמורכבים לתוך Linux ב-Docker Desktop; בשרת Linux הקבצים שומרים את ההרשאות שלהם.</p>
+
+<h2><span class="sec">3</span>הגדרה חדשה, בלי <span class="en">image</span> חדש</h2>
+<div class="codebox output">
+  <div class="label"><span>the deploy with 2O (shortened)</span></div>
+<pre><code>--- 1. migrations: skipped
+--- 2. start the new containers, and wait until they are healthy
+ Container my-agent-staging-api-1 Recreate
+ Container my-agent-staging-api-1 Recreated
+ Container my-agent-staging-api-1 Started
+container my-agent-staging-api-1 is unhealthy
+FAILED. The steps after it did not run.
+
+    raise ConfigError(f"{name} must be a whole number, got {raw!r}.") from None
+agent.config.ConfigError: CHAT_MAX_TURNS must be a whole number, got '2O'.</code></pre>
+</div>
+<p>הוא נעצר בצעד 2. אבל עד אז compose כבר <em>החליף</em> את ה-<span class="en">container</span> הטוב בחדש, שלא עולה: מהרגע הזה ועד התיקון, <span class="en">staging</span> לא ענה בכלל. ב-<span class="en">recreate</span> אין "הישן ממשיך לשרת בינתיים". ב-<span class="en">prod</span> זו הפסקה עד שמישהו שם לב ומתקן. <span class="en">Rolling</span> (או <span class="en">blue-green</span>) היה מונע את זה: העותק החדש לא היה הופך ל-<span class="en">ready</span>, ולכן לא היה מקבל תנועה, והישן היה ממשיך לענות. וקודם לכן, <span class="en">staging</span> עצמו: את הטעות הזו כדאי לגלות שם.</p>
+<p>אחרי התיקון, <code>docker inspect --format "{{.Image}}"</code> החזיר את אותו מזהה לפני ואחרי, ובתוך ה-<span class="en">container</span> <code>CHAT_MAX_TURNS=20</code>. compose יצר <span class="en">container</span> חדש רק ל-<code>api</code> (ההגדרות שלו השתנו), לא ל-<code>db</code>. שינוי הגדרה הוא <span class="en">deploy</span>, אבל לא גרסה: אין <span class="en">build</span>, אין <span class="en">tag</span> ואין <span class="en">changelog</span>; יש <span class="en">commit</span> ב-<code>deploy/</code>.</p>
+
+<h2><span class="sec">4</span>החלפת סוד</h2>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>kept     deploy\secrets\staging\db_password.txt
+created  deploy\secrets\staging\agent_api_key.txt
+ Container my-agent-staging-api-1 Running
+ Container my-agent-staging-db-1 Running
+200
+401
+mx8Dhjh5p6Y30hIl37Tgrj8eIKRGd_sw
+...
+ Container my-agent-staging-api-1 Recreated
+ Container my-agent-staging-api-1 Healthy
+401
+200</code></pre>
+</div>
+<p>אחרי <code>up -d</code> בלבד, הישן עדיין עבד (200) והחדש לא (401). compose לא ראה שינוי בהגדרות ולא נגע ב-<span class="en">container</span>. מעניין יותר: <code>cat</code> בתוך ה-<span class="en">container</span> כבר הראה את <em>הערך החדש</em>, כי הקובץ מורכב מהמחשב שלכם. אבל השירות קרא אותו פעם אחת, ב-<code>load_settings</code> כשעלה, ומחזיק את הישן בזיכרון. רק <code>--force-recreate</code> (תהליך חדש) הפך את המצב. בענן זה אותו דבר: אחרי החלפה ב-<span class="en">secrets manager</span> צריך <span class="en">revision</span> או הפעלה מחדש, אלא אם הקוד קורא את הסוד מחדש בכל שימוש.</p>
+<p><code>db_password</code> שונה: ה-<span class="en">image</span> של Postgres משתמש ב-<code>POSTGRES_PASSWORD_FILE</code> רק כשה-<span class="en">volume</span> ריק, בהפעלה הראשונה. אחר כך הסיסמה גרה <em>בתוך</em> בסיס הנתונים. החלפה אמיתית: <code>ALTER USER agent WITH PASSWORD '...'</code> בתוך Postgres, ואז הקובץ, ואז <code>--force-recreate api</code>. בסדר הפוך השירות מאבד את בסיס הנתונים.</p>
+
+<h2><span class="sec">5</span>לקרוא Terraform</h2>
+<ol type="א">
+  <li><strong>בשום מקום.</strong> הקובץ יוצר את ה<em>מקום</em> לסוד (<code>google_secret_manager_secret</code>) ומפנה אליו (<code>secret_key_ref</code>, <code>version = "latest"</code>). הערך מוכנס בנפרד, על ידי אדם עם הרשאה. אילו היה בקובץ, הוא היה ב-git, ב-<code>plan</code> וב-<span class="en">state</span>.</li>
+  <li><strong>אף שורה בקובץ:</strong> <code>image_tag</code> הוא משתנה, וגרסה חדשה היא <code>terraform plan -var image_tag=0.10.1</code> (או קובץ <code>staging.tfvars</code> ב-git, כמו <code>staging.env</code> שלנו). התוכנית: <code>~</code> אחד, עדכון במקום של <code>google_cloud_run_v2_service.api</code>, ושינוי אחד בתוכו: ה-<code>image</code>. בסיס הנתונים והסוד לא זזים.</li>
+  <li><strong>הוא ייכשל על בסיס הנתונים</strong>, בגלל <code>deletion_protection = true</code>. כדי למחוק צריך קודם לשנות את השורה ל-<code>false</code> ולעשות <code>apply</code>: צעד מכוון, שעובר <span class="en">review</span>. Terraform מוחק בדיוק מה שכתוב; ההגנה קיימת כי <code>destroy</code> בחלון הלא נכון מוחק את <span class="en">prod</span>. (גם לשירות Cloud Run יש הגנה דומה, שבגרסאות חדשות של ה-<span class="en">provider</span> פועלת כברירת מחדל.)</li>
+  <li><strong>חיבור והרשאות:</strong> <code>DATABASE_URL</code>, משתמש ובסיס נתונים (<code>google_sql_user</code>, <code>google_sql_database</code>), הסיסמה כסוד נוסף, דרך להגיע (חיבור Cloud SQL לשירות, או רשת פרטית), <span class="en">service account</span> עם הרשאה לקרוא את הסודות, ו-<span class="en">job</span> של <span class="en">migrations</span>. הכותרת של הקובץ אומרת שהם הושמטו.</li>
+  <li><strong>אותו קוד, משתנים אחרים:</strong> הפכו את השמות הקבועים (<code>my-agent-staging</code>, <code>"staging"</code>) למשתנה <code>environment</code>, ו-<span class="en">apply</span> בפרויקט נפרד עם <code>prod.tfvars</code>. לכל סביבה <span class="en">state</span> משלה. בדיוק <code>deploy/compose.yaml</code> עם שני קובצי <code>.env</code>.</li>
+</ol>
+
+<h2><span class="sec">6</span>ספר הפריסה</h2>
+<p>אין פתרון יחיד. זה הסעיף שנכנס ל-<code>CONTRIBUTING.md</code> ב-<code>checkpoints\chapter-10</code>:</p>
+<div class="codebox">
+  <div class="label"><span>CONTRIBUTING.md</span></div>
+<pre><code>## Deploying
+
+Staging and prod are described in `deploy/` (README.md, "Deploy"). What runs where is the
+`IMAGE_TAG` line of `deploy/&lt;environment&gt;.env`, so every deploy is a commit on `main`.
+
+1. Only an image of a release is deployed: `my-agent:X.Y.Z`, built from the tag `vX.Y.Z`.
+   An image is never rebuilt under the same tag.
+2. Staging first. Set `IMAGE_TAG`, commit ("Deploy X.Y.Z to staging"), and run
+   `uv run python scripts/deploy.py staging`. Then try what changed, as a user would.
+3. Prod only after staging was checked, with the same image: set `IMAGE_TAG` in
+   `deploy/prod.env`, commit, `uv run python scripts/deploy.py prod`.
+4. If `deploy.py` fails, or users see errors after a deploy: roll back first, investigate
+   after. `git revert` the deploy commit and run `deploy.py &lt;environment&gt; --skip-migrations`.
+   A rollback never runs migrations, and never runs `alembic downgrade` on prod data.
+5. Every migration must work with the version before it: expand in one release, contract
+   (drop or rename what the old version uses) only in a later one, after the old version
+   can no longer come back.
+6. A fix after a rollback is a new version (X.Y.Z+1), deployed like any other. It keeps
+   every migration that already ran somewhere, unchanged.
+7. Secrets live only in `deploy/secrets/` (created by `scripts/make_secrets.py`), never in
+   git, in an env file or in the image. A secret that leaked is rotated at once.</code></pre>
+</div>
+<p>מיפוי לדוגמה, ל-Google Cloud:</p>
+<div class="table-wrap">
+<table>
+  <tr><th>ב-<code>deploy\compose.yaml</code></th><th>ב-Google Cloud</th></tr>
+  <tr><td><code>api</code>, <code>restart</code>, <code>HEALTHCHECK</code></td><td>שירות Cloud Run, עם <code>startup_probe</code> על <code>/ready</code> ו-<code>liveness_probe</code> על <code>/health</code>; הפעלה מחדש מובנית</td></tr>
+  <tr><td><code>db</code> וה-<span class="en">volume</span> <code>pgdata</code></td><td>Cloud SQL for PostgreSQL 17, עם גיבויים אוטומטיים</td></tr>
+  <tr><td><code>migrate</code> (<code>profile</code>)</td><td>Cloud Run <span class="en">job</span> עם אותו <span class="en">image</span>, שמורץ לפני כל <span class="en">deploy</span> שאינו <span class="en">rollback</span></td></tr>
+  <tr><td><code>secrets:</code> וקבצי <code>deploy/secrets/</code></td><td>Secret Manager, ושירות שמקבל אותם כקבצים או כמשתנים</td></tr>
+  <tr><td><code>staging.env</code>, <code>prod.env</code></td><td>שני פרויקטים, ומשתני Terraform לכל אחד</td></tr>
+  <tr><td><code>127.0.0.1:8001</code></td><td>כתובת HTTPS של Cloud Run, או דומיין משלכם דרך Cloud DNS</td></tr>
+  <tr><td><code>my-agent:0.10.0</code> המקומי</td><td>Artifact Registry, שאליו <code>release.yml</code> דוחף</td></tr>
+</table>
+</div>
+<p><strong>מה לא מופיע ב-compose בכלל:</strong> IAM (מי רשאי לפרוס, לקרוא סודות, לגשת לבסיס הנתונים), תקציב והתראות עלות, TLS ודומיין, גיבויים ושחזור שנבדק, ניטור והתראות (פרק 13), ומקום ללוגים: היום <code>agent.log</code> נכתב בתוך ה-<span class="en">container</span> ונמחק איתו (פרק 13). וגם: מי מריץ את <code>deploy.py</code>. בענן זה צעד ב-<span class="en">pipeline</span>, אחרי <code>release.yml</code>, עם אישור אדם לפני <span class="en">prod</span>.</p>
+
+<h2><span class="sec">·</span>ההיסטוריה בסוף הפרק</h2>
+<div class="codebox output">
+  <div class="label"><span>git log --oneline (newest first, after v0.9.0)</span></div>
+<pre><code>Document how we deploy and roll back
+Staging keeps 20 turns
+Revert "Deploy 0.10.1 to staging"
+Deploy 0.10.1 to staging
+Document deploying; version 0.10.0          (tag v0.10.0)
+Describe the staging and prod environments, with their secrets outside git
+Add /ready, and a health check inside the image
+Settings per environment: APP_ENV, secrets from files, the database password apart</code></pre>
+</div>
+<p>הענף <code>try/longer-titles</code> נמחק, וה-<span class="en">image</span> <code>my-agent:0.10.1</code> נשאר אצלכם (<code>docker image rm my-agent:0.10.1</code> מוחק אותו). שתי הסביבות רצות; <code>docker compose @staging down</code> (ואותו דבר ל-<span class="en">prod</span>) עוצר אותן ושומר את הנתונים, ו-<code>down -v</code> מוחק גם אותם.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-10.html">→ חזרה לפרק 10</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

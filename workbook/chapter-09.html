@@ -1,0 +1,768 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 9 · CI/CD | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="09">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 9 · CI/CD</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 9 מתוך 21</div>
+  <h1><span class="en">CI/CD</span></h1>
+  <p class="lead">איך כל שינוי נבדק אוטומטית, על מחשב נקי, לפני שהוא נכנס ל-<code>main</code>, ואיך גרסה יוצאת ממנו בצורה מסודרת.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>להסביר מה זה <span class="en">pipeline</span>: <span class="en">trigger</span>, <span class="en">jobs</span>, <span class="en">steps</span> ו-<span class="en">runner</span>.</li>
+    <li>לקרוא ולכתוב <span class="en">workflow</span> של GitHub Actions שמריץ <span class="en">lint</span>, <span class="en">type check</span>, בדיקות (גם מול Postgres) ובניית <span class="en">image</span> על כל <span class="en">pull request</span>.</li>
+    <li>להריץ את אותן פקודות בדיוק אצלכם, לפני ה-<span class="en">push</span>, ולקרוא לוג של בנייה אדומה.</li>
+    <li>לחייב בדיקות ירוקות לפני מיזוג, ולשמור סודות מחוץ לקובץ ה-<span class="en">workflow</span>.</li>
+    <li>לנהל גרסאות (<span class="en">semantic versioning</span>, <span class="en">tags</span>, <span class="en">changelog</span>) ולהוציא <span class="en">release</span> מ-<span class="en">tag</span>.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> ארבע עד חמש שעות. <strong>מה צריך:</strong> הפרויקט מסוף פרק 8, Docker Desktop, ובשביל החלק שרץ ב-GitHub, החשבון והמאגר מפרק 2 (תרגיל 6). כל מה שאפשר לבדוק בלי GitHub, בודקים אצלכם. אין צורך במפתח: הכול במצב <span class="en">mock</span>.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.1</span>הבעיה: <code>main</code> נשבר, ואף אחד לא שם לב</h2>
+
+<p>עמיתה מוסיפה לסוכן ניסיונות חוזרים, וצריכה לשם כך חבילה חדשה. היא כותבת אותה ביד ב-<code>pyproject.toml</code>, מריצה <code>uv run pytest</code>, והכול ירוק. היא שומרת ב-<span class="en">commit</span> את הקוד ואת <code>pyproject.toml</code>, פותחת <span class="en">pull request</span>, אתם קוראים את השינוי, הוא נראה טוב, וממזגים. למחרת אתם מושכים את <code>main</code> ומריצים את מה שעבד אתמול:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker build --progress=plain -t my-agent .</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (the end)</span></div>
+<pre><code> &gt; [stage-0 5/6] RUN uv sync --locked --no-dev:
+2.844 Resolved 47 packages in 1.78s
+2.850 The lockfile at `uv.lock` needs to be updated, but `--locked` was provided. To update the lockfile, run `uv lock`.
+ERROR: failed to build: failed to solve: process "/bin/sh -c uv sync --locked --no-dev" did not complete successfully: exit code: 1</code></pre>
+</div>
+
+<p>מה קרה? <code>uv run</code> במחשב שלה עדכן את <code>uv.lock</code> בשקט, והבדיקות עברו מול הקובץ המעודכן. אבל הקובץ המעודכן לא נכנס ל-<span class="en">commit</span>. ב-<code>main</code> יש עכשיו <code>pyproject.toml</code> חדש ו-<code>uv.lock</code> ישן, וה-<span class="en">image</span> (שבונה עם <code>--locked</code>, פרק 8) מסרב. אף אחד לא עשה משהו טיפשי. העמיתה בדקה, אתם קראתם. אבל שניכם בדקתם <em>את התיקייה שלכם</em>, ולא את מה שבאמת נכנס ל-<code>main</code>.</p>
+
+<p>וזה רק המקרה הבולט. בדיקה שנשברת רק על Postgres, <code>ruff</code> ששכחו להריץ, גרסת Python אחרת: כל אחד מהם עובר "אצלי" ונכשל אצל מישהו אחר, מאוחר יותר, כשכבר לא ברור איזה שינוי אשם. הרשימה בסוף פרק 8 (להריץ <code>pytest</code>, <code>ruff</code>, <code>mypy</code>, לבנות את ה-<span class="en">image</span>) נכונה, אבל היא תלויה בזיכרון של אנשים.</p>
+
+<p>הפתרון: מכונה נקייה, שאינה של אף אחד מכם, מורידה את הקוד בדיוק כפי שהוא ב-<span class="en">pull request</span>, ומריצה את כל הבדיקות, בכל פעם, לפני שמותר למזג. לזה קוראים <strong><span class="en">continuous integration</span></strong>, או <strong>CI</strong>. ואחרי שיש מכונה שבודקת כל שינוי, הצעד הבא טבעי: שהיא גם תארוז ותוציא את הגרסה. זה <strong>CD</strong>, ונגיע אליו בסוף הפרק.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.2</span>המפה: מ-<span class="en">push</span> ועד כפתור המיזוג</h2>
+
+<div class="diagram">
+  <div class="flow">
+    <div class="layer l4"><div class="name">git push + pull request</div><div class="what">ה-<span class="en">event</span> שמפעיל הכול</div></div>
+    <div class="hop">&rarr;<b>triggers</b></div>
+    <div class="layer machine">
+      <div class="name">GitHub Actions: .github/workflows/ci.yml</div>
+      <div class="what">לכל <span class="en">job</span> מכונה נקייה משלו (<span class="en">runner</span>), והם רצים במקביל</div>
+      <div class="inner">
+        <div class="row">
+          <div class="layer l2">
+            <div class="name">job: Lint, types and tests</div>
+            <div class="what">checkout, setup-uv, <code>uv sync --locked</code>, ruff, mypy, pytest. לצידו <span class="en">container</span> של Postgres</div>
+          </div>
+          <div class="layer l2">
+            <div class="name">job: Build the image</div>
+            <div class="what">checkout, <code>docker build</code>, והפעלה אחת של האפליקציה בתוך ה-<span class="en">image</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="flow steps">
+    <div class="hop">&darr;<b>reports</b></div>
+    <div class="layer l3"><div class="name">✓ / ✗ on the pull request</div><div class="what">ירוק: אפשר למזג. אדום: הכפתור נעול (צעד 6)</div></div>
+  </div>
+  <div class="caption">אותן פקודות רצות גם אצלכם, לפני ה-<span class="en">push</span>, עם <code>scripts/ci_local.py</code>.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.3</span>המילים של <span class="en">pipeline</span></h2>
+
+<p><strong><span class="en">Pipeline</span></strong> הוא רצף אוטומטי של שלבים שקוד עובר בדרך מ-<span class="en">commit</span> לתוצר. בפרק נשתמש ב-<strong>GitHub Actions</strong>, ה-CI שמובנה ב-GitHub. יש כלים אחרים (GitLab CI, Jenkins, CircleCI), והמושגים זהים כמעט מילה במילה:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מונח</th><th>מה זה</th><th>אצלנו</th></tr>
+  <tr><td><span class="en">workflow</span></td><td>קובץ YAML אחד שמתאר <span class="en">pipeline</span>. GitHub מוצא אותו בתיקייה <code>.github/workflows/</code></td><td><code>ci.yml</code>, <code>release.yml</code></td></tr>
+  <tr><td><span class="en">event / trigger</span></td><td>מה מפעיל אותו</td><td>פתיחה או עדכון של <span class="en">pull request</span>; <span class="en">push</span> ל-<code>main</code>; <span class="en">tag</span> של גרסה</td></tr>
+  <tr><td><span class="en">job</span></td><td>קבוצת צעדים שרצה על מכונה אחת. <span class="en">Jobs</span> רצים במקביל, אלא אם כתוב <code>needs</code></td><td><code>checks</code>, <code>image</code></td></tr>
+  <tr><td><span class="en">step</span></td><td>פקודה אחת (<code>run</code>) או <span class="en">action</span> מוכן (<code>uses</code>). רצים לפי הסדר, ועוצרים בכישלון הראשון</td><td><code>uv run ruff check</code></td></tr>
+  <tr><td><span class="en">runner</span></td><td>המכונה שמריצה <span class="en">job</span>: מכונה וירטואלית חדשה, שנמחקת בסוף</td><td><code>ubuntu-24.04</code> של GitHub</td></tr>
+  <tr><td><span class="en">action</span></td><td>צעד ארוז לשימוש חוזר, שמישהו כתב ופרסם במאגר ב-GitHub</td><td><code>actions/checkout</code>, <code>astral-sh/setup-uv</code></td></tr>
+</table>
+</div>
+
+<p>המילה החשובה בטבלה היא "חדשה". ה-<span class="en">runner</span> לא ראה את הפרויקט שלכם מעולם. אין עליו <code>.venv</code>, אין <code>.env</code>, אין <code>uv.lock</code> שעודכן בשקט. יש עליו רק מה שנמצא ב-git. בדיוק לכן הוא תופס את מה שאתם לא יכולים לתפוס במחשב שלכם.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.4</span>קובץ ה-<span class="en">workflow</span>, שורה אחרי שורה</h2>
+
+<div class="codebox">
+  <div class="label"><span>.github/workflows/ci.yml</span></div>
+<pre><code># CI: check every pull request (and every push to main) on a fresh machine.
+# The same commands run on your computer with: uv run --locked python scripts/ci_local.py
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read  # this workflow only reads the code
+
+jobs:
+  checks:
+    name: Lint, types and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:  # a throwaway Postgres for the migration tests, like db in compose.yaml
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: agent
+          POSTGRES_PASSWORD: agent  # lives for one run, holds nothing real
+          POSTGRES_DB: agent_test
+        ports:
+          - 5432:5432
+        options: &gt;-
+          --health-cmd "pg_isready -U agent -d agent_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://agent:agent@127.0.0.1:5432/agent_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.11.14"  # the same uv as in the Dockerfile
+          enable-cache: true  # reuse downloaded packages; the cache key includes uv.lock
+      - name: Install the locked packages
+        run: uv sync --locked
+      - name: Lint
+        run: uv run ruff check
+      - name: Format
+        run: uv run ruff format --check
+      - name: Type check
+        run: uv run mypy agent scripts
+      - name: Tests
+        run: uv run pytest
+
+  image:
+    name: Build the image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        run: docker build -t my-agent:ci .
+      - name: Check that the image starts
+        run: docker run --rm -e CHAT_MOCK=1 -e AGENT_API_KEY=ci -e DATABASE_URL=sqlite:// my-agent:ci python -c "from agent.api import create_app; print(create_app().version)"</code></pre>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>שורה</th><th>מה היא אומרת</th></tr>
+  <tr><td><code>on:</code></td><td>מתי לרוץ: על כל <span class="en">pull request</span> (כשנפתח, וכל פעם שנוסף לו <span class="en">commit</span>), ועל <span class="en">push</span> ל-<code>main</code>, כדי לדעת ש-<code>main</code> עצמו ירוק אחרי המיזוג</td></tr>
+  <tr><td><code>permissions</code></td><td>מה מותר לטוקן האוטומטי של הריצה לעשות במאגר. כאן רק לקרוא. ברירת מחדל מצומצמת היא הרגל טוב (פרק 14)</td></tr>
+  <tr><td><code>runs-on</code></td><td>על איזה <span class="en">runner</span>. גרסה מפורשת ולא <code>ubuntu-latest</code>, מאותה סיבה שה-<span class="en">image</span> של Postgres מוצמד ל-17</td></tr>
+  <tr><td><code>timeout-minutes</code></td><td>בדיקה שנתקעה נעצרת אחרי רבע שעה, במקום לבזבז שש שעות (ברירת המחדל) של דקות ריצה</td></tr>
+  <tr><td><code>services</code></td><td><span class="en">containers</span> שעולים לפני הצעדים וחיים לאורך ה-<span class="en">job</span> (סעיף 9.6)</td></tr>
+  <tr><td><code>env</code></td><td>משתני סביבה לכל צעדי ה-<span class="en">job</span></td></tr>
+  <tr><td><code>uses: actions/checkout@v7</code></td><td>מוריד את הקוד של ה-<span class="en">commit</span> שנבדק. בלי הצעד הזה ה-<span class="en">runner</span> ריק. <code>@v7</code> היא גרסת ה-<span class="en">action</span></td></tr>
+  <tr><td><code>uses: astral-sh/setup-uv@v10.3.3</code></td><td>מתקין <code>uv</code> בגרסה שביקשנו. <code>with</code> מעביר לו פרמטרים. ל-<span class="en">action</span> הזה אין <span class="en">tag</span> קצר כמו <code>@v10</code>, ולכן גרסה מלאה</td></tr>
+  <tr><td><code>run:</code></td><td>פקודה ב-<span class="en">shell</span> של ה-<span class="en">runner</span> (bash). אם היא מסתיימת בקוד יציאה שאינו 0, הצעד נכשל, וה-<span class="en">job</span> נעצר</td></tr>
+</table>
+</div>
+
+<p>שימו לב לסדר הצעדים: הזול והמהיר קודם. <code>ruff</code> לוקח שנייה, <code>pytest</code> עשרות שניות. אם יש <span class="en">import</span> מיותר, עדיף לדעת אחרי שנייה. ושימו לב גם למה <em>אין</em> בקובץ: אין שם מפתח <span class="en">API</span>, אין <code>.env</code>, ואין שום ערך שקיים רק במחשב שלכם. הבדיקות רצות על ה-<span class="en">mock</span>, כמו מאז פרק 3.</p>
+
+<div class="callout">
+  <span class="title">מאיפה <code>@v7</code> ו-<code>@v10.3.3</code>?</span>
+  <p><span class="en">Action</span> הוא קוד של מישהו אחר שרץ על הקוד שלכם, ולכן מצמידים גרסה. <code>@v7</code> הוא <span class="en">tag</span> שהמפרסם מזיז לגרסה האחרונה בסדרה 7. <code>@v10.3.3</code> קבוע. ההצמדה החזקה ביותר היא ל-<span class="en">commit</span> מלא (40 תווים), שאיש לא יכול להזיז; צוותים שמקפידים על אבטחה עושים כך. כדי לראות אילו גרסאות קיימות: <code>git ls-remote --tags https://github.com/astral-sh/setup-uv</code>, או דף ה-<span class="en">Releases</span> של ה-<span class="en">action</span>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.5</span>גרסת Python אחת, ו-<span class="en">cache</span></h2>
+
+<p>פרק 8 השאיר סדק: הבדיקות רצו אצלכם על Python 3.12, וה-<span class="en">image</span> על 3.13. CI היה מוסיף גרסה שלישית, מה שיש ב-<span class="en">runner</span>. התיקון הוא לכתוב את הגרסה <strong>במקום אחד</strong>: קובץ <code>.python-version</code>, שבו כתוב רק <code>3.13</code>. <code>uv</code> קורא אותו בכל פקודה, אצלכם וב-CI, ומתקין את הגרסה אם חסרה. ה-<code>Dockerfile</code> לא יודע לקרוא אותו, ולכן בדיקה קטנה (בצעד 1) נכשלת אם <code>FROM python:3.13-slim</code> לא תואם. הכלל: מה שחייב להיות זהה בשני מקומות, בודקים במכונה, לא בהערה.</p>
+
+<p><strong><span class="en">Cache</span>.</strong> <span class="en">Runner</span> נקי פירושו גם שכל ריצה מורידה את כל החבילות מחדש. <code>enable-cache: true</code> שומר את התיקייה שבה <code>uv</code> מחזיק חבילות שהורדו, ומחזיר אותה בריצה הבאה. ה-<span class="en">cache</span> נשמר לפי <strong>מפתח</strong> (<span class="en">cache key</span>) שמחושב מתוכן <code>uv.lock</code>: אותו קובץ, אותו מפתח, החבילות מוכנות. שינוי ב-<code>uv.lock</code> נותן מפתח חדש, ומתחילים מאפס. זה אותו רעיון כמו שכבות ה-<code>Dockerfile</code> בפרק 8: לשמור עבודה שנעשתה, ולזרוק אותה בדיוק כשהקלט שלה השתנה. תרגיל 3 מודד כמה זה חוסך. גם ל-<code>docker build</code> ב-CI אפשר לשמור את שכבות ה-<span class="en">build cache</span> בין ריצות (למשל עם <code>docker/build-push-action</code>); בפרויקט בגודל הזה לא נטרח.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.6</span><span class="en">Postgres</span> ב-CI: <span class="en">service container</span></h2>
+
+<p>בפרק 8 בדיקות ה-<span class="en">migrations</span> קיבלו אפשרות לרוץ גם על Postgres, אם <code>TEST_DATABASE_URL</code> מוגדר. אצלכם זה דרש <code>docker compose up</code> ו-<code>createdb</code>, ולכן רוב הזמן הן דולגו. ב-CI אפשר שהן ירוצו תמיד. הבלוק <code>services</code> אומר ל-GitHub: לפני הצעדים, הרם <span class="en">container</span> של <code>postgres:17-alpine</code> עם המשתנים האלה, פרסם את 5432 שלו על ה-<span class="en">runner</span>, וחכה עד שה-<code>--health-cmd</code> מצליח. זה <code>db</code> מ-<code>compose.yaml</code>, באותו <span class="en">image</span> ועם אותה בדיקת מוכנות, רק שהוא נוצר ריק בכל ריצה ונמחק בסופה. <code>POSTGRES_DB: agent_test</code> יוצר את בסיס הנתונים, כך שאין צורך ב-<code>createdb</code>, והסיסמה בקובץ לא מסתירה שום דבר: אין בבסיס הזה נתונים, ואי אפשר להגיע אליו מבחוץ.</p>
+
+<p>הצעדים רצים ישירות על ה-<span class="en">runner</span>, לא ב-<span class="en">container</span>, ולכן הם מגיעים ל-Postgres דרך הפורט שפורסם: <code>127.0.0.1:5432</code>. זה המצב של ה-<span class="en">CLI</span> בתרגיל 5 של פרק 8, לא של <code>api</code> ב-compose. התוצאה: ב-CI רצות כל הבדיקות, כולל שלוש של Postgres, ואף אחת לא מדולגת.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.7</span>דוגמה מודרכת: CI לסוכן</h2>
+
+<div class="step">
+  <h3><span class="step-num">1</span>ענף, וגרסת Python אחת</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects\my-agent
+git switch main
+git pull
+git switch -c feature/ci
+uv python pin 3.13
+uv run python --version</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Pinned `.python-version` to `3.13`
+Using CPython 3.13.13 interpreter at: C:\Users\you\AppData\Local\Python\pythoncore-3.13-64\python.exe
+Removed virtual environment at: .venv
+Creating virtual environment at: .venv
+Installed 44 packages in 5.23s
+Python 3.13.13</code></pre>
+</div>
+  <p><code>uv</code> ראה שה-<code>.venv</code> בנוי על 3.12, ובנה אותו מחדש על 3.13. (<code>uv python pin</code> ולא <code>'3.13' &gt; .python-version</code>: ב-PowerShell 5.1 ה-<code>&gt;</code> כותב UTF-16, ו-<code>uv</code> מתעלם מהקובץ.) עכשיו הבדיקה ששומרת על ההחלטה, בקובץ חדש:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_python_version.py</span></div>
+<pre><code>"""One Python version for everything: written once, in .python-version.
+
+uv reads that file on your computer and in CI. The Dockerfile cannot read it, so this
+test makes sure the image starts FROM the same version, and that the tests run on it.
+"""
+
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def pinned_version():
+    return (ROOT / ".python-version").read_text(encoding="utf-8").strip()
+
+
+def test_the_image_uses_the_pinned_python():
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    base = re.search(r"^FROM python:(\S+)-slim", dockerfile, re.MULTILINE)
+    assert base is not None, "the Dockerfile does not start FROM python:&lt;version&gt;-slim"
+    assert base.group(1) == pinned_version()
+
+
+def test_the_tests_run_on_the_pinned_python():
+    running = f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert running == pinned_version()</code></pre>
+</div>
+  <p><code>uv run pytest tests/test_python_version.py</code> מדווח <code>2 passed</code>. <code>git add .python-version tests</code>, <code>git commit -m "Pin Python 3.13 in one place, and test that the image uses it"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>קובץ ה-<span class="en">workflow</span>, וקריאה שלו ב-Python</h3>
+  <p>צרו את התיקייה ואת הקובץ מסעיף 9.4. הנקודה בתחילת <code>.github</code> חשובה, וכך גם השם <code>workflows</code> ברבים:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>mkdir .github\workflows
+code .github\workflows\ci.yml</code></pre>
+</div>
+  <p>ב-GitHub אי אפשר להריץ את הקובץ לפני שהוא שם. אז בודקים מה שאפשר כאן. ראשית, שזה YAML תקין. נוסיף את <code>pyyaml</code> ככלי פיתוח (נצטרך אותו גם בצעד 4), יחד עם תיאורי הטיפוסים שלו ל-<code>mypy</code>:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv add --dev pyyaml types-pyyaml
+uv run python -c "import yaml; w = yaml.safe_load(open('.github/workflows/ci.yml')); print(list(w)); print(list(w['jobs']))"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>['name', True, 'permissions', 'jobs']
+['checks', 'image']</code></pre>
+</div>
+  <p>הקובץ נקרא, ויש בו שני <span class="en">jobs</span>. ומה זה <code>True</code> במקום <code>on</code>? בגרסה הישנה של YAML שבה <code>pyyaml</code> משתמש, <code>on</code> (כמו <code>yes</code>) היא מילה שפירושה "אמת". GitHub קורא אותה כמפתח. זו תזכורת טובה: YAML תקין עוד לא אומר ש-GitHub יבין אותו כמו שהתכוונתם.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span><code>actionlint</code>: לבדוק מה ש-GitHub יבדוק</h3>
+  <p><code>actionlint</code> הוא <span class="en">linter</span> לקובצי <span class="en">workflow</span>: הוא מכיר את המפתחות, ה-<span class="en">events</span> והביטויים של GitHub Actions. <code>uvx</code> מריץ כלי בלי להוסיף אותו לפרויקט (הוא מוריד אותו לזיכרון המטמון של <code>uv</code>, בלי הרשאות מנהל):</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uvx --from actionlint-py actionlint</code></pre>
+</div>
+  <p>שקט פירושו שאין הערות. כדי לראות אותו עובד, שנו ב-<code>ci.yml</code> את <code>pull_request:</code> ל-<code>pull-request:</code>, והריצו שוב גם אותו וגם את בדיקת ה-Python מצעד 2:</p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>['name', True, 'permissions', 'jobs']
+.github\workflows\ci.yml:6:3: unknown Webhook event "pull-request". see https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#webhook-events for list of all Webhook event names [events]
+  |
+6 |   pull-request:
+  |   ^~~~~~~~~~~~~</code></pre>
+</div>
+  <p>Python קרא את הקובץ בשמחה. GitHub היה מקבל אותו בלי שגיאה, ופשוט לא מריץ אותו אף פעם: אין <span class="en">event</span> כזה. <code>git restore .github/workflows/ci.yml</code>. <code>git add .github</code>, <code>git commit -m "Add a CI workflow: lint, types, tests and the image on every pull request"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>CI במחשב שלכם: <code>scripts/ci_local.py</code></h3>
+  <p>אפשר להקליד את הפקודות של ה-<span class="en">workflow</span> אחת אחת. אבל אז יש שתי רשימות, וביום שמישהו יוסיף צעד ל-<code>ci.yml</code>, הרשימה שלכם תתיישן. במקום זה, סקריפט שקורא את <code>ci.yml</code> עצמו ומריץ כל צעד <code>run</code>, לפי הסדר, עם ה-<code>env</code> של ה-<span class="en">job</span>:</p>
+<div class="codebox">
+  <div class="label"><span>scripts\ci_local.py</span></div>
+<pre><code>"""Run the commands of a GitHub Actions workflow on this computer, in the same order as CI.
+
+    uv run --locked python scripts/ci_local.py         # every job of .github/workflows/ci.yml
+    uv run --locked python scripts/ci_local.py --job image  # one job, by its id in the file
+
+Only `run:` steps run here. `uses:` steps (checkout, setup-uv) prepare GitHub's machine;
+on yours, the project folder and your own uv play their part. Services (Postgres) are not
+started: start them first (see README). Like CI, it stops at the first step that fails.
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+DEFAULT_WORKFLOW = Path(".github/workflows/ci.yml")
+
+
+def run_job(job_id: str, job: dict[str, Any]) -&gt; None:
+    """Run the steps of one job; exit with the step's exit code if one fails."""
+    print(f"=== job {job_id}: {job.get('name', job_id)}", flush=True)
+    if "services" in job:
+        print(f"    services, not started here: {', '.join(job['services'])}", flush=True)
+    job_env = {name: str(value) for name, value in job.get("env", {}).items()}
+    for number, step in enumerate(job["steps"], start=1):
+        title = step.get("name") or step.get("uses") or step.get("run")
+        if "run" not in step:
+            print(f"--- step {number}: {title} (skipped: GitHub only)", flush=True)
+            continue
+        print(f"--- step {number}: {title}\n    $ {step['run']}", flush=True)
+        step_env = {name: str(value) for name, value in step.get("env", {}).items()}
+        started = time.monotonic()
+        result = subprocess.run(step["run"], shell=True, env={**os.environ, **job_env, **step_env})
+        if result.returncode != 0:
+            print(
+                f"FAILED: step {number} of job {job_id} ended with exit code "
+                f"{result.returncode}. The steps after it did not run.",
+                flush=True,
+            )
+            sys.exit(result.returncode)
+        print(f"    ok ({time.monotonic() - started:.1f}s)", flush=True)
+
+
+def main() -&gt; None:
+    parser = argparse.ArgumentParser(description="Run a workflow's commands locally.")
+    parser.add_argument("workflow", nargs="?", type=Path, default=DEFAULT_WORKFLOW)
+    parser.add_argument("--job", help="run only this job")
+    args = parser.parse_args()
+    workflow = yaml.safe_load(args.workflow.read_text(encoding="utf-8"))
+    jobs: dict[str, dict[str, Any]] = workflow["jobs"]
+    if args.job and args.job not in jobs:
+        sys.exit(f"No job {args.job!r}. The jobs are: {', '.join(jobs)}")
+    for job_id, job in jobs.items():
+        if args.job in (None, job_id):
+            run_job(job_id, job)
+    print("All steps passed.")
+
+
+if __name__ == "__main__":
+    main()</code></pre>
+</div>
+  <p>ה-<span class="en">service</span> לא עולה מעצמו כאן, אז מרימים את <code>db</code> של compose, שמקשיב באותה כתובת. <code>agent_test</code> כבר קיים אם יצרתם אותו בפרק 8; אם כן, <code>createdb</code> יגיד <code>database "agent_test" already exists</code>, וזה בסדר:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose up -d db
+docker compose exec db createdb -U agent agent_test
+uv run --locked python scripts/ci_local.py</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>=== job checks: Lint, types and tests
+    services, not started here: postgres
+--- step 1: actions/checkout@v7 (skipped: GitHub only)
+--- step 2: astral-sh/setup-uv@v10.3.3 (skipped: GitHub only)
+--- step 3: Install the locked packages
+    $ uv sync --locked
+    ok (0.2s)
+--- step 4: Lint
+    $ uv run ruff check
+All checks passed!
+    ok (0.3s)
+...
+--- step 7: Tests
+    $ uv run pytest
+============================= 76 passed in 43.89s =============================
+    ok (48.2s)
+=== job image: Build the image
+--- step 1: actions/checkout@v7 (skipped: GitHub only)
+--- step 2: Build
+    $ docker build -t my-agent:ci .
+    ok (12.4s)
+--- step 3: Check that the image starts
+    $ docker run --rm -e CHAT_MOCK=1 -e AGENT_API_KEY=ci -e DATABASE_URL=sqlite:// my-agent:ci python -c "from agent.api import create_app; print(create_app().version)"
+0.8.0
+    ok (9.4s)
+All steps passed.</code></pre>
+</div>
+  <p>76 בדיקות, ואף אחת לא <code>skipped</code>: גם שלוש של Postgres רצו, כי ה-<code>env</code> של ה-<span class="en">job</span> הגדיר <code>TEST_DATABASE_URL</code>. ולמה <code>--locked</code> גם כאן? בלעדיו, <code>uv run</code> מעדכן את <code>uv.lock</code> לפני שהסקריפט מתחיל, בדיוק כמו אצל העמיתה מ-9.1, ומסתיר את הבעיה ש-CI יתפוס. <code>git add pyproject.toml uv.lock scripts</code>, <code>git commit -m "Add ci_local.py: run the CI commands on this computer"</code>. עדכנו ב-<code>README.md</code> את סעיף <span class="en">Checks</span> (הוא נקרא עכשיו <span class="en">Checks and CI</span>), הוסיפו <code>.github/</code> ל-<code>.dockerignore</code>, ו-<code>git commit -am "Document CI and the local CI script"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>ב-GitHub: <span class="en">pull request</span> ראשון עם CI</h3>
+  <p>מכאן החלק שרץ בחשבון שלכם. אם בפרק 2 (תרגיל 6) חיברתם מאגר ב-GitHub בשם <code>github</code>, דחפו אליו את הענף. אם לא, צרו עכשיו מאגר ריק באתר והוסיפו אותו: <code>git remote add github https://github.com/&lt;you&gt;/my-agent.git</code>, ואז <code>git push github main</code>.</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git push -u github feature/ci</code></pre>
+</div>
+  <ol>
+    <li>באתר, בדף המאגר, יופיע פס עם <span class="en">Compare &amp; pull request</span>. פתחו <span class="en">pull request</span> מ-<code>feature/ci</code> אל <code>main</code>.</li>
+    <li>בתחתית ה-<span class="en">pull request</span> מופיעה רשימת <span class="en">checks</span>: <span class="en">CI / Lint, types and tests</span> ו-<span class="en">CI / Build the image</span>, עם עיגול צהוב בזמן ריצה, ✓ ירוק או ✗ אדום בסוף. <span class="en">Details</span> פותח את הלוג.</li>
+    <li>בלשונית <span class="en">Actions</span> של המאגר רואים כל ריצה, את ה-<span class="en">event</span> שהפעיל אותה ואת משך כל <span class="en">job</span>. הריצה הראשונה איטית יותר: ה-<span class="en">cache</span> עוד ריק.</li>
+  </ol>
+  <p>כשהכול ירוק, מזגו כמו תמיד: <code>git switch main</code>, <code>git merge feature/ci</code>, <code>git push origin main</code> ו-<code>git push github main</code>. כשה-<span class="en">commits</span> של ה-<span class="en">pull request</span> מגיעים ל-<code>main</code>, GitHub מסמן אותו <span class="en">Merged</span> לבד. ה-<span class="en">push</span> ל-<code>main</code> מפעיל ריצה נוספת. מחקו את הענף, מקומית ובשני ה-<span class="en">remotes</span>.</p>
+  <p>מאגר ציבורי מקבל דקות ריצה בלי הגבלה; מאגר פרטי בחשבון חינמי מקבל מכסה חודשית (נכון לכתיבת שורות אלה, 2,000 דקות). ריצה של הפרויקט הזה לוקחת דקות בודדות.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">6</span>לחייב ירוק: <span class="en">required checks</span></h3>
+  <p>עד עכשיו CI רק <em>מודיע</em>. אפשר עדיין למזג <span class="en">pull request</span> אדום, או לדחוף ישר ל-<code>main</code>. כדי שזה יהיה כלל ולא בקשה, GitHub מאפשר להגן על ענף. ב-<span class="en">Settings</span> של המאגר, <span class="en">Rules</span>, <span class="en">Rulesets</span>, <span class="en">New branch ruleset</span>:</p>
+  <ol>
+    <li>שם (למשל <code>protect main</code>), <span class="en">Enforcement status</span>: <span class="en">Active</span>, ו-<span class="en">Target branches</span>: <span class="en">Include default branch</span>.</li>
+    <li>סמנו <span class="en">Require a pull request before merging</span>: אין יותר <span class="en">push</span> ישיר ל-<code>main</code>.</li>
+    <li>סמנו <span class="en">Require status checks to pass</span>, והוסיפו את שני ה-<span class="en">checks</span> בשמם: <code>Lint, types and tests</code> ו-<code>Build the image</code>. הם מופיעים ברשימה רק אחרי שרצו פעם אחת, ולכן עושים את זה אחרי צעד 5.</li>
+  </ol>
+  <p>מעכשיו כפתור המיזוג נעול עד ששני ה-<span class="en">checks</span> ירוקים, וממזגים באתר; אחר כך <code>git pull github main</code> מעדכן את <code>main</code> אצלכם. בחשבון חינמי, ההגנה הזו נאכפת במאגר ציבורי; במאגר פרטי GitHub דורש תוכנית בתשלום (בדקו בתיעוד העדכני). גם בלי אכיפה, CI שמסמן ✗ על <span class="en">pull request</span> שווה את רוב הערך.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.8</span>בנייה אדומה: איך קוראים את הלוג</h2>
+
+<p>נשבור משהו בכוונה. ב-<code>agent\history.py</code>, החזירו את הבאג מפרק 1: <code>messages[-max_turns * 2 :]</code> הופך ל-<code>messages[-max_turns:]</code>. הריצו רק את ה-<span class="en">job</span> של הבדיקות:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run --locked python scripts/ci_local.py --job checks
+$LASTEXITCODE</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>--- step 6: Type check
+    $ uv run mypy agent scripts
+Success: no issues found in 16 source files
+    ok (3.0s)
+--- step 7: Tests
+    $ uv run pytest
+tests\test_cli.py .F....                                                 [ 32%]
+tests\test_conversations.py .F....                                       [ 50%]
+tests\test_history.py .F.......................                          [ 82%]
+================================== FAILURES ===================================
+____________________ test_trim_keeps_the_last_whole_turns _____________________
+    def test_trim_keeps_the_last_whole_turns():
+        # The test that would have caught the bug from chapter 1.
+        messages = make_conversation(turns=5)
+        trimmed = trim_history(messages, max_turns=3)
+&gt;       assert len(trimmed) == 6
+E       AssertionError: assert 2 == 6
+=========================== short test summary info ===========================
+FAILED tests/test_cli.py::test_long_conversation_is_trimmed - AssertionError:...
+FAILED tests/test_conversations.py::test_everything_is_saved_but_the_model_sees_only_recent_turns
+FAILED tests/test_history.py::test_trim_keeps_the_last_whole_turns - Assertio...
+======================== 3 failed, 73 passed in 13.98s ========================
+FAILED: step 7 of job checks ended with exit code 1. The steps after it did not run.
+1</code></pre>
+</div>
+
+<p>לוג של CI ארוך, ורוב מה שבו הוא רעש. קוראים אותו בסדר קבוע:</p>
+<ol>
+  <li><strong>איזה צעד נכשל.</strong> השורה האחרונה: צעד 7, <span class="en">Tests</span>. ב-GitHub, בדף ה-<span class="en">job</span>, כל צעד הוא שורה מקופלת עם ✓ או ✗, והצעד שנכשל נפתח לבד; בסופו <code>Error: Process completed with exit code 1.</code> כל מה שלפניו עבר, ולכן הבעיה לא בהתקנה, לא בסגנון ולא בטיפוסים.</li>
+  <li><strong>ה-<span class="en">summary</span> של הכלי.</strong> כאן <code>short test summary info</code>: שלוש בדיקות, בשלושה קבצים. כשהרבה נכשל יחד, חפשו את המכנה המשותף: כולן עוסקות בקיצור השיחה.</li>
+  <li><strong>הכישלון הראשון, מלמטה למעלה,</strong> כמו כל <span class="en">traceback</span>: <code>assert 2 == 6</code> ב-<code>trim_history</code>. הבדיקה מפרק 3 עשתה בדיוק את מה שנכתבה בשבילו.</li>
+  <li><strong>האם זה גם אצלי?</strong> אם כן, כמו כאן, מתקנים ודוחפים <span class="en">commit</span> נוסף לאותו ענף, ו-CI רץ שוב לבד. אם CI אדום ואצלכם ירוק, ההבדל הוא הסביבה: קובץ שלא נכנס ל-git, משתנה סביבה שיש רק אצלכם, גרסה אחרת. זה בדיוק מה ש-CI קיים כדי לגלות (תרגיל 2).</li>
+</ol>
+
+<p><code>$LASTEXITCODE</code> הדפיס <code>1</code>. כל הכלים מדברים כך עם CI: 0 פירושו הצלחה, כל דבר אחר כישלון. כלי שמדפיס שגיאה ויוצא ב-0 הוא כלי ש-CI לא יכול להשתמש בו. ב-GitHub יש גם <span class="en">Re-run jobs</span>, להרצה חוזרת בלי <span class="en">commit</span>. השתמשו בו רק לכישלון שאינו בקוד (רשת שנפלה, <span class="en">timeout</span> של שירות חיצוני). בדיקה שעוברת "לפעמים" (<span class="en">flaky test</span>) היא באג, ולא סיבה ללחוץ שוב. <code>git restore agent\history.py</code>.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.9</span>סודות ב-CI</h2>
+
+<p>ה-CI שלנו לא צריך סוד אחד, וזה מכוון: הבדיקות רצות על ה-<span class="en">mock</span>. אבל ביום שצעד יצטרך מפתח (לדחוף <span class="en">image</span>, לפרוס לשרת, להריץ בדיקה מול ה-<span class="en">API</span> האמיתי), הכלל מפרק 1 תקף פי כמה: קובץ ה-<span class="en">workflow</span> נמצא ב-git, וכל מי שרואה את המאגר רואה אותו.</p>
+<ul>
+  <li><strong>איפה שמים:</strong> <span class="en">Settings</span>, <span class="en">Secrets and variables</span>, <span class="en">Actions</span>, <span class="en">New repository secret</span>. GitHub שומר את הערך מוצפן, ואחרי השמירה גם אתם לא רואים אותו שוב.</li>
+  <li><strong>איך משתמשים:</strong> בקובץ כתוב רק השם: <code>${{ secrets.ANTHROPIC_API_KEY }}</code>, בדרך כלל לתוך <code>env</code> של צעד אחד, ולא של כל ה-<span class="en">job</span>. GitHub מחליף ב-<code>***</code> כל הופעה של הערך בלוג.</li>
+  <li><strong><code>GITHUB_TOKEN</code>:</strong> סוד שאינכם יוצרים. GitHub מייצר אותו לכל ריצה, עם ההרשאות שב-<code>permissions</code>, והוא פג בסופה. ה-<span class="en">release</span> בסעיף הבא משתמש בו.</li>
+  <li><strong>מה שלא מגן עליכם:</strong> ההסתרה בלוג תופסת את הערך המדויק, לא קידוד שלו או חלק ממנו; צעד שמדפיס סוד בכוונה, או <span class="en">action</span> של מישהו אחר שמקבל אותו, יכול לדלוף. לכן סוד ניתן רק לצעד שצריך אותו. וב-<span class="en">pull request</span> שמגיע מ-<span class="en">fork</span> (עותק של המאגר אצל אדם זר), GitHub לא מעביר סודות בכלל.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.10</span>גרסאות, <span class="en">tags</span> ו-<span class="en">releases</span></h2>
+
+<p>שאלו את הפרויקט מה הגרסה שלו, ותקבלו שתי תשובות: <code>pyproject.toml</code> אומר <code>0.1.0</code> מאז פרק 1, ו-<code>api.py</code> אומר <code>0.8.0</code>, כי כל פרק שינה אותו ביד. ומשתמש שמדווח על באג "בגרסה של יום שלישי" לא אומר לכם כלום. <span class="en">Release</span> הוא תשובה לשאלה "מה בדיוק רץ אצל מי": מספר אחד, <span class="en">commit</span> אחד, <span class="en">image</span> אחד, ורשימה של מה השתנה.</p>
+
+<p><strong><span class="en">Semantic versioning</span></strong> נותן למספר משמעות. <code>MAJOR.MINOR.PATCH</code>:</p>
+<div class="table-wrap">
+<table>
+  <tr><th>מעלים</th><th>כאשר</th><th>דוגמה אצלנו</th></tr>
+  <tr><td><code>PATCH</code> (0.9.0 ל-0.9.1)</td><td>תיקון באג. כל לקוח ממשיך לעבוד בלי שינוי</td><td><code>ask.py</code> לא קורס על שגיאה שאינה JSON</td></tr>
+  <tr><td><code>MINOR</code> (0.9.0 ל-0.10.0)</td><td>משהו חדש שלקוח ישן יכול להתעלם ממנו</td><td><code>GET /conversations</code> מפרק 7</td></tr>
+  <tr><td><code>MAJOR</code> (1.4.2 ל-2.0.0)</td><td>שבירה: לקוח או מי שמפעיל את השירות חייבים לשנות משהו</td><td>שינוי שם של שדה ב-<code>POST /chat</code></td></tr>
+</table>
+</div>
+<p>כל עוד ה-<code>MAJOR</code> הוא 0, המוסכמה היא שהפרויקט עוד לא יציב, ושבירה מעלה רק את ה-<code>MINOR</code>. נעבור ל-<code>0.9.0</code>, וגרסה 1.0.0 היא הצהרה שאתם מתחייבים לממשק.</p>
+
+<p><strong><span class="en">Tag</span></strong> ב-git הוא שם קבוע ל-<span class="en">commit</span> אחד: <code>git tag -a v0.9.0 -m "my-agent 0.9.0"</code> (<code>-a</code>: <span class="en">tag</span> עם מחבר, תאריך והודעה). בניגוד לענף, הוא לא זז. <code>git push origin v0.9.0</code> שולח אותו, כי <code>git push</code> רגיל לא שולח <span class="en">tags</span>. <strong><span class="en">Changelog</span></strong> הוא קובץ <code>CHANGELOG.md</code>, שבו כל גרסה מקבלת סעיף: מה נוסף, מה השתנה, מה תוקן, במילים של מי שמשתמש בסוכן ולא של מי שכתב את ה-<span class="en">commits</span>. כל <span class="en">pull request</span> מוסיף שורה תחת <code>## [Unreleased]</code>, וב-<span class="en">release</span> הסעיף הזה מקבל מספר ותאריך.</p>
+
+<p>ה-<span class="en">workflow</span> השני רץ רק כשמגיע <span class="en">tag</span> של גרסה:</p>
+
+<div class="codebox">
+  <div class="label"><span>.github/workflows/release.yml</span></div>
+<pre><code># Release: runs when a version tag (v1.2.3) is pushed, never on a pull request.
+# Builds the image, tags it with the version, pushes it to GitHub's registry (ghcr.io)
+# and creates a GitHub release with the notes from CHANGELOG.md.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write  # to create the GitHub release
+  packages: write  # to push the image to ghcr.io
+
+jobs:
+  release:
+    name: Release ${{ github.ref_name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.11.14"
+      - name: Check the tag, and take the notes from CHANGELOG.md
+        run: uv run --locked python scripts/release_notes.py "$GITHUB_REF_NAME" &gt; notes.md
+      - name: Name the image
+        # ghcr.io/&lt;owner&gt;/&lt;repo&gt;:&lt;version&gt;, lowercase as the registry requires; v0.9.0 -&gt; 0.9.0
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_REF_NAME#v}" &gt;&gt; "$GITHUB_ENV"
+      - name: Build
+        run: docker build -t "$IMAGE" .
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}  # made by GitHub for this run only
+      - name: Push
+        run: docker push "$IMAGE"
+      - name: Create the GitHub release
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}</code></pre>
+</div>
+
+<ul>
+  <li><strong>הצעד הראשון שומר על הדלת.</strong> <code>scripts/release_notes.py</code> (תכתבו אותו בתרגיל 5) נכשל אם ה-<span class="en">tag</span> לא תואם את הגרסה ב-<code>pyproject.toml</code>, או אם אין לה סעיף ב-<code>CHANGELOG.md</code>. <span class="en">Tag</span> שגוי עוצר כאן, לפני שנבנה דבר.</li>
+  <li><strong>ה-<span class="en">image</span> מקבל את מספר הגרסה כ-<span class="en">tag</span>,</strong> ונשלח ל-<span class="en">registry</span> של GitHub, <code>ghcr.io</code>. מעכשיו שרת שמריץ <code>my-agent:0.9.0</code> מריץ בדיוק את ה-<span class="en">commit</span> הזה. <code>$GITHUB_REF_NAME</code> ו-<code>$GITHUB_REPOSITORY</code> הם משתנים ש-GitHub מגדיר בכל ריצה; <code>${...,,}</code> ו-<code>${...#v}</code> הם תחביר של bash להקטנת אותיות ולהסרת ה-<code>v</code>.</li>
+  <li><strong>שמרני בכוונה:</strong> רק <span class="en">tag</span> מפעיל אותו, לא כל <span class="en">push</span>; רק <code>GITHUB_TOKEN</code> של הריצה, בלי סיסמה של אדם; ואין <code>latest</code>, שהיה זז מתחת לרגליים של מי שמשתמש בו. אחרי ה-<span class="en">push</span> הראשון, בדקו בדף ה-<span class="en">Package</span> במאגר מי רשאי לראות את ה-<span class="en">image</span>.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.11</span><span class="en">Integration</span>, <span class="en">delivery</span>, <span class="en">deployment</span></h2>
+
+<p>שלוש המילים שמתחבאות ב-CI/CD מתארות כמה רחוק האוטומציה הולכת:</p>
+<div class="table-wrap">
+<table>
+  <tr><th>שם</th><th>מה אוטומטי</th><th>מי מחליט שזה רץ אצל משתמשים</th><th>אצלנו</th></tr>
+  <tr><td><span class="en">Continuous integration</span></td><td>כל שינוי נבדק ונבנה, וממוזג ל-<code>main</code> בתדירות גבוהה (ימים, לא שבועות)</td><td>אין עדיין "אצל משתמשים"</td><td><code>ci.yml</code></td></tr>
+  <tr><td><span class="en">Continuous delivery</span></td><td>כל גרסה שעברה נארזת ומוכנה להתקנה בלחיצה</td><td>אדם, בלחיצה (או ב-<span class="en">tag</span>)</td><td><code>release.yml</code>: <span class="en">image</span> מוכן ב-<code>ghcr.io</code></td></tr>
+  <tr><td><span class="en">Continuous deployment</span></td><td>כל שינוי שעבר את הבדיקות עולה לייצור בעצמו</td><td>אף אחד: הבדיקות הן ההחלטה</td><td>עוד לא. אין לנו שרת</td></tr>
+</table>
+</div>
+<p><span class="en">Continuous deployment</span> אינו "שלב מתקדם" שכל צוות חייב להגיע אליו. הוא דורש בדיקות שאתם סומכים עליהן לגמרי, ניטור שתופס בעיה בדקות (פרק 13), ודרך לחזור אחורה מהר (פרק 10). בלעדיהם, אדם שלוחץ על כפתור הוא בדיקה חשובה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.12</span>תרגילים</h2>
+
+<p>לפני כל <span class="en">commit</span>: <code>uv run --locked python scripts/ci_local.py</code>, עם <code>db</code> של compose למעלה. פתרונות, כולל הפלטים, <a href="solutions/chapter-09.html">בדף נפרד</a>.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · שלוש דרכים להאדים</h3><span class="level">מודרך</span></div>
+  <p>על ענף זמני (<code>git switch -c try/red</code>), שברו כל פעם דבר אחד, הריצו <code>ci_local.py --job checks</code>, ו-<code>git restore</code> לפני הבא:</p>
+  <ol>
+    <li>הוסיפו <code>import os</code> בראש <code>agent\history.py</code>.</li>
+    <li>ב-<code>agent\config.py</code>, בסוף <code>read_positive_int</code>, החליפו <code>return value</code> ב-<code>return raw</code>.</li>
+    <li>אחרי ה-<code>restore</code> השני, הריצו עם אותו שינוי רק <code>uv run pytest</code>: האם הבדיקות היו תופסות אותו גם בלי <code>mypy</code>?</li>
+  </ol>
+  <p>בסוף: <code>git switch main</code>, <code>git branch -D try/red</code>.</p>
+  <label class="answer-label" for="n-ex1">באיזה צעד נעצר כל אחד, ומה לא רץ אחריו? למה הסדר בקובץ הוא מהזול ליקר?</label>
+  <textarea class="answer" id="n-ex1" data-id="c09-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c09-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · ה-<span class="en">lock file</span> ששכחו</h3><span class="level">מודרך</span></div>
+  <p>שחזרו את 9.1. על ענף <code>try/forgotten-lock</code>: הוסיפו ביד ל-<code>dependencies</code> ב-<code>pyproject.toml</code> את השורה <code>"tenacity&gt;=9.1.2",</code>. הריצו <code>uv run pytest -q</code>, ואז <code>git add pyproject.toml</code> ו-<code>git commit -m "Add tenacity for retries"</code>, בלי <code>uv.lock</code>. הריצו <code>git status --short</code> ואת <code>ci_local.py</code> בתיקייה שלכם. ואז, כמו ה-<span class="en">runner</span>, מעותק נקי:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git push origin try/forgotten-lock
+cd ..
+git clone -b try/forgotten-lock remotes\my-agent.git ci-test
+cd ci-test
+uv run --locked python scripts/ci_local.py --job checks</code></pre>
+</div>
+  <p>נקו: <code>cd ..\my-agent</code>, <code>git restore uv.lock</code>, <code>git switch main</code>, <code>git branch -D try/forgotten-lock</code>, <code>git push origin --delete try/forgotten-lock</code>, <code>Remove-Item -Recurse -Force ..\ci-test</code>.</p>
+  <label class="answer-label" for="n-ex2">מה היה ירוק בתיקייה שלכם, ולמה? מה נכשל בעותק הנקי? איזה רמז היה ב-<code>git status</code>?</label>
+  <textarea class="answer" id="n-ex2" data-id="c09-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c09-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · כמה שווה ה-<span class="en">cache</span></h3><span class="level mid">בינוני</span></div>
+  <p>הדמו אצלכם את שני המצבים של <span class="en">runner</span>: עם <span class="en">cache</span> ובלי. <code>--reinstall</code> מתקין מחדש את כל החבילות; <code>UV_CACHE_DIR</code> מפנה את <code>uv</code> לתיקיית מטמון ריקה:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>Measure-Command { uv sync --reinstall } | Select-Object TotalSeconds
+$env:UV_CACHE_DIR = "$env:TEMP\uv-empty-cache"
+Measure-Command { uv sync --reinstall } | Select-Object TotalSeconds
+Remove-Item Env:UV_CACHE_DIR
+Remove-Item -Recurse -Force "$env:TEMP\uv-empty-cache"</code></pre>
+</div>
+  <label class="answer-label" for="n-ex3">כמה זמן כל אחד, ואיזו שורה בפלט מסבירה את ההבדל? מתי ה-<span class="en">cache</span> ב-CI מתחיל מאפס?</label>
+  <textarea class="answer" id="n-ex3" data-id="c09-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c09-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · מה שומר על גרסת ה-Python</h3><span class="level mid">בינוני</span></div>
+  <ol>
+    <li><code>uv run --python 3.12 pytest tests/test_python_version.py</code>.</li>
+    <li><code>uv python pin 3.12</code>, ואז <code>uv run pytest tests/test_python_version.py</code>.</li>
+    <li>החזירו: <code>uv python pin 3.13</code>, והריצו שוב.</li>
+  </ol>
+  <label class="answer-label" for="n-ex4">איזו בדיקה נכשלה בכל שלב, ומה כל אחת מגינה מפניו? מה היה צריך לשנות כדי לעבור ל-3.14 באמת?</label>
+  <textarea class="answer" id="n-ex4" data-id="c09-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c09-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · <span class="en">Release</span> 0.9.0</h3><span class="level mid">בינוני</span></div>
+  <p>על ענף <code>feature/releases</code>:</p>
+  <ol>
+    <li>גרסה אחת: ב-<code>agent\__init__.py</code> כתבו <code>project_version()</code> שקוראת את <code>version</code> מ-<code>pyproject.toml</code> (רמז: <code>tomllib</code>), והשתמשו בה ב-<code>FastAPI(...)</code> במקום <code>"0.8.0"</code>. בדיקה: <code>/openapi.json</code> מחזיר אותה.</li>
+    <li><code>CHANGELOG.md</code> עם <code>## [Unreleased]</code>, סעיף <code>## [0.9.0] - &lt;date&gt;</code> על הפרק הזה, וסעיף קצר ל-0.8.0. ב-<code>pyproject.toml</code>: <code>version = "0.9.0"</code>, ואז <code>uv lock</code>.</li>
+    <li><code>scripts\release_notes.py TAG</code>: יוצא עם שגיאה אם <code>TAG</code> אינו <code>v</code> ועוד הגרסה, או אם אין לה סעיף; אחרת מדפיס את הסעיף. בדיקות שמריצות אותו (<code>subprocess</code>), כולל אחת שנכשלת אם הגרסה עלתה בלי <span class="en">changelog</span>.</li>
+    <li><code>release.yml</code> מסעיף 9.10, <code>actionlint</code>, <code>ci_local.py</code>, מיזוג. ואז: <code>git tag -a v0.9.0 -m "my-agent 0.9.0"</code>, <code>git push origin v0.9.0</code> (ול-<code>github</code>, אם יש לכם).</li>
+    <li>צעדי ה-<span class="en">release</span> אצלכם: <code>release_notes.py v0.9.0</code>, <code>docker build -t my-agent:0.9.0 .</code>, ובדיקת ההפעלה מ-<code>ci.yml</code> עם <code>my-agent:0.9.0</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex5">מה קורה אם דוחפים <code>v0.9.1</code> בלי לשנות דבר? איזה צעד ב-<code>release.yml</code> לא הרצתם אצלכם, ולמה?</label>
+  <textarea class="answer" id="n-ex5" data-id="c09-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c09-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · כללי הבית</h3><span class="level open">פתוח</span></div>
+  <p>CI הוא כלי; הצוות צריך גם כללים. עדכנו את <code>CONTRIBUTING.md</code> מפרק 2: מה רץ לפני <span class="en">push</span>, אילו <span class="en">checks</span> חובה, מה עושים כש-<code>main</code> אדום (מי מתקן, ומתי עושים <code>git revert</code> במקום תיקון), מתי מעלים <code>PATCH</code>, <code>MINOR</code> או <code>MAJOR</code> <em>בפרויקט הזה</em>, ואיך מוציאים <span class="en">release</span>, צעד אחרי צעד. הוסיפו ל-<code>README.md</code> סעיף <span class="en">Releases</span> קצר. <span class="en">Commit</span>, מיזוג, <span class="en">push</span>.</p>
+  <label class="answer-label" for="n-ex6">תנו שלוש דוגמאות לשינוי שובר ב-my-agent, לא רק ב-<span class="en">API</span>. האם הייתם מפעילים כאן <span class="en">continuous deployment</span>? למה?</label>
+  <textarea class="answer" id="n-ex6" data-id="c09-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c09-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.13</span>בדקו את עצמכם</h2>
+
+<p>סמנו רק מה שאתם מסוגלים להסביר בקול רם לאדם אחר, בלי להציץ בפרק.</p>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c09-chk1"><span>אני יודע/ת להסביר מה CI תופס שבדיקה במחשב שלי לא תופסת, עם דוגמה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c09-chk2"><span>אני יודע/ת מה ההבדל בין <span class="en">workflow</span>, <span class="en">job</span>, <span class="en">step</span> ו-<span class="en">runner</span>, ומה רץ במקביל.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c09-chk3"><span>אני יודע/ת לקרוא את <code>ci.yml</code> שלנו שורה אחרי שורה, ולמה גרסאות ה-<span class="en">actions</span> מוצמדות.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c09-chk4"><span>אני יודע/ת איך ה-<span class="en">service container</span> של Postgres עובד, ואיך הבדיקות מגיעות אליו.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c09-chk5"><span>אני יודע/ת מה המפתח של ה-<span class="en">cache</span>, ומתי הוא מתחלף.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c09-chk6"><span>אני יודע/ת לקרוא לוג אדום: איזה צעד, ה-<span class="en">summary</span>, הכישלון הראשון, "האם זה גם אצלי".</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c09-chk7"><span>אני יודע/ת איפה סודות של CI נשמרים, ולמה הם לא בקובץ ה-<span class="en">workflow</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c09-chk8"><span>אני יודע/ת מתי מעלים <code>MAJOR</code>, <code>MINOR</code> ו-<code>PATCH</code>, ומה זה <span class="en">tag</span> ו-<span class="en">changelog</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c09-chk9"><span>אני יודע/ת להסביר את ההבדל בין <span class="en">continuous integration</span>, <span class="en">delivery</span> ו-<span class="en">deployment</span>.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.14</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td><code>The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.</code></td><td><code>pyproject.toml</code> השתנה, ו-<code>uv.lock</code> המעודכן לא נכנס ל-<span class="en">commit</span></td><td><code>uv lock</code>, <code>git add uv.lock</code>, <span class="en">commit</span></td></tr>
+  <tr><td>הקובץ נדחף, ובלשונית <span class="en">Actions</span> אין ריצה</td><td>הקובץ לא ב-<code>.github/workflows/</code> בדיוק, או שם <span class="en">event</span> שגוי (<code>pull-request</code>)</td><td><code>uvx --from actionlint-py actionlint</code>; בדקו את הנתיב עם <code>git ls-files .github</code></td></tr>
+  <tr><td>ה-<span class="en">job</span> נכשל מיד: ה-<span class="en">action</span> או הגרסה שלו לא נמצאו</td><td><span class="en">Tag</span> שאינו קיים, למשל <code>astral-sh/setup-uv@v10</code></td><td>גרסה מלאה שקיימת: <code>git ls-remote --tags https://github.com/astral-sh/setup-uv</code></td></tr>
+  <tr><td>בדיקות ה-<span class="en">migrations</span> נכשלות אצלכם על חיבור ל-<code>127.0.0.1:5432</code></td><td><code>ci_local.py</code> מגדיר <code>TEST_DATABASE_URL</code>, ו-Postgres לא רץ</td><td><code>docker compose up -d db</code> ו-<code>createdb</code> (צעד 4)</td></tr>
+  <tr><td><code>actionlint</code>: <code>no project was found in any parent directories</code></td><td>התיקייה אינה מאגר git (למשל עותק של <code>checkpoints</code>)</td><td>תנו לו את הקבצים: <code>uvx --from actionlint-py actionlint .github/workflows/ci.yml .github/workflows/release.yml</code></td></tr>
+  <tr><td><code>ModuleNotFoundError: No module named 'yaml'</code></td><td>הרצתם <code>python scripts\ci_local.py</code> בלי <code>uv run</code></td><td><code>uv run --locked python scripts/ci_local.py</code></td></tr>
+  <tr><td><code>warning: Ignoring unsupported Python request ... in version file</code></td><td><code>.python-version</code> נכתב ב-PowerShell עם <code>&gt;</code>, בקידוד UTF-16</td><td><code>uv python pin 3.13</code></td></tr>
+  <tr><td>ירוק אצלכם, אדום ב-CI</td><td>משהו קיים רק במחשב שלכם: קובץ שלא ב-git, משתנה סביבה, <span class="en">cache</span></td><td>הריצו מ-<code>git clone</code> נקי (תרגיל 2)</td></tr>
+  <tr><td>ה-<span class="en">checks</span> לא מופיעים ברשימה של ה-<span class="en">ruleset</span></td><td>הם עוד לא רצו אף פעם במאגר</td><td>פתחו <span class="en">pull request</span>, חכו לריצה, וחזרו להגדרות</td></tr>
+  <tr><td><code>The tag v0.9.1 does not match the version in pyproject.toml (0.9.0).</code></td><td>דחפתם <span class="en">tag</span> בלי להעלות את הגרסה</td><td>לא נבנה דבר. <code>git push origin --delete v0.9.1</code>, <code>git tag -d v0.9.1</code>, ו-<span class="en">release</span> כמו ב-<code>CONTRIBUTING.md</code></td></tr>
+  <tr><td>ה-<span class="en">push</span> ל-<code>ghcr.io</code> נכשל ב-<code>denied</code></td><td>אין <code>packages: write</code> ב-<code>permissions</code>, או שם עם אותיות גדולות</td><td>בדקו את <code>permissions</code> ואת <code>${GITHUB_REPOSITORY,,}</code></td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.15</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>CI</dt><dd><span class="en">Continuous integration</span>: כל שינוי נבדק ונבנה אוטומטית, על מכונה נקייה, לפני שהוא ממוזג.</dd>
+  <dt>CD</dt><dd><span class="en">Continuous delivery</span> (כל גרסה מוכנה להתקנה) או <span class="en">continuous deployment</span> (כל גרסה מותקנת לבד).</dd>
+  <dt>pipeline</dt><dd>רצף אוטומטי של שלבים מקוד לתוצר.</dd>
+  <dt>workflow</dt><dd>קובץ YAML ב-<code>.github/workflows/</code> שמתאר <span class="en">pipeline</span> ב-GitHub Actions.</dd>
+  <dt>event / trigger</dt><dd>מה שמפעיל <span class="en">workflow</span>: <span class="en">pull request</span>, <span class="en">push</span>, <span class="en">tag</span>, שעה קבועה.</dd>
+  <dt>job</dt><dd>קבוצת צעדים על <span class="en">runner</span> אחד. <span class="en">Jobs</span> רצים במקביל.</dd>
+  <dt>step</dt><dd>פקודה (<code>run</code>) או <span class="en">action</span> (<code>uses</code>) בתוך <span class="en">job</span>.</dd>
+  <dt>runner</dt><dd>המכונה הנקייה שמריצה <span class="en">job</span>, ונמחקת אחריו.</dd>
+  <dt>action</dt><dd>צעד ארוז לשימוש חוזר, שמופעל עם <code>uses</code> וגרסה.</dd>
+  <dt>service container</dt><dd><span class="en">Container</span> שעולה לצד <span class="en">job</span>, כמו בסיס נתונים לבדיקות.</dd>
+  <dt>cache key</dt><dd>מזהה שמחושב מהקלט (כאן <code>uv.lock</code>), ולפיו נשמר ונמצא <span class="en">cache</span>.</dd>
+  <dt>required check</dt><dd>בדיקה שחייבת להיות ירוקה לפני שמותר למזג לענף מוגן.</dd>
+  <dt>secret</dt><dd>ערך מוצפן בהגדרות המאגר, שמגיע לצעד כמשתנה ומוסתר בלוג.</dd>
+  <dt>semantic versioning</dt><dd><code>MAJOR.MINOR.PATCH</code>: שבירה, תוספת, תיקון.</dd>
+  <dt>tag</dt><dd>שם קבוע ב-git ל-<span class="en">commit</span> אחד, למשל <code>v0.9.0</code>.</dd>
+  <dt>changelog</dt><dd>קובץ שמתאר מה השתנה בכל גרסה, למי שמשתמש בה.</dd>
+  <dt>release</dt><dd>גרסה עם מספר, <span class="en">commit</span>, תוצר (<span class="en">image</span>) והערות.</dd>
+  <dt>flaky test</dt><dd>בדיקה שעוברת לפעמים ונכשלת לפעמים, בלי שינוי בקוד. באג, לא מזל.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">9.16</span>מה הלאה</h2>
+
+<p>כל שינוי נבדק עכשיו על מכונה נקייה, <code>main</code> מקבל רק קוד ירוק, וכל גרסה היא <span class="en">tag</span>, <span class="en">changelog</span> ו-<span class="en">image</span> עם מספר. אבל ה-<span class="en">image</span> הזה, הבדוק והמתויג, עדיין לא רץ בשום מקום חוץ מהמחשב שלכם. אין שרת שמשתמש יכול להגיע אליו, אין הבדל בין סביבת ניסוי לסביבה אמיתית, הסיסמה של Postgres עדיין כתובה ב-<code>compose.yaml</code>, ואם גרסה חדשה נשברת, אין דרך מסודרת לחזור לקודמת.</p>
+
+<p>לקחת את ה-<span class="en">image</span> ולהריץ אותו בעולם, בכמה סביבות, עם סודות אמיתיים ודרך חזרה, זה <strong>פרק 10: <span class="en">Deployment</span> וענן</strong>.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-09</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים, בלי <code>.git</code>. עם <code>db</code> של compose למעלה, <code>uv run --locked python scripts/ci_local.py</code> מריץ את שני ה-<span class="en">jobs</span>: 79 בדיקות עוברות, וה-<span class="en">image</span> מדפיס <code>0.9.0</code>. <code>uvx --from actionlint-py actionlint</code> שקט (מחוץ למאגר git, תנו לו את שני הקבצים בשמם).</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-09.html">פתרונות לפרק 9</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

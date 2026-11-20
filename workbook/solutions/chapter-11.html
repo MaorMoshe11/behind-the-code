@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 11 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-11.html">→ חזרה לפרק 11</a>
+    <span>פתרונות לפרק 11</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 11 · ארכיטקטורה</h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. הפלטים כאן הם מה שהתקבל באמת כשהתרגילים נעשו; הזמנים והמזהים אצלכם יהיו אחרים. הקוד המלא נמצא ב-<code>checkpoints\chapter-11</code>.</p>
+</header>
+
+<h2><span class="sec">1</span>השירות השני נופל</h2>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code> Container my-agent-notes-1 Stopped
+Notes are unavailable right now (the chat still works). Try again later.
+(conversation f82d4643ad1f4f40b11d38438b01a7c4, turns: 1)
+8.1 s
+[mock reply, turn 2] You said: hello again
+(conversation f82d4643ad1f4f40b11d38438b01a7c4, turns: 2)
+{"status":"ready","database":"ok","version":"0.11.0","environment":"local","notes":"unreachable"} 200
+... WARNING agent.notes: notes: POST /v1/notes: ConnectError('[Errno -2] Name or service not known'); retry in 0.01 s
+... WARNING agent.notes: notes: POST /v1/notes: ConnectError('[Errno -2] Name or service not known'); retry in 0.40 s
+ Container my-agent-notes-1 Started
+- buy milk</code></pre>
+</div>
+<p><strong>למה 8 שניות:</strong> "השירות לא שם" הוא לא תשובה מיידית. ב-compose, <span class="en">container</span> עצור מוסר משמות הרשת, וכל ניסיון חיכה כשתי שניות וחצי עד ש-<span class="en">DNS</span> אמר "אין שם כזה". שלושה ניסיונות, ועוד ההמתנות ביניהם. גם בלי compose זה קורה: ב-Windows, חיבור לפורט סגור נדחה רק אחרי כשתי שניות, ולפעמים הוא מגיע קודם ל-<span class="en">timeout</span> של שתי השניות שלנו (<code>ConnectTimeout</code>) במקום להידחות (<code>ConnectError</code>, כמו בצעד 4 של הפרק). תרגיל 4 מטפל בזה.</p>
+<p><strong>למה <code>/ready</code> ענה 200:</strong> העותק הזה של הצ'אט יכול לשרת צ'אט, וזה מה ש-<span class="en">readiness</span> שואל. לו ענה 503, ה-<span class="en">load balancer</span> היה מוציא משירות את כל העותקים בבת אחת, והתקלה בשירות ההערות הייתה הופכת לתקלה בכל הצ'אט. השדה <code>notes</code> הוא מידע למי שמסתכל (ול-<code>deploy.py</code>), לא תנאי. ההערה <code>buy bread</code> לא נשמרה: אף ניסיון לא הגיע לשירות.</p>
+
+<h2><span class="sec">2</span>אותו מפתח פעמיים</h2>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>201 {"id":"22a68f73632740ed9c0a2c57b9a53164","conversation_id":"test","text":"buy milk","created_at":"2026-11-18T18:18:41.771258"}
+200 {"id":"22a68f73632740ed9c0a2c57b9a53164","conversation_id":"test","text":"buy milk","created_at":"2026-11-18T18:18:41.771258"}
+Invoke-WebRequest : {"detail":"This Idempotency-Key belongs to another note."}</code></pre>
+</div>
+<p>הראשונה יצרה (201), השנייה קיבלה את אותה הערה, אותו <code>id</code> ואותו זמן, בלי ליצור (200). השלישית: 409 <span class="en">Conflict</span>. מפתח זהה עם תוכן אחר אומר שהלקוח משתמש במפתח שוב לפעולה אחרת, כלומר באג. להחזיר את ההערה הישנה היה מסתיר אותו: הלקוח היה חושב ששמר <code>sell milk</code>. שגיאה ברורה עדיפה על ניחוש.</p>
+
+<h2><span class="sec">3</span>כמה זמן מחכה המשתמש</h2>
+<p><strong>החישוב:</strong> שלושה ניסיונות של עד 2 שניות, ושתי המתנות של עד 0.2 ו-0.4 שניות: עד 6.6 שניות, ועוד זמן העלייה של <code>uv run</code> ו-<code>ask.py</code> עצמם (כחצי שנייה עד שנייה).</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code> Container my-agent-notes-1 Healthy
+7.0 s
+7.1 s
+7.0 s
+ Container my-agent-api-1 Healthy
+2.4 s
+2.5 s
+2.1 s
+ Container my-agent-notes-1 Healthy
+- buy milk
+- try 1
+- try 2
+- try 3
+- try 4
+- try 5
+- try 6</code></pre>
+</div>
+<p>כל שש ההערות נשמרו, כל אחת פעם אחת. כל ניסיון הגיע לשירות, השירות סיים את העבודה אחרי שלוש שניות גם כשאיש כבר לא חיכה, וה-<code>Idempotency-Key</code> דאג שהניסיונות הבאים של אותה הערה יקבלו את הקיימת. המשתמש, לעומת זאת, קיבל בכל פעם "<span class="en">unavailable</span>", על הערה שנשמרה. זה המחיר של <span class="en">timeout</span>: אחריו לא יודעים.</p>
+<p><strong>הסכנה ב-<span class="en">timeout</span> קצר מדי:</strong> שירות תקין שעונה לפעמים בשנייה ייחשב תקול, ייכשל לשווא, וינוסה שוב, כלומר יקבל עוד עומס בדיוק כשהוא איטי. בוחרים את המספר משני הכיוונים: כמה זמן המשתמש מוכן לחכות לכל הפעולה (חלקי מספר הניסיונות), וכמה זמן לוקחות התשובות האיטיות של השירות כשהוא תקין (נמדוד את זה בפרק 13). ה-<span class="en">timeout</span> צריך להיות מעל השני ומתחת לראשון; אם אין מספר כזה, מורידים ניסיונות.</p>
+
+<h2><span class="sec">4</span>מפסק</h2>
+<div class="codebox">
+  <div class="label"><span>agent\notes.py</span></div>
+<pre><code>class CircuitBreaker:
+    """After `threshold` failed calls in a row, stop calling for `cooldown` seconds.
+
+    Closed: calls go through. Open: every call fails at once, without waiting. After the
+    cooldown, one call may try (half-open): success closes the breaker, failure opens it again.
+    """
+
+    def __init__(
+        self,
+        threshold: int = 3,
+        cooldown: float = 30.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -&gt; None:
+        self.threshold = threshold
+        self.cooldown = cooldown
+        self.clock = clock  # tests pass a fake clock
+        self.failures = 0
+        self.opened_at: float | None = None
+
+    def allow(self) -&gt; bool:
+        return self.opened_at is None or self.clock() - self.opened_at &gt;= self.cooldown
+
+    def success(self) -&gt; None:
+        self.failures = 0
+        self.opened_at = None
+
+    def failure(self) -&gt; None:
+        self.failures += 1
+        if self.failures &gt;= self.threshold:
+            self.opened_at = self.clock()</code></pre>
+</div>
+<p>ב-<code>NotesClient</code>: פרמטר <code>breaker: CircuitBreaker | None = None</code>, ו-<code>self.breaker = breaker or CircuitBreaker()</code>. ב-<code>_request</code>, לפני הלולאה, <code class="wrap">if not self.breaker.allow(): raise NotesUnavailable(f"{method} {path}: circuit open, not calling for now")</code>; <code>self.breaker.success()</code> מיד כשהסטטוס אינו ב-<code>RETRY_STATUSES</code> (השירות ענה, גם אם ב-4xx); ו-<code>self.breaker.failure()</code> לפני ה-<code>raise</code> האחרון. הבדיקה, ב-<code>tests\test_notes.py</code>:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_notes.py</span></div>
+<pre><code>def test_the_breaker_opens_after_three_failed_calls_and_tries_again_later():
+    now = [0.0]
+    breaker = CircuitBreaker(threshold=3, cooldown=30, clock=lambda: now[0])
+    failures = [httpx2.ConnectError("refused")] * 9
+    notes, requests = client_for(*failures, httpx2.Response(200, json=[]))
+    notes.breaker = breaker
+    for _ in range(3):
+        with pytest.raises(NotesUnavailable):
+            notes.list("c1")
+    assert len(requests) == 9  # three calls, three attempts each
+    with pytest.raises(NotesUnavailable, match="circuit open"):
+        notes.list("c1")
+    assert len(requests) == 9  # open: no request was sent at all
+    now[0] = 31  # after the cooldown, one call may try, and it works
+    assert notes.list("c1") == []
+    assert breaker.opened_at is None</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>five /note calls with notes stopped; then start notes (shortened)</span></div>
+<pre><code>8.1 s
+7.8 s
+7.6 s
+0.5 s
+0.5 s
+ Container my-agent-notes-1 Started
+Notes are unavailable right now (the chat still works). Try again later.
+(30 seconds later)
+Noted: try 7</code></pre>
+</div>
+<p>שלוש הקריאות הראשונות שילמו את כל ההמתנה; מהרביעית, תשובה מיידית (חצי השנייה היא <code>uv run</code> עצמו). מיד אחרי <code>start notes</code> המפסק עדיין פתוח, ולכן "<span class="en">unavailable</span>" אף שהשירות כבר למעלה. אחרי 30 שניות קריאה אחת מנסה (<span class="en">half-open</span>), מצליחה, והמפסק נסגר. לשירות ההערות זה טוב כי שירות שמנסה לקום אחרי נפילה לא מקבל מכל הלקוחות, בבת אחת, את כל הניסיונות שהצטברו. שימו לב: המפסק חי בתהליך אחד. לכל עותק של הצ'אט יש מפסק משלו, וזה בסדר גמור.</p>
+
+<h2><span class="sec">5</span>בדיקת חוזה</h2>
+<div class="codebox">
+  <div class="label"><span>notes-service\tests\test_contract.py</span></div>
+<pre><code>def test_v1_endpoints_are_still_there():
+    paths = TestClient(create_app(Settings(api_key="k"))).get("/openapi.json").json()["paths"]
+    assert set(paths["/v1/notes"]) &gt;= {"get", "post"}
+    assert set(paths["/v1/notes/{note_id}"]) &gt;= {"get", "delete"}
+
+
+def test_a_v1_note_keeps_its_fields():
+    client = TestClient(create_app(Settings(api_key="k")))
+    note = client.post("/v1/notes", json={"conversation_id": "c1", "text": "x"}, headers=AUTH)
+    assert note.json().keys() &gt;= {"id", "conversation_id", "text", "created_at"}</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest, after text became body (shortened)</span></div>
+<pre><code>FAILED tests/test_api.py::test_a_note_is_saved_and_listed - KeyError: 'text'
+FAILED tests/test_api.py::test_search_and_get_and_delete - KeyError: 'text'
+FAILED tests/test_contract.py::test_a_v1_note_keeps_its_fields - AssertionErr...
+3 failed, 7 passed in 1.99s</code></pre>
+</div>
+<p>בצ'אט, <code>to_note</code> קורא <code>data["text"]</code>, ולכן כל <code>/note</code> ו-<code>/notes</code> היו נגמרים ב-<code>KeyError</code>, שגיאה שאינה <code>NotesUnavailable</code>, כלומר 500. ושום בדיקה של הצ'אט לא הייתה נכשלת, כי שם משחק את השירות <code>MockTransport</code> שעונה <code>text</code>. לכן הבדיקה צריכה לגור בצד של מי שמשנה. שינוי שם בלי לשבור: מוסיפים ל-<code>v1</code> את <code>body</code> <em>לצד</em> <code>text</code> (שינוי מוסיף, מותר); מעבירים את הלקוחות ל-<code>body</code>; ואת <code>text</code> מוחקים רק ב-<code>/v2</code>, או לעולם לא.</p>
+
+<h2><span class="sec">6</span>מפת המערכת</h2>
+<p>דוגמה מלאה נמצאת ב-<code>checkpoints\chapter-11\docs\architecture.md</code>: טבלת שירותים (קוד, נתונים, מי קורא), הקריאה היחידה ביניהם עם המספרים שלה (2 שניות, 3 ניסיונות, עד כ-7 שניות, מפסק אחרי 3), טבלה של "מה למטה, מה עובד, מה המשתמש רואה", ו-<span class="en">Known gaps</span>. והבדיקה:</p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Noted: flight on Sunday
+(conversation e3dab0a6ac1a48938b8d13a9bc32555e, turns: 1)
+204
+         conversation_id          |       text
+----------------------------------+------------------
+ e3dab0a6ac1a48938b8d13a9bc32555e | flight on Sunday
+(1 row)</code></pre>
+</div>
+<p>השיחה נמחקה (204), וההערה שלה נשארה, מחוברת למזהה שכבר לא קיים. <span class="en">Transaction</span> חיה בתוך בסיס נתונים אחד; כאן יש שניים, ששייכים לשני שירותים. אפשר שהצ'אט יקרא, אחרי המחיקה, ל-<code>DELETE</code> על כל הערה. אבל מה אם שירות ההערות למטה באותו רגע? השיחה כבר נמחקה, וההערות לא. לבעיה הזו יש פתרונות מסודרים (הודעה שתטופל כשהשירות יחזור, ופעולת תיקון לכל צעד), והם פרק 12.</p>
+<p><strong>האם לפצל?</strong> בפרויקט הזה, לא. אין צוות שני, אין עומס שונה, ואין דרישה שההערות ייפרסו בנפרד. שווה לחשוב על <span class="en">modular monolith</span>: מודול <code>agent/notes</code> עם טבלה משלו, שאף מודול אחר לא נוגע בה, ופונקציות במקום HTTP. כל מה שבנינו בפרק (<span class="en">timeouts</span>, ניסיונות, מפתחות, מפסק, שני <span class="en">deploys</span>, שני בסיסי נתונים) היה נעלם, וגם הבאג של המחיקה, כי <span class="en">transaction</span> אחת הייתה מכסה את שניהם. ואם יום אחד יבוא צוות להערות, הגבולות כבר יהיו שם, והפיצול יהיה קל.</p>
+
+<h2><span class="sec">7</span>ההיסטוריה ב-git</h2>
+<div class="codebox output">
+  <div class="label"><span>the commits of this chapter, newest first</span></div>
+<pre><code>Document the architecture (ex. 6)
+Test the notes service's v1 contract (ex. 5)
+A circuit breaker in front of the notes service (ex. 4)
+Deploy 0.11.0 and notes 0.1.0 to staging
+Wire the notes service into CI and deploy; version 0.11.0
+Run the notes service and its database in compose
+Send an Idempotency-Key with every note: a retried note is saved once
+Notes client: a timeout, retries with backoff, and a graceful reply
+Call the notes service from the chat: /note and /notes
+Add the notes service: its own project, database and tests</code></pre>
+</div>
+<p>התגית <code>v0.11.0</code> על "<span class="en">Wire the notes service into CI and deploy</span>". תרגילים 4 עד 6 נכנסו אחרי ה-<span class="en">release</span>, ולכן הם תחת <span class="en">Unreleased</span> ב-<code>CHANGELOG.md</code>.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-11.html">→ חזרה לפרק 11</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

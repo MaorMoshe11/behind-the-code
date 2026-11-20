@@ -1,0 +1,741 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 8 · Containers | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="08">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 8 · Containers</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 8 מתוך 21</div>
+  <h1><span class="en">Containers</span></h1>
+  <p class="lead">איך אורזים את השירות ואת בסיס הנתונים שלו כך שיעלו בפקודה אחת, אותו דבר בדיוק, אצלכם, אצל עמית ובשרת.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>להסביר מה ההבדל בין <span class="en">image</span> ל-<span class="en">container</span>, ובמה <span class="en">container</span> שונה ממכונה וירטואלית.</li>
+    <li>לכתוב <code>Dockerfile</code> לשירות Python עם <code>uv</code>, ולסדר אותו כך שה-<span class="en">build cache</span> יעבוד בשבילכם.</li>
+    <li>לחבר <span class="en">container</span> לעולם: <span class="en">ports</span>, <span class="en">volumes</span> ומשתני סביבה, ולדעת מה נשאר בחוץ (<code>.dockerignore</code>).</li>
+    <li>להרים את ה-<span class="en">API</span>, את ה-<span class="en">migrations</span> ואת Postgres יחד עם <code>docker compose</code>, בסדר הנכון.</li>
+    <li>לבדוק שה-<span class="en">migrations</span> מפרק 7 עובדים על Postgres אמיתי, ולהעביר אליו את השיחות הישנות.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> ארבע עד חמש שעות, כולל ההתקנה והתרגילים. <strong>מה צריך:</strong> הפרויקט מסוף פרק 7, Windows 10 או 11 עם הרשאת מנהל להתקנה, כ-3 GB פנויים בדיסק, ו-8 GB זיכרון לפחות. אין צורך במפתח: הכול במצב <span class="en">mock</span>.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.1</span>הבעיה: "אצלי זה עובד" חוזר</h2>
+
+<p>בסוף פרק 7 הבטחנו ש-<code>DATABASE_URL</code> יצביע על Postgres. נסו את זה עכשיו, בפרויקט כפי שהוא:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$env:DATABASE_URL = "postgresql+psycopg://agent:agent@127.0.0.1:5432/agent"
+uv run alembic upgrade head</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (the end of the traceback)</span></div>
+<pre><code>    import psycopg
+ModuleNotFoundError: No module named 'psycopg'</code></pre>
+</div>
+
+<p>SQLAlchemy מדבר עם כל בסיס נתונים דרך <span class="en">driver</span>, חבילה נפרדת. ל-SQLite יש אחד בתוך Python; ל-Postgres צריך להתקין. נניח שהתקנתם (<code>uv add "psycopg[binary]"</code>) ומריצים שוב:</p>
+
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>sqlalchemy.exc.OperationalError: (psycopg.errors.ConnectionTimeout) connection timeout expired
+Multiple connection attempts failed. All failures were:
+- host: '127.0.0.1', port: 5432, hostaddr: '127.0.0.1': connection timeout expired</code></pre>
+</div>
+
+<p>(אצלי זה לקח כמה דקות; במחשבים רבים מקבלים מיד <code>Connection refused</code>. המשמעות זהה: אף אחד לא מקשיב בפורט 5432.) כאן מתחיל הקושי האמיתי. SQLite הוא קובץ; Postgres הוא <strong>שרת</strong>, תוכנה שצריך להתקין, להגדיר, להפעיל ולשמור עליה. ואז השאלות של פרק 1 חוזרות, בגדול:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה</th><th>אצלכם</th><th>אצל עמית</th><th>בשרת</th></tr>
+  <tr><td>מערכת הפעלה</td><td>Windows</td><td>macOS</td><td>Linux</td></tr>
+  <tr><td>Python</td><td>מה ש-<code>uv</code> בחר</td><td>גרסה אחרת</td><td>מה שהותקן לפני שנתיים</td></tr>
+  <tr><td>Postgres</td><td>התקנתם 17, עם סיסמה שבחרתם</td><td>16, משתמש אחר</td><td>מישהו התקין, מישהו הגדיר</td></tr>
+  <tr><td>הפעלה</td><td><code>alembic</code> ואז <code>uvicorn</code>, אם זכרתם</td><td>שכח את <code>alembic</code></td><td>סקריפט שאיש לא מבין</td></tr>
+</table>
+</div>
+
+<p><code>uv.lock</code> פתר רק שורה אחת מהטבלה, החבילות. מה שחסר הוא דרך לארוז <em>את כל השאר</em>: מערכת ההפעלה, Python, החבילות, הקוד, הפקודה שמפעילה אותו, ושירותים כמו Postgres, לחבילה אחת שרצה אותו דבר בכל מקום. החבילה הזו היא <strong><span class="en">image</span></strong>, וכשהיא רצה קוראים לה <strong><span class="en">container</span></strong>. הכלי הנפוץ ביותר לזה הוא <strong>Docker</strong>.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.2</span>המפה: שלושה <span class="en">containers</span> ופקודה אחת</h2>
+
+<div class="diagram">
+  <div class="layers">
+    <div class="layer">
+      <div class="name">Your computer (Windows)</div>
+      <div class="what">PowerShell, הדפדפן, <code>curl.exe</code>, <code>uv run pytest</code>, והקובץ <code>agent.db</code> שלכם</div>
+      <div class="inner">
+        <div class="layer l2">
+          <div class="name">Docker Desktop: a small Linux machine (WSL 2)</div>
+          <div class="what">כאן רצים ה-containers. כל אחד מבודד, עם קבצים, תהליכים וכתובת רשת משלו</div>
+          <div class="inner">
+            <div class="row">
+              <div class="layer l4">
+                <div class="name">db · postgres:17-alpine</div>
+                <div class="what">Postgres, מקשיב ב-5432. מבחוץ: <code>127.0.0.1:5432</code></div>
+              </div>
+              <div class="layer l4">
+                <div class="name">migrate · my-agent image</div>
+                <div class="what"><code>alembic upgrade head</code>, פעם אחת, ויוצא</div>
+              </div>
+              <div class="layer l4">
+                <div class="name">api · my-agent image</div>
+                <div class="what">uvicorn על <code>0.0.0.0:8000</code>. מבחוץ: <code>127.0.0.1:8000</code></div>
+              </div>
+            </div>
+            <div class="layer l3">
+              <div class="name">volume pgdata · network my-agent_default</div>
+              <div class="what">הנתונים של Postgres שורדים כש-container נמחק. ברשת הפנימית, <code>api</code> מגיע ל-Postgres בשם <code>db</code></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="flow steps">
+    <div class="layer l4"><div class="name">db: healthy</div><div class="what">מקבל חיבורים</div></div>
+    <div class="hop">&rarr;<b>then</b></div>
+    <div class="layer l4"><div class="name">migrate: exited (0)</div><div class="what">המבנה מעודכן</div></div>
+    <div class="hop">&rarr;<b>then</b></div>
+    <div class="layer l4"><div class="name">api: up</div><div class="what">רק עכשיו</div></div>
+  </div>
+  <div class="caption"><code>docker compose up</code> מרים את שלושתם, בסדר הזה. ה-migration נשאר צעד נפרד, כמו שקבענו בפרק 7.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.3</span><span class="en">Image</span> ו-<span class="en">container</span></h2>
+
+<p><strong><span class="en">Image</span></strong> הוא תמונת מצב קפואה של מערכת קבצים: מערכת הפעלה מינימלית של Linux, Python, ה-<code>.venv</code>, הקוד, ופקודת ברירת מחדל. הוא לא משתנה. <strong><span class="en">Container</span></strong> הוא תהליך שרץ <em>מתוך</em> <span class="en">image</span>, עם שכבה דקה משלו שאפשר לכתוב אליה. היחס דומה ליחס בין מחלקה לאובייקט: מ-<span class="en">image</span> אחד מריצים כמה <span class="en">containers</span> שרוצים, וכל אחד מתחיל מאותה נקודה בדיוק. מה שנכתב בתוך <span class="en">container</span> נעלם כשמוחקים אותו. זה מכוון, וזו הסיבה שבסיס נתונים צריך <span class="en">volume</span> (8.6).</p>
+
+<p><strong>במה זה שונה ממכונה וירטואלית?</strong> מכונה וירטואלית מדמה מחשב שלם, עם מערכת הפעלה מלאה משלה, ולכן היא כבדה ועולה בדקות. <span class="en">container</span> חולק את הליבה (<span class="en">kernel</span>) של Linux עם המכונה שמריצה אותו, ומבודד רק את הקבצים, התהליכים והרשת. הוא עולה בשניות, ושוקל עשרות מגה-בייט. ב-Windows אין ליבת Linux, ולכן Docker Desktop מריץ מכונת Linux קטנה אחת ברקע (דרך WSL 2), וכל ה-<span class="en">containers</span> חיים בתוכה.</p>
+
+<p><span class="en">Images</span> מוכנים מגיעים מ-<strong><span class="en">registry</span></strong>, מאגר ציבורי או פרטי. הברירה של Docker היא Docker Hub. השם <code>postgres:17-alpine</code> הוא <span class="en">image</span> בשם <code>postgres</code> עם <span class="en">tag</span> בשם <code>17-alpine</code>: גרסה 17, על בסיס Alpine Linux הקטן. תמיד מצמידים <span class="en">tag</span> מפורש, מאותה סיבה ש-<code>uv.lock</code> קיים: <code>latest</code> של היום הוא לא <code>latest</code> של עוד חצי שנה.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>פקודה</th><th>מה היא עושה</th></tr>
+  <tr><td><code>docker build -t my-agent .</code></td><td>בונה <span class="en">image</span> לפי ה-<code>Dockerfile</code> בתיקייה, ונותנת לו שם</td></tr>
+  <tr><td><code>docker run --rm my-agent</code></td><td>מריצה <span class="en">container</span> מה-<span class="en">image</span>. <code>--rm</code>: מוחקת אותו כשהוא נגמר</td></tr>
+  <tr><td><code>docker ps</code> / <code>docker ps -a</code></td><td>ה-<span class="en">containers</span> שרצים / כולל אלה שנעצרו</td></tr>
+  <tr><td><code>docker logs NAME</code></td><td>מה שה-<span class="en">container</span> הדפיס</td></tr>
+  <tr><td><code>docker exec -it NAME sh</code></td><td>פותחת <span class="en">shell</span> בתוך <span class="en">container</span> שרץ</td></tr>
+  <tr><td><code>docker stop NAME</code> / <code>docker rm NAME</code></td><td>עוצרת / מוחקת <span class="en">container</span></td></tr>
+  <tr><td><code>docker image ls</code> / <code>docker history my-agent</code></td><td>ה-<span class="en">images</span> במחשב / השכבות של אחד מהם (8.5)</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.4</span>מתקינים Docker Desktop</h2>
+
+<p>Docker Desktop דורש <strong>WSL 2</strong> (<span class="en">Windows Subsystem for Linux</span>), הרכיב של Windows שמריץ Linux. פתחו PowerShell <strong>כמנהל</strong> (קליק ימני על <span class="en">Terminal</span>, <span class="en">Run as administrator</span>):</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell (as administrator)</span></div>
+<pre><code>wsl --install --no-distribution             <span class="cm"># turns on WSL 2; skip if wsl --status already works</span>
+winget install --id Docker.DockerDesktop -e</code></pre>
+</div>
+
+<ol>
+  <li><strong>הפעילו את המחשב מחדש.</strong> בלי זה WSL לא פעיל, ו-Docker Desktop יודיע שהוא לא מוצא אותו.</li>
+  <li>פתחו את Docker Desktop מתפריט ההתחלה. בהפעלה הראשונה הוא מציג תנאי שימוש ושואל על חשבון; אפשר לדלג על החשבון. חכו שבפינה יופיע <span class="en">Engine running</span>.</li>
+  <li><strong>רישיון:</strong> Docker Desktop חינמי לשימוש אישי, ללימודים, לקוד פתוח ולעסקים קטנים. בחברות גדולות (נכון לכתיבת שורות אלה: מ-250 עובדים או מ-10 מיליון דולר הכנסה בשנה) הוא דורש מנוי בתשלום. בעבודה, שאלו לפני שאתם מתקינים.</li>
+  <li>Docker Desktop תופס זיכרון גם כשלא משתמשים בו. כשסיימתם לעבוד, סגרו אותו מהאייקון ליד השעון (<span class="en">Quit Docker Desktop</span>).</li>
+</ol>
+
+<p>פתחו חלון <span class="en">terminal</span> חדש (לא כמנהל) ובדקו:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker version
+docker run --rm hello-world</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Client:
+ Version:           29.8.2
+ OS/Arch:           windows/amd64
+Server: Docker Desktop 4.94.0 (241994)
+ Engine:
+  Version:          29.8.2
+  OS/Arch:          linux/amd64
+Unable to find image 'hello-world:latest' locally
+latest: Pulling from library/hello-world
+Hello from Docker!
+This message shows that your installation appears to be working correctly.</code></pre>
+</div>
+
+<p>שימו לב לשתי שורות <code>OS/Arch</code>: הפקודה <code>docker</code> שהקלדתם היא תוכנת Windows (<span class="en">client</span>), והיא מדברת עם מנוע שרץ על Linux (<span class="en">server</span>). אותו מבנה של <span class="en">client</span> ו-<span class="en">server</span> מפרק 4. ה-<span class="en">image</span> <code>hello-world</code> לא היה במחשב, אז Docker הוריד אותו מה-<span class="en">registry</span>, הריץ, והדפיס.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.5</span><code>Dockerfile</code>, שכבות ו-<span class="en">cache</span></h2>
+
+<p><code>Dockerfile</code> הוא המתכון של ה-<span class="en">image</span>: רשימת הוראות, מלמעלה למטה. זה ה-<code>Dockerfile</code> של הסוכן, ותיצרו אותו בדוגמה המודרכת:</p>
+
+<div class="codebox">
+  <div class="label"><span>Dockerfile</span></div>
+<pre><code># The image of the agent's HTTP service: Python, the locked packages, and the code.
+FROM python:3.13-slim
+
+# uv, copied from its official image (same version as on your computer).
+COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /bin/uv
+
+WORKDIR /app
+
+# Packages first: this layer is rebuilt only when pyproject.toml or uv.lock change.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --locked --no-dev
+
+# Then the code, which changes often.
+COPY . .
+
+# Use the packages in .venv without `uv run` (which would also install the dev tools).
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1
+
+EXPOSE 8000
+# 0.0.0.0: accept connections from outside the container, not only from inside it.
+CMD ["uvicorn", "agent.api:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]</code></pre>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>הוראה</th><th>מה היא עושה</th></tr>
+  <tr><td><code>FROM</code></td><td>נקודת ההתחלה: <span class="en">image</span> רשמי של Python 3.13 על Debian מצומצם (<code>slim</code>). ה-Python של השרת נקבע כאן, לא במחשב של מי שבונה</td></tr>
+  <tr><td><code>COPY --from=...</code></td><td>מעתיקה קובץ מ-<span class="en">image</span> אחר: את <code>uv</code> עצמו. החליפו את <code>0.11.14</code> בגרסה ש-<code>uv --version</code> מדפיס אצלכם</td></tr>
+  <tr><td><code>WORKDIR</code></td><td>תיקיית העבודה מכאן והלאה, גם כשה-<span class="en">container</span> רץ. חשוב ל-<code>alembic.ini</code>, ש-<code>prepend_sys_path = .</code> שלו יחסי (פרק 7)</td></tr>
+  <tr><td><code>RUN</code></td><td>מריצה פקודה <em>בזמן הבנייה</em>. <code>--locked</code>: בדיוק לפי <code>uv.lock</code>, ונכשל אם הוא לא מעודכן. <code>--no-dev</code>: בלי pytest, ruff ו-mypy</td></tr>
+  <tr><td><code>ENV</code></td><td>משתני סביבה קבועים ב-<span class="en">image</span>. <code>PYTHONUNBUFFERED</code>: הדפסות יוצאות מיד, ולא נתקעות בחוצץ</td></tr>
+  <tr><td><code>EXPOSE</code></td><td>תיעוד בלבד: "השירות מקשיב ב-8000". לא פותח שום דבר</td></tr>
+  <tr><td><code>CMD</code></td><td>מה רץ כשמפעילים <span class="en">container</span>, אם לא ביקשו משהו אחר. לא רץ בזמן הבנייה</td></tr>
+</table>
+</div>
+
+<h3>שכבות, ולמה הסדר חשוב</h3>
+
+<p>כל הוראה שמשנה קבצים (<code>COPY</code>, <code>RUN</code>) יוצרת <strong>שכבה</strong> (<span class="en">layer</span>): ההבדל בקבצים לעומת השכבה שמתחתיה. ה-<span class="en">image</span> הוא ערימת השכבות. בבנייה הבאה, Docker בודק כל הוראה: אם היא והקבצים שהיא מעתיקה לא השתנו, הוא לוקח את השכבה מה-<span class="en">build cache</span> ולא מריץ דבר. אבל ברגע שהוראה אחת השתנתה, <em>כל</em> מה שמתחתיה נבנה מחדש.</p>
+
+<p>מכאן הסדר: מה שמשתנה לעיתים רחוקות למעלה, ומה שמשתנה כל הזמן למטה. <code>uv sync</code> מוריד ומתקין 32 חבילות, דקה ויותר. אילו <code>COPY . .</code> היה לפניו, כל שינוי של פסיק בקוד היה מריץ אותו מחדש. כשהוא אחרי <code>COPY pyproject.toml uv.lock</code> בלבד, הוא רץ רק כשהחבילות באמת השתנו. תרגיל 3 מודד את ההבדל.</p>
+
+<h3><code>.dockerignore</code>: מה לא נכנס</h3>
+
+<p>הנקודה בסוף <code>docker build -t my-agent .</code> היא ה-<strong><span class="en">build context</span></strong>: התיקייה ש-Docker אורז ושולח למנוע, ומשם <code>COPY . .</code> מעתיק. בלי סינון, נכנסים גם <code>.venv</code> של Windows (שלא יעבוד על Linux), <code>.git</code>, ובעיקר <code>.env</code> עם המפתחות ו-<code>agent.db</code> עם השיחות. <span class="en">image</span> נשלח ל-<span class="en">registry</span> ולשרתים, ומי שמחזיק אותו יכול לקרוא כל קובץ בו. לכן:</p>
+
+<div class="codebox">
+  <div class="label"><span>.dockerignore</span></div>
+<pre><code># What `docker build` must not send into the image.
+# Private settings and local data stay on your computer.
+.env
+*.db
+*.db-journal
+*.log
+
+# Rebuilt inside the image from uv.lock
+.venv/
+
+# History, caches and editor settings: not needed to run the agent
+.git/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.vscode/
+.idea/
+
+# Not needed in the running service
+tests/</code></pre>
+</div>
+
+<div class="callout warn">
+  <span class="title">סודות לא נכנסים ל-<span class="en">image</span>, אף פעם</span>
+  <p>גם לא בשורת <code>ENV ANTHROPIC_API_KEY=...</code> ב-<code>Dockerfile</code>: היא נשמרת בשכבה, ו-<code>docker history</code> מראה אותה לכל מי שיש לו את ה-<span class="en">image</span>. סודות מגיעים ל-<span class="en">container</span> <em>כשהוא מופעל</em>, כמשתני סביבה (8.6). פרקים 10 ו-14 יראו איך עושים את זה בשרת.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.6</span><span class="en">Ports</span>, <span class="en">volumes</span> ומשתני סביבה</h2>
+
+<p><span class="en">Container</span> מבודד גם ברשת: יש לו כתובת משלו, ו-<code>127.0.0.1</code> בתוכו הוא <em>הוא עצמו</em>, לא המחשב שלכם. מכאן שני דברים שצריך לחבר במפורש:</p>
+
+<ul>
+  <li><strong><span class="en">Port publishing</span>:</strong> <code>-p 127.0.0.1:8000:8000</code> פירושו "חיבור ל-8000 במחשב שלי, רק מהמחשב שלי, יועבר ל-8000 ב-<span class="en">container</span>". בלי <code>127.0.0.1:</code> בהתחלה, Docker פותח את הפורט לכל הרשת שהמחשב מחובר אליה, כולל ה-Wi-Fi של בית הקפה.</li>
+  <li><strong>להקשיב על <code>0.0.0.0</code>:</strong> uvicorn מקשיב כברירת מחדל על <code>127.0.0.1</code>, כלומר רק לחיבורים מתוך ה-<span class="en">container</span> עצמו. החיבור שמגיע מבחוץ דרך הפורט לא מגיע אליו, ו-<code>curl</code> מקבל <code>Empty reply from server</code>. לכן <code>--host 0.0.0.0</code> ב-<code>CMD</code>: "כל כתובת שלי". בתוך <span class="en">container</span> זה בטוח, כי רק מה שפורסם ב-<code>-p</code> נגיש מבחוץ. תראו את זה בצעד 3.</li>
+</ul>
+
+<p><strong><span class="en">Volume</span></strong> הוא תיקייה שמנוהלת על ידי Docker, מחוץ לכל <span class="en">container</span>, ומחוברת לנתיב בתוכו. Postgres כותב ל-<code>/var/lib/postgresql/data</code>; כשהנתיב הזה הוא <span class="en">volume</span>, אפשר למחוק את ה-<span class="en">container</span>, להחליף גרסה, ולהרים חדש, והנתונים שם. אפשרות אחרת היא <span class="en">bind mount</span>, תיקייה מהמחשב שלכם; לבסיס נתונים ב-Windows עדיף <span class="en">volume</span>, מהיר יותר ובלי בעיות הרשאות.</p>
+
+<p><strong>משתני סביבה</strong> נכנסים בהפעלה: <code>-e NAME=value</code> לאחד, <code>--env-file .env</code> לקובץ שלם. אותו <span class="en">image</span> בדיוק רץ עם SQLite בזיכרון, עם Postgres מקומי, או עם Postgres בענן, ורק הסביבה משתנה. זה הרעיון של פרק 1, עכשיו בקנה מידה של שרת. ושימו לב: <code>load_dotenv()</code> לא ימצא <code>.env</code> בתוך ה-<span class="en">container</span>, כי <code>.dockerignore</code> השאיר אותו בחוץ. הערכים מגיעים מ-Docker.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.7</span><code>docker compose</code>: כמה שירותים בקובץ אחד</h2>
+
+<p>אפשר להרים את Postgres ואת ה-<span class="en">API</span> בשתי פקודות <code>docker run</code> ארוכות, ליצור להם רשת משותפת ו-<span class="en">volume</span> ביד, ולזכור להריץ את ה-<span class="en">migrations</span> ביניהן. או לכתוב את כל זה פעם אחת, בקובץ שנכנס ל-git:</p>
+
+<div class="codebox">
+  <div class="label"><span>compose.yaml</span></div>
+<pre><code># The agent's service and its database, started together: docker compose up --build
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      # A local development database. Real passwords never go in this file (chapter 10).
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent
+    volumes:
+      - pgdata:/var/lib/postgresql/data  # the data lives in a volume, not in the container
+    ports:
+      - "127.0.0.1:5432:5432"  # only this computer can connect, for tools and scripts
+    healthcheck:
+      # "Ready" means Postgres accepts connections, not just that the process started.
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
+      interval: 2s
+      timeout: 5s
+      retries: 30  # a new database needs time to initialise on its first start
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]  # a separate step, as in chapter 7
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    env_file: .env  # AGENT_API_KEY, CHAT_MOCK and the rest, from your private file
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent  # wins over .env
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:</code></pre>
+</div>
+
+<ul>
+  <li><strong>כל שירות הוא <span class="en">container</span>.</strong> <code>db</code> מ-<span class="en">image</span> מוכן; <code>migrate</code> ו-<code>api</code> נבנים מה-<code>Dockerfile</code> שלכם (<code>build: .</code>). <code>migrate</code> מחליף את ה-<code>CMD</code> ב-<code>command</code> משלו.</li>
+  <li><strong>רשת ושמות.</strong> compose מחבר את כולם לרשת אחת, שבה כל שירות נגיש בשמו. לכן ב-<code>DATABASE_URL</code> כתוב <code>db</code>, לא <code>127.0.0.1</code>: מתוך <code>api</code>, <code>127.0.0.1</code> הוא <code>api</code> עצמו.</li>
+  <li><strong>סדר.</strong> <code>depends_on</code> לבדו מחכה רק שה-<span class="en">container</span> <em>יתחיל</em>. Postgres צריך כמה שניות אחרי שהתחיל כדי לקבל חיבורים, ולכן <code>service_healthy</code>, לפי ה-<code>healthcheck</code>. ו-<code>api</code> מחכה ש-<code>migrate</code> יסתיים בהצלחה. נכשל? <code>api</code> לא עולה בכלל (תרגיל 4). זה הכלל מפרק 7, עכשיו נאכף: האפליקציה לא מריצה <span class="en">migrations</span>, ולא עולה לפניהם.</li>
+  <li><strong><code>env_file</code> ו-<code>environment</code>.</strong> ה-<span class="en">API</span> מקבל את <code>.env</code> שלכם, ו-<code>DATABASE_URL</code> מ-<code>environment</code> גובר עליו. הסיסמה <code>agent</code> כתובה בקובץ כי זה בסיס נתונים מקומי, בלי שום דבר אמיתי. בשרת, לא כך.</li>
+</ul>
+
+<div class="table-wrap">
+<table>
+  <tr><th>פקודה</th><th>מה היא עושה</th></tr>
+  <tr><td><code>docker compose up --build -d</code></td><td>בונה מה שצריך, ומרים הכול ברקע (<code>-d</code>). בלי <code>-d</code>: הלוגים בחלון, ו-<kbd>Ctrl</kbd>+<kbd>C</kbd> עוצר</td></tr>
+  <tr><td><code>docker compose ps -a</code></td><td>מצב כל שירות, כולל <code>migrate</code> שכבר יצא</td></tr>
+  <tr><td><code>docker compose logs api</code></td><td>מה ששירות אחד הדפיס. <code>-f</code>: ממשיך לעקוב</td></tr>
+  <tr><td><code>docker compose exec db psql -U agent</code></td><td>מריצה פקודה בתוך שירות שרץ: כאן, ה-<span class="en">shell</span> של Postgres</td></tr>
+  <tr><td><code>docker compose stop</code> / <code>start</code></td><td>עוצרת / מפעילה, בלי למחוק</td></tr>
+  <tr><td><code>docker compose down</code></td><td>עוצרת ומוחקת את ה-<span class="en">containers</span> ואת הרשת. ה-<span class="en">volume</span> נשאר</td></tr>
+  <tr><td><code>docker compose down -v</code></td><td>אותו דבר, <strong>ומוחקת את ה-<span class="en">volume</span></strong>: כל הנתונים</td></tr>
+</table>
+</div>
+
+<p>(בפרויקטים ישנים תפגשו <code>docker-compose.yml</code> ופקודה עם מקף, <code>docker-compose</code>. זה אותו רעיון בגרסה קודמת; השם המומלץ היום הוא <code>compose.yaml</code>.)</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.8</span>דוגמה מודרכת: הסוכן ו-Postgres בפקודה אחת</h2>
+
+<div class="step">
+  <h3><span class="step-num">1</span>ענף, ו-<span class="en">driver</span> ל-Postgres</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects\my-agent
+Remove-Item Env:DATABASE_URL    <span class="cm"># if it is still set from 8.1</span>
+git switch main
+git pull
+git switch -c feature/containers
+uv add "psycopg[binary]"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code> + psycopg==3.3.9
+ + psycopg-binary==3.3.9
+ + tzdata==2026.6</code></pre>
+</div>
+  <p><code>[binary]</code> מביא את <code>psycopg</code> עם ספריית הלקוח של Postgres כבר מקומפלת, ל-Windows וגם ל-Linux. <code>git add pyproject.toml uv.lock</code>, <code>git commit -m "Add the Postgres driver"</code>. ועוד שורה קטנה ל-<code>.gitignore</code>, שחסרה מפרק 3: <code>mypy</code> כותב תיקיית <code>.mypy_cache</code>, ו-<code>git status</code> מציג אותה כקובץ חדש. הוסיפו בסוף הקובץ <code># The type checker's cache (mypy writes it on every run)</code> ו-<code>.mypy_cache/</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span><code>Dockerfile</code>, <code>.dockerignore</code>, ובנייה</h3>
+  <p>צרו את שני הקבצים כמו בסעיף 8.5, עם גרסת ה-<code>uv</code> שלכם. ואז:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker build --progress=plain -t my-agent .</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>#4 [internal] load .dockerignore
+#5 [internal] load build context
+#5 transferring context: 358.38kB 2.4s done
+#7 [stage-0 1/6] FROM docker.io/library/python:3.13-slim@sha256:e48f59cd...
+#8 [stage-0 2/6] COPY --from=ghcr.io/astral-sh/uv:0.11.14 /uv /bin/uv
+#9 [stage-0 3/6] WORKDIR /app
+#10 [stage-0 4/6] COPY pyproject.toml uv.lock ./
+#11 [stage-0 5/6] RUN uv sync --locked --no-dev
+#11 72.21 Installed 32 packages in 3.09s
+#12 [stage-0 6/6] COPY . .
+#13 naming to docker.io/library/my-agent:latest</code></pre>
+</div>
+  <p>הבנייה הראשונה איטית: היא מורידה את <span class="en">image</span> הבסיס ואת החבילות (אצלי, במחשב עמוס, כמה דקות). ה-<span class="en">build context</span> הוא 358 KB, בלי <code>.venv</code> ו-<code>.git</code>. ה-<span class="en">image</span> שוקל <code>350MB</code> בדיסק (<code>docker image ls my-agent</code>), רובו Python ו-Debian. <code>git add Dockerfile .dockerignore .gitignore</code>, <code>git commit -m "Add a Dockerfile for the API"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>מריצים לבד, ולומדים משלוש תקלות</h3>
+  <p>עצרו כל <code>uvicorn</code> מקומי (הפורט 8000 צריך להיות פנוי) ונסו:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker run --rm -p 127.0.0.1:8000:8000 my-agent</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (the end)</span></div>
+<pre><code>  File "/app/agent/api.py", line 98, in create_app
+    raise ConfigError("AGENT_API_KEY is not set. Put a long random value in .env.")
+agent.config.ConfigError: AGENT_API_KEY is not set. Put a long random value in .env.</code></pre>
+</div>
+  <p>הנתיב <code>/app/agent/api.py</code> הוא נתיב של Linux, בתוך ה-<span class="en">container</span>. ו-<code>.env</code> לא שם, כמו שרצינו. תנו לו את המשתנים בהפעלה:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker run --rm -p 127.0.0.1:8000:8000 --env-file .env my-agent</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (the end)</span></div>
+<pre><code>agent.db.DatabaseNotReady: The database has no migration history. A new database: run `uv run alembic upgrade head`. One from before migrations: see `alembic stamp`.</code></pre>
+</div>
+  <p>ה-<code>agent.db</code> שלכם נשאר במחשב (<code>*.db</code> ב-<code>.dockerignore</code>), וה-<span class="en">container</span> פתח קובץ חדש וריק ב-<code>/app</code>. <code>check_schema</code> מפרק 7 סירב לעבוד איתו, בדיוק כמו שצריך. לניסוי, בסיס נתונים בזיכרון שמקבל טבלאות מ-<code>create_all</code>, ואת ה-<code>CMD</code> בלי <code>--host</code>, כדי לראות למה הוא שם. מילים אחרי שם ה-<span class="en">image</span> מחליפות את ה-<code>CMD</code>:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker run -d --rm --name agent-try -p 127.0.0.1:8000:8000 --env-file .env -e DATABASE_URL=sqlite:// my-agent uvicorn agent.api:create_app --factory
+docker logs agent-try
+curl.exe http://127.0.0.1:8000/health
+docker stop agent-try</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>INFO:     Started server process [1]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+curl: (52) Empty reply from server
+agent-try</code></pre>
+</div>
+  <p>השרת עלה, Docker קיבל את החיבור, ואין מי שיענה: uvicorn מקשיב ל-<code>127.0.0.1</code> <em>של ה-<span class="en">container</span></em>. (<code>-d</code> מריץ ברקע, <code>--name</code> נותן שם שאפשר לפנות אליו.) הריצו את אותה פקודה <code>docker run</code> בלי שלוש המילים האחרונות, כלומר עם ה-<code>CMD</code> של ה-<code>Dockerfile</code>, ואז שוב <code>docker logs agent-try</code> ו-<code>curl.exe</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+{"status":"ok"}</code></pre>
+</div>
+  <p>עצרו (<code>docker stop agent-try</code>). שלוש תקלות, ואף אחת לא באג בקוד: כולן "הסביבה שונה ממה שחשבתם". ההבדל מפרק 1 הוא שעכשיו הסביבה כתובה בקובץ, ומה שעובד כאן יעבוד בכל מחשב.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>הכול יחד: <code>compose.yaml</code></h3>
+  <p>צרו את <code>compose.yaml</code> מסעיף 8.7. ודאו שב-<code>.env</code> יש <code>AGENT_API_KEY</code> ו-<code>CHAT_MOCK=1</code>. בכל מקרה, השורה <code>DATABASE_URL</code> ב-<code>.env</code> (אם הסרתם ממנה את ה-<code>#</code>) לא משפיעה על ה-<span class="en">containers</span>. ואז:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose up --build -d
+docker compose ps -a
+docker compose logs migrate</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code> Network my-agent_default Created
+ Volume my-agent_pgdata Created
+ Container my-agent-db-1 Healthy
+ Container my-agent-migrate-1 Exited
+ Container my-agent-api-1 Started
+NAME                 IMAGE                SERVICE   STATUS                      PORTS
+my-agent-api-1       my-agent-api         api       Up 19 seconds               127.0.0.1:8000-&gt;8000/tcp
+my-agent-db-1        postgres:17-alpine   db        Up 51 seconds (healthy)     127.0.0.1:5432-&gt;5432/tcp
+my-agent-migrate-1   my-agent-migrate     migrate   Exited (0) 20 seconds ago
+migrate-1  | INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
+migrate-1  | INFO  [alembic.runtime.migration] Will assume transactional DDL.
+migrate-1  | INFO  [alembic.runtime.migration] Running upgrade  -&gt; 0001, baseline: the tables from chapter 6
+migrate-1  | INFO  [alembic.runtime.migration] Running upgrade 0001 -&gt; 0002, add a title to conversations
+migrate-1  | INFO  [alembic.runtime.migration] Running upgrade 0002 -&gt; 0003, every conversation has a title
+migrate-1  | INFO  [alembic.runtime.migration] Running upgrade 0003 -&gt; 0004, index conversations by created_at
+migrate-1  | INFO  [alembic.runtime.migration] Running upgrade 0004 -&gt; 0005, add user_id to conversations</code></pre>
+</div>
+  <p>כל חמשת ה-<span class="en">migrations</span> רצו על Postgres, בלי שינוי אחד. <code>transactional DDL</code>: כאן, בניגוד ל-SQLite (סעיף 7.7), כישלון באמצע מבטל הכול. השמות מגיעים משם התיקייה, <code>my-agent</code>. דברו עם השירות, כמו בפרק 5:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>curl.exe http://127.0.0.1:8000/health
+uv run python scripts/ask.py "hello from a container"
+docker compose exec db psql -U agent -c "SELECT id, title FROM conversations;"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>{"status":"ok"}
+[mock reply, turn 1] You said: hello from a container
+(conversation e6d2b0676e184ae3ba6ba3d7c9f7f0f7, turns: 1)
+                id                |         title
+----------------------------------+------------------------
+ e6d2b0676e184ae3ba6ba3d7c9f7f0f7 | hello from a container
+(1 row)</code></pre>
+</div>
+  <p>אם קיבלתם <code>Empty reply from server</code> או <code>RemoteDisconnected</code>, ה-<span class="en">API</span> עוד עולה: <code>Up</code> פירושו שהתהליך התחיל, לא שהוא מוכן. חכו לשורה <code>Uvicorn running</code> ב-<code>docker compose logs api</code>. דפדפן ב-<code>http://127.0.0.1:8000/</code> מציג את דף הצ'אט, מול Postgres. <code>git add compose.yaml</code>, <code>git commit -m "Run the API and Postgres with docker compose"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>שינוי בקוד: מה נבנה מחדש</h3>
+  <p>ב-<code>agent\api.py</code>, <code>version="0.8.0"</code>. ואז:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose up --build -d</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>#10 [api stage-0 4/6] COPY pyproject.toml uv.lock ./
+#10 CACHED
+#12 [api stage-0 5/6] RUN uv sync --locked --no-dev
+#12 CACHED
+#13 [api stage-0 6/6] COPY . .
+ Container my-agent-db-1 Running
+ Container my-agent-migrate-1 Recreated
+ Container my-agent-api-1 Recreated</code></pre>
+</div>
+  <p>החבילות הגיעו מה-<span class="en">cache</span>, ורק שכבת הקוד נבנתה. <code>db</code> לא נגע, כי ה-<span class="en">image</span> שלו לא השתנה. <code>migrate</code> רץ שוב, ולא עשה דבר: <code>upgrade head</code> על בסיס נתונים מעודכן הוא פעולה בטוחה. <code>curl.exe http://127.0.0.1:8000/openapi.json</code> מראה <code>"version":"0.8.0"</code>. <code>git commit -am "API version 0.8.0"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">6</span>הבדיקות של פרק 7, על Postgres</h3>
+  <p>ה-<span class="en">migrations</span> עברו, אבל הבדיקות הן מה שמוכיח שהשרשרת שלמה: <code>downgrade</code> עד הסוף, ה-<span class="en">backfill</span>, והשוואה למחלקות. הבדיקות הרגילות נשארות מהירות, על SQLite בזיכרון, בלי Docker. מוסיפים אפשרות: אם <code>TEST_DATABASE_URL</code> מוגדר, הבדיקות של <code>test_migrations.py</code> רצות גם עליו. ב-<code>tests\test_migrations.py</code>, הוסיפו <code>import os</code> ו-<code>import pytest</code>, את ה-<span class="en">fixture</span> הזה מעל <code>differences</code>, ובשלוש הבדיקות החליפו את הפרמטר <code>tmp_path</code> ב-<code>url</code> ומחקו את השורה <code>url = f"sqlite:///..."</code>:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_migrations.py</span></div>
+<pre><code>@pytest.fixture(params=["sqlite", "postgres"])
+def url(request, tmp_path):
+    """Each test runs once per database: a new SQLite file, and Postgres when it is given."""
+    if request.param == "sqlite":
+        yield f"sqlite:///{tmp_path / 'test.db'}"
+        return
+    postgres = os.getenv("TEST_DATABASE_URL")
+    if not postgres:
+        pytest.skip("TEST_DATABASE_URL is not set")
+    yield postgres
+    command.downgrade(alembic_config(postgres), "base")  # leave it empty for the next test
+
+
+def test_the_migrations_build_the_tables_of_the_code(url):
+    upgrade(url)
+    assert differences(url) == []</code></pre>
+</div>
+  <p>בסיס נתונים נפרד לבדיקות, כי הן מוחקות כל טבלה שבו:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose exec db createdb -U agent agent_test
+$env:TEST_DATABASE_URL = "postgresql+psycopg://agent:agent@127.0.0.1:5432/agent_test"
+uv run pytest tests/test_migrations.py -v
+Remove-Item Env:TEST_DATABASE_URL
+uv run pytest</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>tests/test_migrations.py::test_the_migrations_build_the_tables_of_the_code[sqlite] PASSED [ 16%]
+tests/test_migrations.py::test_the_migrations_build_the_tables_of_the_code[postgres] PASSED [ 33%]
+tests/test_migrations.py::test_every_migration_can_be_undone[sqlite] PASSED [ 50%]
+tests/test_migrations.py::test_every_migration_can_be_undone[postgres] PASSED [ 66%]
+tests/test_migrations.py::test_the_backfill_names_old_conversations[sqlite] PASSED [ 83%]
+tests/test_migrations.py::test_the_backfill_names_old_conversations[postgres] PASSED [100%]
+6 passed in 16.75s
+...
+71 passed, 3 skipped in 15.12s</code></pre>
+</div>
+  <p>זו התשובה לשאלה שפרק 7 השאיר פתוחה: ה-<span class="en">migrations</span> נכתבו בלי <span class="en">SQL</span> של SQLite, ולכן לא היה מה לתקן. ההחלטות שם (<code>sa.table</code>, ביטויים במקום מחרוזות) הן מה שנתן את זה. בלי המשתנה, שלוש הבדיקות של Postgres מדווחות <code>skipped</code>, וזה בסדר. <code>git add tests</code>, <code>git commit -m "Run the migration tests on Postgres too, when it is given"</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">7</span>מה קרה לשיחות הישנות?</h3>
+  <p>שום דבר. הן ב-<code>agent.db</code>, בדיוק כמו קודם, ו-<code>uv run python -m agent</code> בלי Docker ממשיך להשתמש בו. ה-<span class="en">containers</span> לא רואים את הקובץ, ו-Postgres התחיל ריק. אז אם <code>/conversations</code> מחזיר רשימה קצרה, לא אבד דבר; אלה פשוט שני בסיסי נתונים. תרגיל 6 מעביר את השיחות. ובינתיים, הנתונים של Postgres שורדים <code>down</code>:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose down
+docker compose up -d
+docker compose exec db psql -U agent -c "SELECT title FROM conversations;"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code> Container my-agent-db-1 Removed
+ Network my-agent_default Removed
+ Container my-agent-api-1 Started
+         title
+------------------------
+ hello from a container
+(1 row)</code></pre>
+</div>
+  <p>ה-<span class="en">containers</span> נמחקו ונוצרו מחדש, וה-<span class="en">volume</span> <code>my-agent_pgdata</code> נשאר. זו כל ההבחנה בין מה שבתוך <span class="en">container</span> (זמני) למה שב-<span class="en">volume</span> (נשמר).</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.9</span>תרגילים</h2>
+
+<p>כולם על <code>feature/containers</code>, כשה-<span class="en">stack</span> רץ (<code>docker compose up -d</code>). לפני כל <span class="en">commit</span>: <code>pytest</code>, <code>ruff check</code>, <code>ruff format --check</code>, <code>mypy agent scripts</code>. בסוף יום עבודה, <code>docker compose stop</code>. פתרונות, כולל הפלטים, <a href="solutions/chapter-08.html">בדף נפרד</a>.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · מה יש בתוך ה-<span class="en">image</span></h3><span class="level">מודרך</span></div>
+  <ol>
+    <li><code>docker image ls</code>, ו-<code>docker history my-agent</code>. התאימו כל שורה להוראה ב-<code>Dockerfile</code>.</li>
+    <li><code>docker run --rm my-agent ls -a</code>, ו-<code>docker run --rm my-agent python --version</code>. השוו ל-<code>uv run python --version</code> במחשב שלכם.</li>
+  </ol>
+  <label class="answer-label" for="n-ex1">איזו שכבה הכי גדולה, ולמה? אילו קבצים מהתיקייה שלכם <em>לא</em> נמצאים ב-<span class="en">image</span>, ומה היה קורה אילו היו?</label>
+  <textarea class="answer" id="n-ex1" data-id="c08-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c08-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · <code>down</code> ו-<code>down -v</code></h3><span class="level">מודרך</span></div>
+  <p>ספרו שיחות ב-Postgres (<code>docker compose exec db psql -U agent -tc "SELECT COUNT(*) FROM conversations;"</code>). הריצו <code>docker compose down -v</code>, ואז <code>docker volume ls</code>, <code>docker compose up -d</code>, וספרו שוב. נסו גם <code>createdb</code> מצעד 6: האם <code>agent_test</code> עוד קיים?</p>
+  <label class="answer-label" for="n-ex2">מה נמחק, ומה נוצר מחדש לבד? באילו מקרים הייתם מריצים <code>down -v</code> בכוונה?</label>
+  <textarea class="answer" id="n-ex2" data-id="c08-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c08-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · למדוד את ה-<span class="en">cache</span></h3><span class="level mid">בינוני</span></div>
+  <ol>
+    <li>הוסיפו הערה בסוף <code>agent\cli.py</code>, ומדדו: <code>Measure-Command { docker build -t my-agent . }</code>. אילו שלבים <code>CACHED</code>?</li>
+    <li>שנו את הסדר ב-<code>Dockerfile</code>: <code>COPY . .</code> במקום <code>COPY pyproject.toml uv.lock ./</code>, ומחקו את ה-<code>COPY . .</code> שאחרי <code>RUN</code>. בנו פעם אחת, הוסיפו הערה נוספת, ומדדו שוב.</li>
+    <li>החזירו: <code>git restore Dockerfile agent\cli.py</code>, ובנו שוב.</li>
+  </ol>
+  <label class="answer-label" for="n-ex3">כמה זמן לקחה כל בנייה? מה ירוץ מחדש אם תוסיפו חבילה עם <code>uv add</code>, ולמה זה בסדר?</label>
+  <textarea class="answer" id="n-ex3" data-id="c08-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c08-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · לשבור בכוונה</h3><span class="level mid">בינוני</span></div>
+  <ol>
+    <li>ב-<code>compose.yaml</code>, בשירות <code>migrate</code> בלבד, שנו את הסיסמה ב-<code>DATABASE_URL</code> ל-<code>wrong</code>. <code>docker compose down</code>, <code>docker compose up -d</code>, ואז <code>docker compose ps -a</code> ו-<code>docker compose logs migrate</code>. החזירו (<code>git restore compose.yaml</code>) והרימו שוב.</li>
+    <li>כשהכול רץ, ו-<code>/health</code> עונה: <code>docker compose stop db</code>. שלחו הודעה (<code>ask.py</code>), ובדקו <code>/health</code>. אחר כך <code>docker compose start db</code>, חכו ל-<code>healthy</code>, ושלחו שוב.</li>
+    <li><code>ask.py</code> מפרק 5 נפל בשלב 2 עם <span class="en">traceback</span> משלו. מצאו למה, ותקנו כך שידפיס את הסטטוס ואת גוף התשובה גם כשהוא לא <span class="en">JSON</span>. בדקו שוב עם <code>db</code> עצור, וגם עם מפתח שגוי (<code>$env:AGENT_API_KEY = "wrong"</code>, ואחר כך <code>Remove-Item Env:AGENT_API_KEY</code>). <span class="en">commit</span>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex4">מה היה המצב של <code>api</code> בשלב 1, ולמה זה טוב? מה החזיר <code>/health</code> בשלב 2, ומה זה אומר על בדיקת הבריאות שלנו? מה היה הבאג ב-<code>ask.py</code>?</label>
+  <textarea class="answer" id="n-ex4" data-id="c08-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c08-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · שני לקוחות, בסיס נתונים אחד</h3><span class="level mid">בינוני</span></div>
+  <p>ה-<span class="en">CLI</span> רץ במחשב שלכם, לא ב-<span class="en">container</span>. כוונו אותו ל-Postgres: <code>$env:DATABASE_URL = "postgresql+psycopg://agent:agent@127.0.0.1:5432/agent"</code>, ואז <code>uv run python -m agent --continue</code>. כתבו הודעה, צאו, ובדקו את <code>GET /conversations</code> עם <code>curl.exe</code> (והכותרת <code>X-API-Key</code>). בסוף, <code>Remove-Item Env:DATABASE_URL</code>.</p>
+  <label class="answer-label" for="n-ex5">איזו שיחה <code>--continue</code> המשיך, ולמה? למה כאן <code>127.0.0.1</code> ובקובץ <code>compose.yaml</code> <code>db</code>? מה זה מראה על ההבדל בין SQLite ל-Postgres?</label>
+  <textarea class="answer" id="n-ex5" data-id="c08-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c08-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · להעביר את השיחות ל-Postgres</h3><span class="level open">פתוח</span></div>
+  <p>כתבו <code>scripts\copy_conversations.py</code>: מקבל שני <span class="en">URLs</span>, מקור ויעד, ומעתיק את כל השיחות וההודעות, עם אותם <span class="en">ids</span>, בתוך <span class="en">transaction</span> אחת. חשבו על התנאים: מה אם היעד לא ריק? מה אם שני בסיסי הנתונים ב-<span class="en">migrations</span> שונים? רמז: <code>MetaData().reflect(engine, only=[...])</code> קורא את הטבלאות כמו שהן, בלי לייבא את <code>agent.db</code>. הריצו על Postgres ריק (<code>down -v</code>, <code>up -d</code>) מ-<code>sqlite:///agent.db</code>, בדקו את <code>/conversations</code>, <strong>ואז שלחו הודעה חדשה דרך ה-<span class="en">API</span></strong>. אם משהו נשבר, קראו את <code>docker compose logs api</code> ותקנו. בסוף: <code>mypy</code> נקי, סעיף ב-<code>README.md</code> (Docker, הסקריפט, <code>TEST_DATABASE_URL</code>), שורה ב-<code>.env.example</code>, <span class="en">commit</span>, ומזגו: <code>git switch main</code>, <code>git merge feature/containers</code>, <code>git push</code>, ומחקו את הענף.</p>
+  <label class="answer-label" for="n-ex6">מה נשבר בהודעה החדשה, למה, ואיך תיקנתם? מה נשאר ב-<code>agent.db</code>?</label>
+  <textarea class="answer" id="n-ex6" data-id="c08-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c08-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.10</span>בדקו את עצמכם</h2>
+
+<p>סמנו רק מה שאתם מסוגלים להסביר בקול רם לאדם אחר, בלי להציץ בפרק.</p>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c08-chk1"><span>אני יודע/ת להסביר את ההבדל בין <span class="en">image</span> ל-<span class="en">container</span>, ובין <span class="en">container</span> למכונה וירטואלית.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c08-chk2"><span>אני יודע/ת מה כל הוראה ב-<code>Dockerfile</code> שלנו עושה, ומה רץ בבנייה לעומת בהפעלה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c08-chk3"><span>אני יודע/ת להסביר שכבות ו-<span class="en">build cache</span>, ולמה <code>uv sync</code> בא לפני <code>COPY . .</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c08-chk4"><span>אני יודע/ת מה <code>.dockerignore</code> מונע, ולמה סודות לא נכנסים ל-<span class="en">image</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c08-chk5"><span>אני יודע/ת למה השרת מקשיב על <code>0.0.0.0</code> בתוך ה-<span class="en">container</span>, ולמה הפורט מפורסם על <code>127.0.0.1</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c08-chk6"><span>אני יודע/ת מה נמחק ב-<code>down</code> ומה ב-<code>down -v</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c08-chk7"><span>אני יודע/ת למה <code>api</code> מגיע ל-Postgres בשם <code>db</code>, וה-<span class="en">CLI</span> ב-<code>127.0.0.1</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c08-chk8"><span>אני יודע/ת איך compose מבטיח ש-<span class="en">migrations</span> רצים לפני ה-<span class="en">API</span>, ומה קורה כשהם נכשלים.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c08-chk9"><span>אני יודע/ת איפה השיחות הישנות שלי, ואיך מעבירים אותן בלי לשבור את ה-<span class="en">sequence</span>.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.11</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td><code>error during connect ... The system cannot find the file specified</code></td><td>Docker Desktop לא רץ, או עוד עולה</td><td>פתחו אותו וחכו ל-<span class="en">Engine running</span></td></tr>
+  <tr><td>Docker Desktop: <span class="en">WSL 2 is not installed</span> או <span class="en">Virtualization not enabled</span></td><td>WSL לא הותקן, לא הופעל מחדש, או וירטואליזציה כבויה ב-BIOS</td><td><code>wsl --install --no-distribution</code> כמנהל, הפעלה מחדש. אם עדיין: הפעילו <span class="en">Virtualization</span> בהגדרות ה-BIOS</td></tr>
+  <tr><td><code>Bind for 127.0.0.1:8000 failed: port is already allocated</code>, או <code>ports are not available ... Only one usage of each socket address</code></td><td><span class="en">container</span> אחר (הראשונה), או תוכנה במחשב כמו uvicorn מקומי (השנייה), תופסים את הפורט</td><td>עצרו אותו (<code>docker ps</code>), או שנו את הצד השמאלי: <code>"127.0.0.1:8001:8000"</code></td></tr>
+  <tr><td><code>curl: (52) Empty reply from server</code></td><td>השרת ב-<span class="en">container</span> מקשיב על <code>127.0.0.1</code>, או עוד לא סיים לעלות</td><td><code>--host 0.0.0.0</code> ב-<code>CMD</code>; חכו ל-<code>Uvicorn running</code> ב-<code>docker compose logs api</code></td></tr>
+  <tr><td><code>api</code> במצב <code>Exited (1)</code>, ובלוג <code>failed to resolve host 'db'</code></td><td>Postgres נעצר בזמן שה-<span class="en">API</span> עלה; <code>check_schema</code> נכשל, והתהליך יצא</td><td><code>docker compose up -d</code> שוב. השירות לא מנסה שוב לבד (פרקים 10 ו-13)</td></tr>
+  <tr><td><code>service "migrate" didn't complete successfully: exit 1</code></td><td><span class="en">migration</span> נכשל: סיסמה, כתובת, או באג ב-<span class="en">migration</span></td><td><code>docker compose logs migrate</code>, השורה האחרונה</td></tr>
+  <tr><td><code>dependency failed to start: container my-agent-db-1 is unhealthy</code></td><td>Postgres לא היה מוכן בזמן ה-<code>healthcheck</code> (בהפעלה ראשונה, במחשב עמוס)</td><td><code>docker compose up -d</code> שוב, או הגדילו את <code>retries</code></td></tr>
+  <tr><td><code>password authentication failed for user "agent"</code> אחרי שינוי סיסמה ב-<code>compose.yaml</code></td><td><code>POSTGRES_PASSWORD</code> קובע סיסמה רק כשה-<span class="en">volume</span> ריק. אחר כך היא שמורה בנתונים</td><td>בפיתוח: <code>docker compose down -v</code> (מוחק הכול). אחרת: <code>ALTER USER</code> ב-<code>psql</code></td></tr>
+  <tr><td><code>The lockfile at `uv.lock` needs to be updated, but `--locked` was provided.</code></td><td>שיניתם את <code>pyproject.toml</code> בלי <code>uv lock</code></td><td><code>uv lock</code> (או <code>uv add</code>), ואז בנו שוב</td></tr>
+  <tr><td>שיניתם קוד, וה-<span class="en">API</span> מתנהג כמו קודם</td><td><code>docker compose up -d</code> בלי <code>--build</code> מריץ את ה-<span class="en">image</span> הישן</td><td><code>docker compose up --build -d</code></td></tr>
+  <tr><td><code>duplicate key value violates unique constraint "messages_pkey"</code></td><td>שורות הועתקו עם <span class="en">ids</span>, וה-<span class="en">sequence</span> של Postgres לא זז (תרגיל 6)</td><td><code>setval</code> אחרי ההעתקה</td></tr>
+  <tr><td>הדיסק מתמלא</td><td><span class="en">images</span> ישנים ו-<span class="en">build cache</span> מצטברים</td><td><code>docker image ls</code>, ו-<code>docker image rm</code> למה שלכם. פקודות ניקוי גורפות (<code>prune</code>) מוחקות גם של אחרים: קראו מה הן מוחקות לפני</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.12</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>image</dt><dd>תמונה קפואה של מערכת קבצים ופקודת הפעלה, שממנה מריצים <span class="en">containers</span>.</dd>
+  <dt>container</dt><dd>תהליך מבודד שרץ מתוך <span class="en">image</span>, עם קבצים, תהליכים ורשת משלו.</dd>
+  <dt>Docker Desktop</dt><dd>התוכנה שמריצה Docker ב-Windows ו-macOS, בתוך מכונת Linux קטנה.</dd>
+  <dt>WSL 2</dt><dd>רכיב של Windows שמריץ ליבת Linux אמיתית.</dd>
+  <dt>Dockerfile</dt><dd>המתכון לבניית <span class="en">image</span>, הוראה אחרי הוראה.</dd>
+  <dt>layer</dt><dd>שכבה ב-<span class="en">image</span>: השינוי בקבצים שהוראה אחת עשתה.</dd>
+  <dt>build cache</dt><dd>שכבות מבנייה קודמת, שנלקחות מחדש כשההוראה והקבצים שלה לא השתנו.</dd>
+  <dt>build context</dt><dd>התיקייה שנשלחת למנוע בבנייה, אחרי סינון ב-<code>.dockerignore</code>.</dd>
+  <dt>registry</dt><dd>מאגר <span class="en">images</span>, כמו Docker Hub.</dd>
+  <dt>tag</dt><dd>שם הגרסה של <span class="en">image</span>, אחרי הנקודתיים: <code>postgres:17-alpine</code>.</dd>
+  <dt>port publishing</dt><dd>העברת חיבורים מפורט במחשב לפורט ב-<span class="en">container</span>.</dd>
+  <dt>volume</dt><dd>אחסון שמנוהל על ידי Docker, ששורד מחיקה של <span class="en">containers</span>.</dd>
+  <dt>docker compose</dt><dd>הגדרה של כמה שירותים, הרשת וה-<span class="en">volumes</span> שלהם בקובץ אחד, והפעלתם יחד.</dd>
+  <dt>healthcheck</dt><dd>פקודה שבודקת שוב ושוב אם שירות מוכן לעבודה, לא רק אם הוא רץ.</dd>
+  <dt>driver</dt><dd>החבילה שדרכה SQLAlchemy מדבר עם סוג מסוים של בסיס נתונים (<code>psycopg</code> ל-Postgres).</dd>
+  <dt>sequence</dt><dd>מונה של Postgres שנותן את ה-<span class="en">id</span> הבא לשורה חדשה.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">8.13</span>מה הלאה</h2>
+
+<p>הסוכן ובסיס הנתונים שלו עולים עכשיו בפקודה אחת, אותו דבר בכל מחשב שיש בו Docker, וה-<span class="en">migrations</span> רצים לפני השירות ולא בתוכו. אבל כל מה שמוודא שהם באמת עובדים עדיין תלוי בזיכרון שלכם: להריץ <code>pytest</code>, <code>ruff</code> ו-<code>mypy</code> לפני כל <span class="en">commit</span>, לבנות את ה-<span class="en">image</span> לפני כל מיזוג. כשעמית פותח <span class="en">pull request</span>, אף אחד לא בודק שהבדיקות עוברות ושה-<span class="en">image</span> נבנה לפני שהקוד נכנס ל-<code>main</code>. ו-<code>main</code> שבור מתגלה רק כשמישהו מושך אותו.</p>
+
+<p>בדיקה אוטומטית של כל שינוי, על מחשב שאינו של אף אחד מכם, היא <strong>פרק 9: <span class="en">CI/CD</span></strong>.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-08</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים, בלי <code>.git</code> ובלי קובץ בסיס נתונים. <code>uv run pytest</code> מדווח 71 בדיקות שעוברות ו-3 שמדולגות (74 עם <code>TEST_DATABASE_URL</code>), <code>ruff</code> ו-<code>mypy agent scripts</code> נקיים, ו-<code>docker compose up --build -d</code> מרים את השירות על <code>http://127.0.0.1:8000</code>.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-08.html">פתרונות לפרק 8</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

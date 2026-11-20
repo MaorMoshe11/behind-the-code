@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 16 · מה זה AI agent | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="16">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 16 · מה זה AI agent</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 16 מתוך 21</div>
+  <h1>מה זה <span class="en">AI agent</span></h1>
+  <p class="lead">מה ההבדל בין קריאה אחת למודל, <span class="en">workflow</span> ו-<span class="en">agent</span>, איך כותבים ביד את הלולאה שבה המודל מבקש כלי והתוכנית מפעילה אותו, ומתי עדיף לא לבנות סוכן בכלל.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>להבחין בין קריאה אחת, <span class="en">workflow</span> ו-<span class="en">agent</span>, ולהסביר מי מחליט על הצעד הבא בכל אחד.</li>
+    <li>להגדיר כלי (שם, תיאור, <span class="en">JSON schema</span>) ולקרוא את ההודעות של <span class="en">tool use</span>: <code>tool_use</code>, <code>tool_result</code>, <code>stop_reason</code>.</li>
+    <li>לכתוב ביד לולאת סוכן עם כלי אחד, מגבלת צעדים, שגיאת כלי שחוזרת למודל, ושורת לוג ומדד לכל צעד.</li>
+    <li>לבדוק לולאה כזו בלי מודל אמיתי, עם <span class="en">mock</span> שמבקש כלים לפי תסריט.</li>
+    <li>לזהות מה משתבש בלולאות, ולבחור את הצורה הפשוטה ביותר שעובדת.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> ארבע עד חמש שעות. <strong>מה צריך:</strong> הפרויקט מסוף פרק 15, ושירות ההערות מפרק 11 רץ בחלון נפרד (בלי Docker). הכול במצב <span class="en">mock</span>, בלי מפתח ובלי עלות.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.1</span>הבעיה: צ'אט שרק מדבר</h2>
+
+<p>שירות ההערות מפרק 11 עובד, והצ'אט מדבר איתו. שמרו הערה, ושאלו עליה, בגרסה 0.15.0:</p>
+
+<div class="codebox output">
+  <div class="label"><span>uv run python -m agent (0.15.0, mock mode)</span></div>
+<pre><code>you&gt; /note buy oat milk
+Noted: buy oat milk
+
+you&gt; What did I save in my notes about milk?
+agent&gt; [mock reply, turn 1] You said: What did I save in my notes about milk?
+
+you&gt; What is the date today?
+agent&gt; [mock reply, turn 2] You said: What is the date today?</code></pre>
+</div>
+
+<p>ה-<span class="en">mock</span> רק מחזיר את מה שכתבתם, אבל הוא לא מסתיר דבר: גם מודל אמיתי היה מקבל בדיוק את מה שהוא קיבל, את הטקסט של השאלה. שורת הלוג <code>model replied</code> ב-<code>agent.log</code> מראה <code>"messages": 1</code>. ההערה יושבת בבסיס הנתונים של שירות ההערות, ואין שום דרך שבה היא תגיע אל המודל. אז מה עונה מודל אמיתי? משהו כזה:</p>
+
+<div class="codebox output">
+  <div class="label"><span>an answer of the kind a real model gives (illustrative, not a recorded run)</span></div>
+<pre><code>I don't have access to your notes. If you paste them here, I can help you find
+what you saved about milk.</code></pre>
+</div>
+
+<p>ובמקרה הגרוע, תשובה בטוחה בעצמה שהומצאה מכלום ("<span class="en">You saved: buy milk and eggs</span>"). על התאריך הוא יענה לפי מה שהוא זוכר מהאימון, או יודה שאינו יודע. בשני המקרים הבעיה זהה: <strong>המודל רק מייצר טקסט</strong>. הוא לא יכול לקרוא קובץ, לשאול שירות או לבדוק את השעון. כל "פעולה" במערכת שלכם היא פקודה שאדם הקליד (<code>/notes</code>) או קוד שכתבתם מראש. הפרק הזה נותן למודל דרך לבקש פעולה, ולתוכנית שלכם דרך לבצע אותה ולהחזיר לו את התוצאה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.2</span>המפה: שלוש צורות</h2>
+
+<div class="diagram">
+  <div class="flow steps">
+    <div class="layer l2"><div class="name">1. single call</div><div class="what">הודעות נכנסות, טקסט יוצא. הקוד שלכם שולח, מקבל, ומסיים</div></div>
+  </div>
+  <div class="flow steps">
+    <div class="layer l3"><div class="name">2. workflow</div><div class="what">כמה צעדים: קריאות למודל וקוד רגיל</div></div>
+    <div class="hop"><b>fixed order</b>&rarr;</div>
+    <div class="layer l3"><div class="name">step A</div><div class="what">למשל: להביא הערות</div></div>
+    <div class="hop">&rarr;</div>
+    <div class="layer l3"><div class="name">step B</div><div class="what">למשל: קריאה למודל איתן</div></div>
+  </div>
+  <div class="flow steps">
+    <div class="layer machine">
+      <div class="name">3. agent: a loop</div>
+      <div class="flow steps">
+        <div class="layer l4"><div class="name">model</div><div class="what">עונה, או מבקש כלי (<code>tool_use</code>)</div></div>
+        <div class="hop"><b>tool request</b>&rarr;<br>&larr;<b>tool result</b></div>
+        <div class="layer l2"><div class="name">your code</div><div class="what">מפעיל את הכלי, מחזיר תוצאה, וקורא שוב למודל</div></div>
+      </div>
+    </div>
+    <div class="hop"><b>until done, or max steps</b>&rarr;</div>
+    <div class="layer l2"><div class="name">answer</div><div class="what">טקסט למשתמש</div></div>
+  </div>
+  <div class="caption">ההבדל בין הצורות הוא מי מחליט מה הצעד הבא. בקריאה אחת אין צעד הבא. ב-<span class="en">workflow</span> הקוד שלכם קובע את הסדר מראש. ב-<span class="en">agent</span> המודל מחליט, בכל סיבוב, אם לבקש כלי או לענות.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.3</span>קריאה אחת, <span class="en">workflow</span>, <span class="en">agent</span></h2>
+
+<p><strong>קריאה אחת</strong> (<span class="en">single LLM call</span>) היא מה שהפרויקט עושה מפרק 1: שולחים את השיחה, מקבלים תשובה. רוב המשימות של מודלי שפה הן כאלה: לסכם, לתרגם, לסווג, לחלץ שדות, לענות על שאלה מתוך טקסט שנתתם. קל לבדוק אותה, מחירה ידוע מראש, והיא מהירה.</p>
+
+<p><strong><span class="en">Workflow</span></strong> הוא כמה צעדים שהסדר שלהם כתוב בקוד. חלק מהצעדים הם קריאות למודל, חלק קוד רגיל. שלוש תבניות נפוצות, כל אחת עם דוגמה מהפרויקט:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>תבנית</th><th>מה היא</th><th>דוגמה בפרויקט</th></tr>
+  <tr><td><strong><span class="en">Prompt chaining</span></strong></td><td>הפלט של קריאה אחת הוא הקלט של הבאה, ובדיקה בקוד ביניהן</td><td>לסכם שיחה ארוכה, ואז לכתוב לה כותרת מתוך הסיכום</td></tr>
+  <tr><td><strong><span class="en">Routing</span></strong></td><td>קריאה קטנה מסווגת את הבקשה, והקוד שולח אותה למסלול המתאים</td><td>"שאלה על קוד" לפרומפט אחד, "שאלה כללית" לאחר, אולי למודל זול יותר</td></tr>
+  <tr><td><strong>קריאות במקביל</strong> (<span class="en">parallelization</span>)</td><td>כמה קריאות עצמאיות בבת אחת, והקוד מאחד</td><td>לבדוק תשובה בשלוש קריאות שונות (עובדות, טון, אורך) ולאחד את ההערות</td></tr>
+</table>
+</div>
+
+<p>גם <code>/notes</code> מפרק 11 הוא מעין <span class="en">workflow</span> קטן: הקוד מזהה פקודה ומחליט להפעיל את השירות. המודל לא מחליט שום דבר.</p>
+
+<p><strong><span class="en">Agent</span></strong> (סוכן) הוא לולאה שבה המודל מחליט מה הצעד הבא. בכל סיבוב הוא מקבל את כל מה שקרה עד עכשיו, ובוחר: לבקש כלי, או לענות ולסיים. הקוד שלכם מפעיל את הכלים ושומר על גבולות: אילו כלים קיימים, כמה סיבובים מותר, מה קורה כשמשהו נכשל. זה כל ההבדל. המילה "<span class="en">agent</span>" משמשת היום לכל דבר, משיווק של צ'אטבוט ועד מערכות גדולות. בחוברת היא אומרת דבר אחד מדויק: <strong>מודל שבוחר בעצמו את הצעד הבא, בלולאה, עם כלים, עד שהוא מחליט שסיים</strong>. אין בזה קסם ואין "חשיבה עצמאית": יש לולאת <code>for</code> שאתם כותבים.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.4</span><span class="en">Tool use</span>, מבפנים</h2>
+
+<p>כלי (<span class="en">tool</span>) מוגדר בשלושה חלקים: <strong>שם</strong>, <strong>תיאור</strong> שהמודל קורא כדי להחליט מתי להשתמש בו, ו-<strong><span class="en">JSON schema</span></strong> של הקלט שהמודל צריך לשלוח. ההגדרה נשלחת בשדה <code>tools</code> של הבקשה, לצד ההודעות. זה הכלי של הפרק, כפי שהוא יוצא לרשת:</p>
+
+<div class="codebox output">
+  <div class="label"><span>the tool, as sent in "tools" (from python -m agent.trace)</span></div>
+<pre><code>{
+  "name": "list_notes",
+  "description": "List the notes the user saved in this conversation (with /note). Call it when the user asks what they saved, noted or wrote down, or refers to their notes. Returns one note per line, oldest first, or 'No notes found.'",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "search": {
+        "type": "string",
+        "description": "Only notes that contain this text (any case). Leave it out to list every note."
+      }
+    },
+    "additionalProperties": false
+  }
+}</code></pre>
+</div>
+
+<p>ועכשיו העיקר: <strong>המודל לא מריץ שום דבר</strong>. כשהוא רוצה כלי, התשובה שלו היא בקשה: בלוק מסוג <code>tool_use</code> עם מזהה, שם הכלי והקלט שבחר, ו-<code>stop_reason</code> שערכו <code>"tool_use"</code>. כך נראית תשובה כזו, כל האובייקט:</p>
+
+<div class="codebox output">
+  <div class="label"><span>the first response of the run, as the SDK object prints it (mock mode)</span></div>
+<pre><code>{
+  "id": "msg_mock_1",
+  "content": [
+    {
+      "id": "toolu_mock_1",
+      "input": {
+        "search": "milk"
+      },
+      "name": "list_notes",
+      "type": "tool_use"
+    }
+  ],
+  "model": "mock",
+  "role": "assistant",
+  "stop_reason": "tool_use",
+  "type": "message",
+  "usage": {
+    "input_tokens": 136,
+    "output_tokens": 24
+  }
+}</code></pre>
+</div>
+
+<p>מודל אמיתי מוסיף לרוב גם בלוק <code>text</code> לפני הבקשה ("<span class="en">Let me check your notes.</span>"), ואולי בלוק <code>thinking</code>; ה-<span class="en">mock</span> שולח רק את הבקשה. הקוד שלכם קורא את הבקשה, מפעיל את הפונקציה, ושולח את התוצאה בהודעה חדשה של <code>user</code>, בבלוק <code>tool_result</code> שמצביע על אותו מזהה. אז קוראים למודל שוב, עם כל השיחה. ארבע ההודעות של ריצה אחת, כפי שהן באמת (מתוך <code>python -m agent.trace</code>, במצב <span class="en">mock</span>; ה-<span class="en">mock</span> בונה אותן מאותן מחלקות של ה-SDK שתשובה אמיתית נבנית מהן):</p>
+
+<div class="codebox output">
+  <div class="label"><span>uv run python -m agent.trace "What did I save in my notes about milk?" (shortened: each message on one line)</span></div>
+<pre><code>--- message 1, role: user
+"What did I save in my notes about milk?"
+--- message 2, role: assistant
+[{"id": "toolu_mock_1", "input": {"search": "milk"}, "name": "list_notes", "type": "tool_use"}]
+--- message 3, role: user
+[{"type": "tool_result", "tool_use_id": "toolu_mock_1", "content": "- buy oat milk", "is_error": false}]
+--- message 4, role: assistant
+[{"text": "[mock reply, turn 1] I looked it up. The tool said:\n- buy oat milk", "type": "text"}]
+--- stop: end_turn, steps: 2, tool calls: 1</code></pre>
+</div>
+
+<p>חמישה כללים, וכל אחד מהם הוא שגיאה של 400 או באג שקט אם שוכחים אותו:</p>
+<ul>
+  <li><strong>השיחה נושאת את שניהם.</strong> הודעה 2 (הבקשה) והודעה 3 (התוצאה) נשלחות בקריאה הבאה. ה-<span class="en">API</span> לא זוכר דבר בין קריאות (פרק 1), ותוצאה בלי הבקשה שלה נדחית.</li>
+  <li><strong>מחזירים את כל התשובה של המודל, כמו שהיא.</strong> לא רק את הטקסט. אצל מודלים שחושבים לפני שהם עונים (<span class="en">thinking</span>, פועל כברירת מחדל ב-<code>claude-opus-5-5</code>) יש בתשובה גם בלוקים של <code>thinking</code>, וצריך להחזיר גם אותם, בלי שינוי.</li>
+  <li><strong>כל תוצאה קשורה לבקשה שלה ב-<code>tool_use_id</code>.</strong> המודל יכול לבקש כמה כלים בתשובה אחת. כל התוצאות של אותו סיבוב נשלחות בהודעת <code>user</code> <em>אחת</em>.</li>
+  <li><strong>כישלון הוא תוצאה.</strong> כלי שנכשל מחזיר <code>tool_result</code> עם <code>"is_error": true</code> והסבר קצר. המודל קורא אותו, ויכול לנסות אחרת או לספר למשתמש.</li>
+  <li><strong>הקלט הוא קלט מבחוץ.</strong> המודל כתב אותו, אז הוא יכול להיות שגוי, חסר או מוזר, בדיוק כמו גוף של בקשת HTTP (פרק 14). בודקים אותו לפני שמפעילים משהו.</li>
+</ul>
+
+<p>ערכי <code>stop_reason</code> שהלולאה צריכה להכיר: <code>end_turn</code> (המודל סיים), <code>tool_use</code> (הוא מחכה לתוצאות), <code>max_tokens</code> (נגמר לו המקום באמצע), <code>refusal</code> (הוא סירב, והטקסט לא שמיש). יש גם <code>pause_turn</code>, ששייך לכלים שרצים בצד של Anthropic ולא לכלים שלכם; בפרויקט הזה הוא לא יופיע.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.5</span>הלולאה, ביד</h2>
+
+<p>ל-SDK יש עוזר שמריץ את הלולאה בשבילכם (<span class="en">tool runner</span>), ויש <span class="en">frameworks</span> שלמים לזה. כאן כותבים אותה בעצמכם, כדי שכל צעד יהיה מול העיניים: קריאה, בדיקת <code>stop_reason</code>, הפעלת הכלי, הוספת התוצאה, קריאה נוספת. ארבעים שורות:</p>
+
+<div class="codebox">
+  <div class="label"><span>agent\loop.py (the heart of it)</span></div>
+<pre><code>def run_tool(tools: dict[str, Tool], call: ToolUseBlock) -&gt; ToolResultBlockParam:
+    """Run one tool call. Whatever happens, the model gets a result: never an exception."""
+    tool = tools.get(call.name)
+    try:
+        if tool is None:
+            raise ToolError(f"There is no tool named {call.name!r}.")
+        content, is_error = tool.run(call.input), False
+    except ToolError as error:  <span class="cm"># an expected failure: the message is written for the model</span>
+        content, is_error = str(error), True
+    except Exception:  <span class="cm"># a bug in our tool: the details go to our log, not to the model</span>
+        log.exception("tool %s crashed", call.name)
+        content, is_error = "The tool failed unexpectedly.", True
+    outcome = "error" if is_error else "ok"
+    AGENT_TOOL_CALLS.labels(call.name if tool else "unknown", outcome).inc()
+    level = logging.WARNING if is_error else logging.INFO
+    log.log(level, "tool %s: %s", call.name, outcome, extra={"tool": call.name, "outcome": outcome})
+    return {"type": "tool_result", "tool_use_id": call.id, "content": content, "is_error": is_error}
+
+
+def run_agent(
+    client: AgentClient, messages: list[MessageParam], tools: Sequence[Tool], max_steps: int
+) -&gt; AgentRun:
+    """Run the loop on a copy of `messages` (the conversation so far, ending with the question)."""
+    messages = list(messages)  <span class="cm"># our own list: the caller's is not changed</span>
+    by_name = {tool.name: tool for tool in tools}
+    params = [tool.param() for tool in tools]
+    tool_calls = 0
+    <span class="hl">for step in range(1, max_steps + 1):</span>
+        <span class="hl">response = client.create(messages, params)</span>
+        log.info("agent step %d: %s", step, response.stop_reason, extra={...})  <span class="cm"># shortened</span>
+        <span class="cm"># Its whole answer goes back next time, unchanged: text, tool requests, thinking.</span>
+        messages.append({"role": "assistant", "content": response.content})
+        <span class="hl">if response.stop_reason != "tool_use":</span>  <span class="cm"># it answered (or refused, or ran out of room)</span>
+            stop = response.stop_reason or "unknown"
+            return finish(AgentRun(text_of(response), stop, step, tool_calls, messages))
+        calls = [block for block in response.content if block.type == "tool_use"]
+        <span class="cm"># Every result of this step in ONE user message, each one tied to its request by id.</span>
+        <span class="hl">messages.append({"role": "user", "content": [run_tool(by_name, call) for call in calls]})</span>
+        tool_calls += len(calls)
+    log.warning("agent stopped after %d steps", max_steps, extra={"tool_calls": tool_calls})
+    reply = GAVE_UP.format(steps=max_steps)
+    return finish(AgentRun(reply, "max_steps", max_steps, tool_calls, messages))</code></pre>
+</div>
+
+<p>שלוש החלטות שכדאי לשים לב אליהן. <strong><code>for</code>, לא <code>while True</code></strong>: הגבול על מספר הצעדים הוא חלק מהלולאה, לא תוספת. מודל שמבקש את אותו כלי שוב ושוב יעצור אחרי <code>max_steps</code>, עם תשובה שאומרת זאת, במקום לשרוף כסף עד שמישהו ישים לב. <strong><code>run_tool</code> לא זורק לעולם</strong>: כלי לא מוכר, קלט שגוי, שירות שנפל, ואפילו באג בכלי, כולם הופכים ל-<code>tool_result</code> עם <code>is_error</code>. הלולאה ממשיכה, והמודל מחליט מה לומר. פרטי הבאג נכתבים ללוג שלכם, לא למודל. <strong>התווית של המדד היא <code>"unknown"</code> לכלי לא מוכר</strong>, ולא השם שהמודל המציא: מדדים מקבלים מעט ערכים ידועים בלבד (פרק 13).</p>
+
+<p>ה-<code>AgentRun</code> שהלולאה מחזירה מחזיק את התשובה, סיבת העצירה, מספר הצעדים והכלים, וכל ההודעות של הריצה. מי שקורא ל-<code>run_agent</code> בוחר מה לעשות בהן.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.6</span>דוגמה מודרכת: הצ'אט קורא את ההערות</h2>
+
+<p>מתחילים מ-<code>main</code> נקי, עם הפרויקט מסוף פרק 15. ב-<code>.env</code> מוגדרים <code>NOTES_URL=http://127.0.0.1:8100</code> ו-<code>NOTES_API_KEY</code>, כמו בפרק 11, ושירות ההערות רץ בחלון נפרד:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell (a second window)</span></div>
+<pre><code>cd notes-service
+$env:NOTES_API_KEY = "&lt;the NOTES_API_KEY from .env&gt;"
+uv run uvicorn notes.api:create_app --factory --port 8100</code></pre>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">1</span>ענף, וכלי אחד</h3>
+  <p>איזה כלי? כזה שעונה על הבעיה של 16.1, ושלא יכול להזיק: <strong>קריאת ההערות של השיחה הנוכחית</strong>. הוא רק קורא, ולכן קריאה שגויה או מיותרת לא משנה כלום. <code>git switch -c feature/agent-loop</code>, ואז קובץ חדש, <code>agent\tools.py</code>. הוא מגדיר <code>Tool</code> (שם, תיאור, <span class="en">schema</span>, ופונקציה <code>run</code> שהיא הקוד שלכם; <code>param()</code> מחזיר את שלושת הראשונים בצורה של ה-<span class="en">API</span>) ו-<code>ToolError</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\tools.py (the definition)</span></div>
+<pre><code>class ToolError(Exception):
+    """The tool could not do what was asked. The message goes back to the model."""
+
+
+@dataclass(frozen=True)
+class Tool:
+    name: str
+    description: str  <span class="cm"># the model reads this to decide when to call the tool</span>
+    input_schema: dict[str, Any]  <span class="cm"># JSON schema of the input the model must send</span>
+    run: Callable[[dict[str, Any]], str]  <span class="cm"># our code: takes the input, returns text for the model</span>
+
+    def param(self) -&gt; ToolParam:
+        """The tool as the API expects it in `tools`: everything except our code."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "input_schema": self.input_schema,
+        }</code></pre>
+</div>
+  <p><code>notes_tool(notes, conversation_id)</code> בונה את הכלי עם התיאור וה-<span class="en">schema</span> מ-16.4. הלב שלו, הפונקציה <code>run</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\tools.py (inside notes_tool(notes, conversation_id))</span></div>
+<pre><code>    def run(tool_input: dict[str, Any]) -&gt; str:
+        <span class="cm"># The model wrote this input. Check it like any other input from outside.</span>
+        unknown = set(tool_input) - {"search"}
+        if unknown:
+            raise ToolError(f"Unknown input field(s): {', '.join(sorted(unknown))}.")
+        search = tool_input.get("search")
+        if search is not None and not isinstance(search, str):
+            raise ToolError("search must be a string.")
+        try:
+            found = notes.list(conversation_id, search or None)
+        except NotesUnavailable as error:
+            raise ToolError("The notes service is unavailable right now.") from error
+        if not found:
+            return "No notes found."
+        return "\n".join(f"- {note.text}" for note in found)</code></pre>
+</div>
+  <p>שימו לב למה שאין ב-<span class="en">schema</span>: מזהה שיחה. <code>conversation_id</code> נקבע בקוד, כשהכלי נבנה, לכל הודעה מחדש. המודל בוחר רק מה לחפש, ולכן הוא לא יכול לקרוא הערות של שיחה אחרת, יהיה כתוב בהודעה מה שיהיה. ב-<code>agent\notes.py</code>, <code>list()</code> מקבל עכשיו <code>q</code> אופציונלי ומעביר אותו לשירות, שכבר יודע לחפש (פרק 11).</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>לקוח שיודע לעשות צעד אחד</h3>
+  <p><code>reply()</code> מחזיר טקסט, וזה מעט מדי ללולאה: היא צריכה את <code>stop_reason</code> ואת כל הבלוקים. ב-<code>agent\llm.py</code> נוסף <span class="en">Protocol</span> בשם <code>AgentClient</code>, עם מתודה <code>create(messages, tools)</code> שמחזירה את התשובה כולה:</p>
+<div class="codebox">
+  <div class="label"><span>agent\llm.py</span></div>
+<pre><code>class AgentClient(ChatClient, Protocol):
+    """A client the agent loop can drive: one model call, with tools, the whole response back."""
+
+    def create(self, messages: list[MessageParam], tools: list[ToolParam]) -&gt; Message: ...</code></pre>
+</div>
+  <p>ב-<code>ClaudeClient</code>, הקריאה עם טיפול השגיאות והמדדים מפרק 13 עוברת לפונקציה אחת, <code>_create</code>, ושתי המתודות משתמשות בה:</p>
+<div class="codebox">
+  <div class="label"><span>agent\llm.py (ClaudeClient)</span></div>
+<pre><code>            response = self.sdk.messages.create(
+                model=self.model,
+                max_tokens=16000,
+                system=self.system_prompt,
+                messages=messages,
+                tools=tools,
+            )
+...
+    def reply(self, messages: list[MessageParam]) -&gt; str:
+        return text_of(self._create(messages, anthropic.omit))  <span class="cm"># no tools: one plain call</span>
+
+    def create(self, messages: list[MessageParam], tools: list[ToolParam]) -&gt; Message:
+        return self._create(messages, tools)</code></pre>
+</div>
+  <p>ואת ה-<span class="en">mock</span> צריך להרחיב, אחרת אי אפשר לבדוק את הלולאה בלי מפתח. <code>MockClient.create</code> בונה <code>Message</code> אמיתי של ה-SDK, לפי תסריט פשוט וצפוי:</p>
+<div class="table-wrap">
+<table>
+  <tr><th>מה יש בהודעה של המשתמש</th><th>מה ה-<span class="en">mock</span> עושה</th></tr>
+  <tr><td>המילה <code>notes</code>, ו-<code>list_notes</code> הוצע לו</td><td>מבקש <code>list_notes</code>; <code>search</code> הוא המילים אחרי <code>about</code>, אם יש</td></tr>
+  <tr><td><code>[mock:call &lt;tool&gt; &lt;json&gt;]</code></td><td>מבקש בדיוק את הקריאה הזו, גם עם קלט שגוי או כלי שלא קיים</td></tr>
+  <tr><td><code>[mock:loop]</code></td><td>אחרי כל תוצאה מבקש שוב: לולאה שלא נגמרת</td></tr>
+  <tr><td>כל דבר אחר</td><td>תשובה רגילה, כמו קודם</td></tr>
+</table>
+</div>
+<div class="codebox">
+  <div class="label"><span>agent\llm.py (the mock's script)</span></div>
+<pre><code>CALL = re.compile(r"\[mock:call (\w+) (\{.*?\})\]")  <span class="cm"># [mock:call list_notes {"search": 42}]</span>
+LOOP = "[mock:loop]"  <span class="cm"># ask for the tool again after every result: a loop that never ends</span>
+NOTES = re.compile(r"\bnotes\b", re.IGNORECASE)  <span class="cm"># "what is in my notes?" -&gt; list_notes</span>
+ABOUT = re.compile(r"\babout ([^?.!\n]+)", re.IGNORECASE)  <span class="cm"># "... about milk?" -&gt; search "milk"</span>
+
+
+def wanted_call(question: str, offered: set[str]) -&gt; tuple[str, dict[str, Any]] | None:
+    """The tool call the mock 'decides' to make for this question, or None for a plain answer."""
+    scripted = CALL.search(question)
+    if scripted:  <span class="cm"># exactly what the message says, offered or not: for testing bad calls</span>
+        return scripted.group(1), json.loads(scripted.group(2))
+    if "list_notes" in offered and NOTES.search(question):
+        about = ABOUT.search(question)
+        return "list_notes", {"search": about.group(1).strip()} if about else {}
+    return None</code></pre>
+</div>
+  <p><code>create()</code> קורא לה על השאלה האחרונה של המשתמש. אם ההודעה האחרונה היא עדיין השאלה, ויש קריאה, הוא מחזיר <code>tool_use</code> עם <code>stop_reason</code> של <code>"tool_use"</code>; אחרת, טקסט עם <code>"end_turn"</code>. אחרי תוצאה, ה-<span class="en">mock</span> עונה בטקסט שמצטט אותה ("<span class="en">I looked it up. The tool said:</span>", או "<span class="en">I tried, but the tool failed:</span>"). הוא גם מדווח <code>input_tokens</code> שגדל עם כל צעד, כי כל השיחה נשלחת שוב. המספר מומצא (תו לכל ארבעה), אבל הצורה שלו נכונה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>הלולאה</h3>
+  <p>קובץ חדש, <code>agent\loop.py</code>, בדיוק כמו ב-16.5, עם <code>AgentRun</code>, <code>GAVE_UP</code> ו-<code>finish()</code> שסופר את הריצה. ב-<code>agent\metrics.py</code> שלושה מדדים חדשים: <code>agent_runs_total{stop}</code>, היסטוגרמה <code>agent_steps</code> (כמה קריאות למודל בריצה), ו-<code>agent_tool_calls_total{tool,outcome}</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>לחבר לשיחה, ולהחליט מה נשמר</h3>
+  <p>ב-<code>Settings</code> שדה חדש, <code>max_steps</code>, מ-<code>CHAT_MAX_STEPS</code> (ברירת מחדל 5, עם <code>read_positive_int</code>). <code>Conversations</code> מקבל את לקוח ההערות ואת <code>max_steps</code> (מ-<code>api.py</code> ומ-<code>cli.py</code>, שכבר בונים אותו), ו-<code>send()</code> קורא ל-<code>answer()</code> במקום ל-<code>reply()</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\conversations.py</span></div>
+<pre><code>    def answer(self, conversation_id: str, prompt: list[MessageParam]) -&gt; str:
+        """No tools: one model call, as before. With tools: the agent loop."""
+        if self.notes is None:
+            return self.client.reply(prompt)
+        tools = [notes_tool(self.notes, conversation_id)]
+        return run_agent(self.client, prompt, tools, self.max_steps).reply</code></pre>
+</div>
+  <p>בלי שירות הערות אין כלים, ולכן אין סיבה ללולאה: קריאה אחת, כמו קודם. ומה נשמר בבסיס הנתונים? ההחלטה הפשוטה והכנה: <strong>רק השאלה והתשובה הסופית</strong>, כמו היום. הבקשות לכלי והתוצאות נעלמות בסוף הריצה. המחיר: בהודעה הבאה המודל רואה מה <em>ענה</em>, לא מה <em>קרא</em>. שמירה של הכול דורשת טבלה או עמודה חדשה, <span class="en">migration</span>, ותשובה לשאלה כמה מזה לשלוח שוב; זה נושא של פרק 19, וזה כתוב ב-README וב-<code>docs\architecture.md</code> כפער ידוע.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>מריצים</h3>
+<div class="codebox">
+  <div class="label"><span>uv run python -m agent</span></div>
+<pre><code>you&gt; /note buy oat milk
+Noted: buy oat milk
+
+you&gt; /note call the dentist on Monday
+Noted: call the dentist on Monday
+
+you&gt; What did I save in my notes about milk?
+agent&gt; [mock reply, turn 1] I looked it up. The tool said:
+- buy oat milk
+
+you&gt; hello
+agent&gt; [mock reply, turn 2] You said: hello</code></pre>
+</div>
+  <p>הלולאה כותבת שורה לכל צעד ולכל כלי. ב-<code>agent.log</code>, עם הכלים של פרק 13:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>Get-Content agent.log | ConvertFrom-Json | Where-Object logger -eq "agent.loop" | Format-Table level, message, input_tokens</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>level message                input_tokens
+----- -------                ------------
+INFO  agent step 1: tool_use          136
+INFO  tool list_notes: ok
+INFO  agent step 2: end_turn          211
+INFO  agent step 1: end_turn          172</code></pre>
+</div>
+  <p>השאלה על ההערות לקחה שני צעדים, ו-"<span class="en">hello</span>" צעד אחד: המודל לא ביקש כלי, והלולאה הייתה קריאה אחת. דרך ה-<span class="en">API</span> (<code>scripts\ask.py</code>), לכל שורה יש גם <code>request_id</code>, וגם בשירות ההערות מופיעה אותה בקשה, כמו בפרק 13:</p>
+<div class="codebox output">
+  <div class="label"><span>the api's and the notes service's lines of one POST /chat (shortened)</span></div>
+<pre><code>{"service": "chat-api", "logger": "agent.loop", "message": "agent step 1: tool_use", "request_id": "8f3fb80c2e344cb49b1244627b969fe6", "step": 1, "stop_reason": "tool_use", "input_tokens": 136, "output_tokens": 24, "api_request_id": null}
+{"service": "notes", "logger": "notes.api", "message": "GET /v1/notes 200", "request_id": "8f3fb80c2e344cb49b1244627b969fe6", "status": 200, "duration_ms": 5}
+{"service": "chat-api", "logger": "agent.loop", "message": "tool list_notes: ok", "request_id": "8f3fb80c2e344cb49b1244627b969fe6", "tool": "list_notes", "outcome": "ok"}
+{"service": "chat-api", "logger": "agent.loop", "message": "agent step 2: end_turn", "request_id": "8f3fb80c2e344cb49b1244627b969fe6", "step": 2, ...}
+{"service": "chat-api", "logger": "agent.api", "message": "POST /chat 200", "request_id": "8f3fb80c2e344cb49b1244627b969fe6", "status": 200, "duration_ms": 46}</code></pre>
+</div>
+  <p><code>api_request_id</code> הוא המזהה ש-Anthropic נותנת לכל קריאה אמיתית; במצב <span class="en">mock</span> אין כזה, ולכן <code>null</code>. עם מודל אמיתי, כל צעד הוא קריאה נפרדת עם מזהה משלה, וזה מה שהתמיכה שלהם תבקש.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">6</span>בדיקות: הצלחה, כלי שנכשל, מגבלת צעדים</h3>
+  <p><code>tests\test_loop.py</code>, עם ה-<span class="en">mock</span> ועם שירות הערות מזויף (<code>httpx2.MockTransport</code>, כמו ב-<code>test_notes.py</code>). שלוש הבדיקות החשובות:</p>
+<div class="codebox">
+  <div class="label"><span>tests\test_loop.py (excerpt)</span></div>
+<pre><code>def test_the_model_asks_for_the_tool_and_answers_with_its_result(metric):
+    notes, requests = fake_notes(httpx2.Response(200, json=[NOTE]))
+    run = run_agent(
+        MockClient(), ask("What did I save in my notes about milk?"), [notes_tool(notes, "c1")], 5
+    )
+    assert run.stop == "end_turn"
+    assert (run.steps, run.tool_calls) == (2, 1)
+    assert "- buy oat milk" in run.reply
+    <span class="cm"># The model chose the search; our code chose the conversation.</span>
+    assert requests[0].url.params["q"] == "milk"
+    assert requests[0].url.params["conversation_id"] == "c1"
+
+
+def test_a_failing_tool_is_a_result_for_the_model_not_a_crash(metric):
+    notes, _ = fake_notes(*[httpx2.Response(503)] * 3)  <span class="cm"># down: one try and two retries</span>
+    run = run_agent(MockClient(), ask("What is in my notes?"), [notes_tool(notes, "c1")], 5)
+    result = run.messages[2]["content"][0]
+    assert result["is_error"]
+    assert result["content"] == "The notes service is unavailable right now."
+    assert run.stop == "end_turn"
+
+
+def test_a_loop_that_never_ends_stops_at_max_steps(metric, caplog):
+    notes, requests = fake_notes(*[httpx2.Response(200, json=[NOTE])] * 3)
+    run = run_agent(MockClient(), ask("[mock:loop] my notes?"), [notes_tool(notes, "c1")], 3)
+    assert (run.stop, run.steps, run.tool_calls) == ("max_steps", 3, 3)
+    assert run.reply.startswith("I could not finish this in 3 steps")</code></pre>
+</div>
+  <p>ועוד ארבע: שאלה בלי כלי היא קריאה אחת, קלט שגוי נדחה לפני שמשהו רץ, רק השאלה והתשובה נשמרות, ו-<code>ClaudeClient.create</code> שולח את הכלים ומחזיר את כל התשובה (עם SDK מזויף, כמו בפרק 3).</p>
+<div class="codebox output">
+  <div class="label"><span>uv run pytest tests\test_loop.py -v (shortened)</span></div>
+<pre><code>tests/test_loop.py::test_the_model_asks_for_the_tool_and_answers_with_its_result PASSED [ 14%]
+tests/test_loop.py::test_without_a_tool_request_the_loop_is_a_single_call PASSED [ 28%]
+tests/test_loop.py::test_a_failing_tool_is_a_result_for_the_model_not_a_crash PASSED [ 42%]
+tests/test_loop.py::test_a_wrong_input_is_refused_before_anything_runs PASSED [ 57%]
+tests/test_loop.py::test_a_loop_that_never_ends_stops_at_max_steps PASSED [ 71%]
+tests/test_loop.py::test_only_the_question_and_the_final_answer_are_saved PASSED [ 85%]
+tests/test_loop.py::test_claude_client_sends_the_tools_and_returns_the_whole_response PASSED [100%]
+============================== 7 passed in 5.67s ==============================</code></pre>
+</div>
+  <p>שימו לב מה הבדיקות <em>לא</em> בודקות: אם מודל אמיתי יבקש את הכלי כשצריך. ה-<span class="en">mock</span> מבקש אותו כי כך כתבתם לו. הבדיקות מוכיחות שהלולאה נכונה; האם המודל בוחר נכון נמדד אחרת, ב-<span class="en">evals</span> של פרק 21.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">7</span>שוברים בכוונה</h3>
+  <p>עצרו את שירות ההערות (<kbd>Ctrl</kbd>+<kbd>C</kbd> בחלון שלו), ושאלו שוב עם <code>uv run python -m agent --continue</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>the reply, and agent.log (shortened)</span></div>
+<pre><code>agent&gt; [mock reply, turn 3] I tried, but the tool failed: The notes service is
+unavailable right now.
+
+{"level": "INFO", "logger": "agent.loop", "message": "agent step 1: tool_use", ...}
+{"level": "WARNING", "logger": "agent.notes", "message": "notes: GET /v1/notes: ConnectTimeout('timed out'); retry in 0.18 s"}
+{"level": "WARNING", "logger": "agent.notes", "message": "notes: GET /v1/notes: ConnectTimeout('timed out'); retry in 0.23 s"}
+{"level": "WARNING", "logger": "agent.loop", "message": "tool list_notes: error", "tool": "list_notes", "outcome": "error"}
+{"level": "INFO", "logger": "agent.loop", "message": "agent step 2: end_turn", ...}
+{"level": "INFO", "logger": "agent.conversations", "message": "model replied", "messages": 5, "llm_ms": 6493}</code></pre>
+</div>
+  <p>הצ'אט לא נפל, והמשתמש קיבל תשובה כנה. אבל היא לקחה שש שניות: שלושה ניסיונות של לקוח ההערות, עם <span class="en">timeout</span> של שתי שניות כל אחד (פרק 11). כל זמן ההמתנה של כלי מתווסף לזמן התשובה. הפעילו את השירות שוב. עכשיו לולאה שלא נגמרת, עם מגבלה של שלושה צעדים:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$env:CHAT_MAX_STEPS = "3"
+uv run python -m agent
+Remove-Item Env:CHAT_MAX_STEPS</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>the chat, and the loop's log lines (Format-Table as in step 5)</span></div>
+<pre><code>you&gt; [mock:loop] What is in my notes?
+agent&gt; I could not finish this in 3 steps, so I stopped. Try a simpler question.
+
+level   message                     input_tokens
+INFO    agent step 1: tool_use               134
+INFO    tool list_notes: ok
+INFO    agent step 2: tool_use               205
+INFO    tool list_notes: ok
+INFO    agent step 3: tool_use               276
+INFO    tool list_notes: ok
+WARNING agent stopped after 3 steps</code></pre>
+</div>
+  <p>כל צעד שולח יותר מהקודם, כי השיחה גדלה בבקשה ובתוצאה של הצעד הקודם. ב-<code>/metrics</code> הריצה הזו נספרת כ-<code>agent_runs_total{stop="max_steps"}</code>: מספר שכדאי לראות בגרף, ואולי להתריע עליו.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">8</span>תיעוד, <span class="en">merge</span> וגרסה</h3>
+  <p>הקוד והבדיקות מוכנים; עכשיו מה שפרק 15 קרא לו "גמור". README: סעיף חדש, "The agent loop", שורת <code>CHAT_MAX_STEPS</code> בטבלה, והקבצים החדשים במבנה. <code>.env.example</code>: <code>CHAT_MAX_STEPS</code> עם הסבר. <code>docs\architecture.md</code>: פסקה על הכלי, ושורה ב-<span class="en">Known gaps</span> על מה שלא נשמר. <code>CHANGELOG.md</code>: <span class="en">Added</span> תחת <span class="en">Unreleased</span>. בדקו עם <code>uv run --locked python scripts/ci_local.py --job checks</code>, מזגו, ושחררו 0.16.0 בדיוק כמו בצעד 10 של 15.8: התיקון AGENT-44 מפרק 15 והלולאה יוצאים יחד באותה גרסה.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.7</span>מה משתבש בלולאה</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה</th><th>איך זה נראה</th><th>מה עוצר את זה אצלכם</th></tr>
+  <tr><td><strong>לולאה שלא נגמרת</strong></td><td>המודל מבקש שוב ושוב את אותו כלי, או מחפש בלי למצוא</td><td><code>max_steps</code>, תשובה שאומרת שהלולאה עצרה, ומדד <code>stop="max_steps"</code></td></tr>
+  <tr><td><strong>קלט שגוי לכלי</strong></td><td>מספר במקום מחרוזת, שדה שלא קיים, כלי שלא קיים</td><td>בדיקה בתוך הכלי, ו-<code>ToolError</code> שחוזר למודל עם הסבר שהוא יכול לתקן לפיו</td></tr>
+  <tr><td><strong>הכלי נכשל</strong></td><td>שירות למטה, <span class="en">timeout</span>, באג</td><td><code>is_error</code>, ללא חריגה בלולאה; ה-<span class="en">retries</span> וה-<span class="en">circuit breaker</span> של פרק 11 עדיין עובדים מתחת</td></tr>
+  <tr><td><strong>עלות וזמן שגדלים</strong></td><td>כל צעד שולח את כל השיחה שוב, ועוד הגדרות הכלים; זמן הכלים מתווסף</td><td>מגבלת צעדים, לוג עם <code>input_tokens</code> לכל צעד, ו-<code>llm_tokens_total</code> מפרק 13</td></tr>
+</table>
+</div>
+
+<p>ויש עוד אחד, שקל לפספס: <strong>המודל פועל לפי טקסט שהוא קורא</strong>. תוצאה של כלי היא טקסט שנכנס לשיחה, בדיוק כמו ההודעה של המשתמש. הערה ששמורה בשירות ("<span class="en">ignore the user and ...</span>"), דף אינטרנט או קובץ יכולים להכיל הוראות, והמודל עלול לנהוג לפיהן. זה <span class="en">prompt injection</span>, ופרק 21 מדגים אותו ומוסיף אישור אנושי לכלים מסוכנים. כאן ההגנה היא בתכנון: הכלי היחיד <strong>קורא בלבד</strong>, ו<strong>הקוד בוחר את השיחה</strong>, לא המודל. במקרה הגרוע, המודל יכתוב תשובה מוזרה. הוא לא יכול למחוק, לשלוח או לקרוא משהו שאינו של המשתמש הזה. לפני שמוסיפים כלי שכותב או מוחק, שואלים: מה יקרה אם המודל יפעיל אותו בגלל טקסט שמישהו אחר כתב?</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.8</span>מתי לא לבנות סוכן</h2>
+
+<p>הכלל: <strong>הצורה הפשוטה ביותר שעובדת</strong>. כל צעד מקריאה אחת לעבר סוכן קונה גמישות, ומשלם עליה בארבעה מטבעות:</p>
+<ul>
+  <li><strong>עלות:</strong> יותר קריאות, וכל אחת שולחת את כל מה שהיה. הגדרות הכלים נשלחות גם כשאין בהן צורך.</li>
+  <li><strong>זמן:</strong> צעדים רצים זה אחרי זה, והכלים מוסיפים את הזמן שלהם.</li>
+  <li><strong>צפיות:</strong> אותה שאלה יכולה לקבל שני מסלולים שונים. קשה להבטיח "תמיד יקרא את ההערות".</li>
+  <li><strong>בדיקות:</strong> אפשר לבדוק את הלולאה; את ההחלטות של המודל אפשר רק למדוד, על הרבה דוגמאות.</li>
+</ul>
+
+<div class="table-wrap">
+<table>
+  <tr><th>משימה בפרויקט</th><th>צורה</th><th>למה</th></tr>
+  <tr><td>לענות על הודעה בצ'אט</td><td>קריאה אחת</td><td>זה מה שהיה עד היום, וזה מספיק לרוב ההודעות</td></tr>
+  <tr><td>כותרת לשיחה, סיכום שלה לדוח הלילי</td><td>קריאה אחת, או <span class="en">chaining</span> של שתיים</td><td>הקלט ידוע, והפלט נבדק בקוד</td></tr>
+  <tr><td>"שאלת קוד" לפרומפט אחד, "שאלה כללית" לאחר</td><td><span class="en">Workflow</span> (<span class="en">routing</span>)</td><td>מעט מסלולים, והקוד יכול לבחור אחרי סיווג אחד</td></tr>
+  <tr><td>למחוק שיחה ואת ההערות שלה</td><td>קוד רגיל (<span class="en">saga</span>, פרק 12)</td><td>אין כאן החלטה למודל; פעולה מסוכנת לא נותנים לו</td></tr>
+  <tr><td>"מה שמרתי על חלב?", בתוך שיחה רגילה</td><td><span class="en">Agent</span> עם כלי אחד</td><td>רק המודל יודע, מתוך השאלה, אם צריך את ההערות ומה לחפש</td></tr>
+</table>
+</div>
+
+<p>ואפילו בשורה האחרונה יש חלופה: <span class="en">workflow</span> שתמיד מביא את ההערות ושם אותן בפרומפט. הוא צפוי יותר וזול יותר בשאלה על הערות, ויקר יותר בכל שאר ההודעות. איזו מהן נכונה תלוי במספרים: כמה הודעות הן על הערות, כמה הערות יש, וכמה זמן לוקח לשירות לענות. בתרגיל 6 תמדדו ותחליטו, ותכתבו את ההחלטה ב-<span class="en">ADR</span> (פרק 15). ארבע שאלות לפני כל סוכן: האם המשימה באמת לא ידועה מראש? האם התוצאה שווה את העלות והזמן? האם המודל מסוגל לה? ואם הוא יטעה, האם תדעו ותוכלו לתקן?</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.9</span>תרגילים</h2>
+
+<p>שירות ההערות רץ, הכול במצב <span class="en">mock</span>. שינויי קוד על ענף. פתרונות <a href="solutions/chapter-16.html">בדף נפרד</a>.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · לקרוא את ההודעות</h3><span class="level">מודרך</span></div>
+  <p>הריצו <code>uv run python -m agent.trace "What did I save in my notes about milk?"</code>. לכל אחת מארבע ההודעות כתבו: מי כתב אותה (המודל, הקוד שלכם, המשתמש), מה הסוג של כל בלוק, ואיזה שדה מחבר בין הודעה 2 להודעה 3. אחר כך הריצו את אותו דבר עם <code>"hello"</code>, ועם <code>"[mock:loop] my notes?"</code>. כמה הודעות יש בכל ריצה, ולמה?</p>
+  <label class="answer-label" for="n-ex1">מה ראיתם? ומה היה קורה אילו הקוד היה שולח למודל רק את הודעה 3, בלי הודעה 2?</label>
+  <textarea class="answer" id="n-ex1" data-id="c16-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c16-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · כלי שנכשל, וקלט שגוי</h3><span class="level">מודרך</span></div>
+  <p>בצ'אט, שלחו <code>[mock:call list_notes {"search": 42}]</code> ואחר כך <code>[mock:call list_notes {"conversation_id": "someone-else"}]</code>. מה המשתמש קיבל, ומה נכתב ב-<code>agent.log</code>? האם שירות ההערות קיבל בקשה (הסתכלו בחלון שלו)? אחר כך עצרו את שירות ההערות ושאלו שאלה על ההערות דרך ה-<span class="en">API</span> (<code>scripts\ask.py</code>), וקראו את <code>agent_tool_calls_total</code> ב-<code>/metrics</code>.</p>
+  <label class="answer-label" for="n-ex2">מה ההבדל בין שלושת הכישלונות, למשתמש, ללוג ולמדד? למה אף אחד מהם לא הפך ל-500?</label>
+  <textarea class="answer" id="n-ex2" data-id="c16-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c16-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · כמה עולה לולאה</h3><span class="level mid">בינוני</span></div>
+  <p>עם <code>CHAT_MAX_STEPS</code> של 3, 5 ו-10, שלחו בכל פעם <code>[mock:loop] my notes?</code> בשיחה חדשה, ורשמו את <code>input_tokens</code> של כל צעד מ-<code>agent.log</code>. חשבו את הסכום לכל ריצה. אחר כך הניחו מודל אמיתי שבו כל צעד לוקח 4 שניות, וכלי שלוקח חצי שנייה.</p>
+  <label class="answer-label" for="n-ex3">איך גדל הסכום עם מספר הצעדים, ולמה לא בקו ישר? כמה זמן חיכה המשתמש ב-10 צעדים? איזה ערך של <code>CHAT_MAX_STEPS</code> הייתם בוחרים לכלי אחד, ולמה?</label>
+  <textarea class="answer" id="n-ex3" data-id="c16-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c16-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · איזו צורה?</h3><span class="level mid">בינוני</span></div>
+  <p>לכל אחת מהבקשות האלה בחרו קריאה אחת, <span class="en">workflow</span> (ואיזו תבנית), <span class="en">agent</span>, או קוד בלי מודל בכלל, ונמקו במשפט: (א) לתרגם את התשובה לעברית כשהמשתמש כותב בעברית; (ב) דוח שבועי: לסכם כל שיחה, ואז לכתוב סיכום של הסיכומים; (ג) "תמחק את כל ההערות שלי על הרופא"; (ד) לבדוק לפני שליחה שהתשובה לא כוללת מפתח <span class="en">API</span>; (ה) לעזור למשתמש לדבג <span class="en">traceback</span> שהדביק, כשאפשר לחפש בהערות ובשיחות קודמות; (ו) "מה התאריך היום?".</p>
+  <label class="answer-label" for="n-ex4">התשובות שלכם, ובאיזו מהן התלבטתם הכי הרבה:</label>
+  <textarea class="answer" id="n-ex4" data-id="c16-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c16-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · מה המודל יכול לבחור</h3><span class="level mid">בינוני</span></div>
+  <p>הכלי מגן על שני דברים: המודל לא בוחר שיחה, וכלי שלא קיים או שקורס לא מפיל את הלולאה. כתבו ב-<code>tests\test_loop.py</code> שתי בדיקות שמוכיחות זאת: (1) <code>[mock:call list_notes {"conversation_id": "someone-else"}]</code> מחזיר שגיאה, ושירות ההערות לא קיבל אף בקשה; (2) כלי שזורק <code>KeyError</code> מחזיר <code>"The tool failed unexpectedly."</code> והפרטים נמצאים בלוג, וכלי בשם <code>delete_everything</code> מחזיר <code>"There is no tool named 'delete_everything'."</code>. ודאו שכל בדיקה נכשלת כשמסירים את השורה שהיא שומרת עליה, ואז החזירו.</p>
+  <label class="answer-label" for="n-ex5">אילו שורות הסרתם, ומה הייתה ההודעה של הכישלון?</label>
+  <textarea class="answer" id="n-ex5" data-id="c16-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c16-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · <span class="en">agent</span> או <span class="en">workflow</span>? למדוד ולהחליט</h3><span class="level open">פתוח</span></div>
+  <p>על ענף זמני, כתבו את החלופה מ-16.8: <code>answer()</code> שתמיד מביא את ההערות, מוסיף אותן לשאלה, ועושה קריאה אחת. מדדו את שתי הגרסאות על כמה הודעות (למשל "hello" ושאלה על חלב, עם שלוש הערות): כמה קריאות למודל, כמה קריאות לשירות ההערות, כמה <span class="en">input tokens</span> (<code>llm_tokens_total</code>), ומה קורה לכל הודעה כשהשירות למטה. אחר כך כתבו <code>docs\adr\0002-...md</code> לפי התבנית של פרק 15: הקשר (עם המספרים), החלטה, השלכות, חלופות. מחקו את הענף הזמני; ה-<span class="en">ADR</span> נשאר ב-<code>main</code>.</p>
+  <label class="answer-label" for="n-ex6">מה החלטתם, ואיזה מספר הכריע? מה היה גורם לכם להחליט הפוך?</label>
+  <textarea class="answer" id="n-ex6" data-id="c16-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c16-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.10</span>בדקו את עצמכם</h2>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c16-chk1"><span>אני יודע/ת להסביר מה ההבדל בין קריאה אחת, <span class="en">workflow</span> ו-<span class="en">agent</span>, לפי השאלה "מי מחליט על הצעד הבא".</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c16-chk2"><span>אני יודע/ת לתת דוגמה ל-<span class="en">prompt chaining</span>, ל-<span class="en">routing</span> ולקריאות במקביל.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c16-chk3"><span>אני יודע/ת להגדיר כלי, ולהסביר מה המודל מחזיר כשהוא רוצה אותו, ומה הקוד שולח בחזרה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c16-chk4"><span>אני יודע/ת למה מחזירים את כל התשובה של המודל, ולמה כל התוצאות של צעד הולכות בהודעה אחת.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c16-chk5"><span>אני יודע/ת לכתוב את הלולאה בעצמי: קריאה, <code>stop_reason</code>, הפעלת כלי, תוצאה, קריאה נוספת, ומגבלת צעדים.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c16-chk6"><span>אני יודע/ת למה כלי שנכשל מחזיר <code>is_error</code> ולא זורק, ומה נכתב ללוג ומה למודל.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c16-chk7"><span>אני יודע/ת לבדוק לולאה עם <span class="en">mock</span> מתוסרט, ומה בדיקות כאלה לא יכולות להוכיח.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c16-chk8"><span>אני יודע/ת למה הכלי של הפרק קורא בלבד ולמה השיחה נקבעת בקוד.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c16-chk9"><span>אני יודע/ת למנות את ארבעת המחירים של סוכן, ולבחור צורה פשוטה יותר כשהיא מספיקה.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.11</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td>הצ'אט עונה <code>You said: ...</code> גם על שאלה על הערות</td><td><code>NOTES_URL</code> לא מוגדר, ולכן אין כלים ואין לולאה</td><td>הגדירו <code>NOTES_URL</code> ו-<code>NOTES_API_KEY</code> ב-<code>.env</code> והפעילו את שירות ההערות</td></tr>
+  <tr><td><code>NOTES_URL is not set, so there is no tool to call.</code></td><td><code>python -m agent.trace</code> בלי שירות הערות</td><td>אותו דבר</td></tr>
+  <tr><td><code>I tried, but the tool failed: The notes service is unavailable right now.</code>, אחרי כמה שניות</td><td>שירות ההערות לא רץ, או מפתח שגוי</td><td>הפעילו אותו; בדקו ש-<code>NOTES_API_KEY</code> זהה בשני החלונות</td></tr>
+  <tr><td><code>ModuleNotFoundError: No module named 'agent'</code></td><td>הרצתם <code>python agent\trace.py</code> במקום מודול</td><td><code>uv run python -m agent.trace "..."</code>, מתיקיית הפרויקט</td></tr>
+  <tr><td><code>I could not finish this in N steps</code> בשאלה רגילה</td><td><code>CHAT_MAX_STEPS</code> קטן מדי, או <code>[mock:loop]</code> בהודעה</td><td>בדקו את <code>agent step</code> ב-<code>agent.log</code>; מחקו את המשתנה עם <code>Remove-Item Env:CHAT_MAX_STEPS</code></td></tr>
+  <tr><td><code>json.decoder.JSONDecodeError</code> בצ'אט</td><td>ה-JSON בתוך <code>[mock:call ...]</code> לא תקין (למשל מירכאות בודדות)</td><td>מירכאות כפולות בלבד: <code>{"search": "milk"}</code></td></tr>
+  <tr><td>מודל אמיתי: <code>The API returned an error (400).</code> בצעד השני</td><td>תוצאה בלי הבקשה שלה, <code>tool_use_id</code> שגוי, או רק הטקסט של תשובה עם <code>tool_use</code></td><td>החזירו את <code>response.content</code> כולו, ואת כל התוצאות בהודעה אחת</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.12</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>single LLM call</dt><dd>קריאה אחת למודל: הודעות נכנסות, תשובה יוצאת.</dd>
+  <dt>workflow</dt><dd>כמה צעדים, חלקם קריאות למודל, בסדר שהקוד קובע מראש.</dd>
+  <dt>prompt chaining</dt><dd>הפלט של קריאה אחת הוא הקלט של הבאה.</dd>
+  <dt>routing</dt><dd>קריאה שמסווגת בקשה, והקוד שולח אותה למסלול המתאים.</dd>
+  <dt>agent</dt><dd>מודל שבוחר את הצעד הבא בלולאה, עם כלים, עד שהוא מחליט שסיים.</dd>
+  <dt>tool</dt><dd>שם, תיאור ו-JSON schema של פעולה שהמודל יכול לבקש; הקוד שלכם מבצע אותה.</dd>
+  <dt>tool_use</dt><dd>בלוק בתשובת המודל: בקשה להפעיל כלי, עם מזהה, שם וקלט.</dd>
+  <dt>tool_result</dt><dd>בלוק בהודעת user: התוצאה של בקשה, עם ה-tool_use_id שלה.</dd>
+  <dt>stop_reason</dt><dd>למה המודל הפסיק: end_turn, tool_use, max_tokens, refusal.</dd>
+  <dt>agent loop</dt><dd>קריאה, בדיקת stop_reason, הפעלת כלים, החזרת תוצאות, וחוזר חלילה.</dd>
+  <dt>max steps</dt><dd>הגבול על מספר הקריאות למודל בריצה אחת.</dd>
+  <dt>is_error</dt><dd>סימון של tool_result שהכלי נכשל; המודל קורא אותו ומחליט מה לומר.</dd>
+  <dt>prompt injection</dt><dd>הוראות בתוך טקסט שהמודל קורא, שגורמות לו לפעול נגד מי שהפעיל אותו.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">16.13</span>מה הלאה</h2>
+
+<p>כתבתם סוכן ביד, ועכשיו אתם יודעים מה יש בתוך כל כלי שנקרא "<span class="en">agent</span>": מודל, כלים, ולולאה שמחברת ביניהם. אותה לולאה בדיוק, עם כלים לקריאת קבצים, עריכה והרצת פקודות, היא <span class="en">coding agent</span>: התוכנה שכותבת היום חלק גדול מהקוד בצוותים. השאלה שנשארת היא לא איך לבנות אחד כזה, אלא איך לעבוד עם אחד: מה למסור לו, איך לתדרך אותו, ואיך לבדוק את מה שהחזיר לפני שזה נכנס ל-<code>main</code>. זה <strong>פרק 17: לעבוד עם סוכנים ביום-יום</strong>.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-16</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים: גרסה 0.16.0, <code>agent\loop.py</code>, <code>agent\tools.py</code>, <code>agent\trace.py</code>, ה-<span class="en">mock</span> המתוסרט ב-<code>agent\llm.py</code>, <code>tests\test_loop.py</code> (9 בדיקות, כולל אלה מתרגיל 5), ו-<code>docs\adr\0002-notes-reach-the-model-through-a-tool.md</code> מתרגיל 6. שירות ההערות לא השתנה.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-16.html">פתרונות לפרק 16</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

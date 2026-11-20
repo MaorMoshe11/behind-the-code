@@ -1,0 +1,75 @@
+# Local development: the chat service and the notes service, each with its own database.
+# Start everything with: docker compose up --build -d
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      # A local development database. Real passwords never go in this file (chapter 10).
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent
+    volumes:
+      - pgdata:/var/lib/postgresql/data  # the data lives in a volume, not in the container
+    ports:
+      - "127.0.0.1:5432:5432"  # only this computer can connect, for tools and scripts
+    healthcheck:
+      # "Ready" means Postgres accepts connections, not just that the process started.
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
+      interval: 2s
+      timeout: 5s
+      retries: 30  # a new database needs time to initialise on its first start
+
+  migrate:
+    build: .
+    command: ["alembic", "upgrade", "head"]  # a separate step, as in chapter 7
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build: .
+    env_file: .env  # AGENT_API_KEY, CHAT_MOCK and the rest, from your private file
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@db:5432/agent  # wins over .env
+      NOTES_URL: http://notes:8100  # a service's name is its address inside compose
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    # No depends_on notes: the chat starts, and works, without it.
+
+  # The notes service: its own code (notes-service/), image and database.
+  notes-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: notes
+      POSTGRES_PASSWORD: notes  # local only, like db above
+      POSTGRES_DB: notes
+    volumes:
+      - notesdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notes -d notes"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  notes:
+    build: ./notes-service
+    environment:
+      DATABASE_URL: postgresql+psycopg://notes:notes@notes-db:5432/notes
+      NOTES_API_KEY: ${NOTES_API_KEY:?set NOTES_API_KEY in .env}  # compose reads .env too
+      # Fault injection for chapter 11's experiments: off unless set in the terminal.
+      NOTES_DELAY_SECONDS: ${NOTES_DELAY_SECONDS:-0}
+      NOTES_FAIL_AFTER_SAVE: ${NOTES_FAIL_AFTER_SAVE:-0}
+    ports:
+      - "127.0.0.1:8100:8100"  # for you and your tools; the chat uses the network inside
+    depends_on:
+      notes-db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  notesdata:

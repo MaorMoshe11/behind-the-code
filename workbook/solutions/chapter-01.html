@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 1 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-01.html">→ חזרה לפרק 1</a>
+    <span>פתרונות לפרק 1</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 1 · סביבת העבודה</h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. מי שנתקע ומציץ לומד פחות ממי שנתקע עשר דקות ואז מצליח.</p>
+</header>
+
+<h2><span class="sec">1</span>ניווט בלי עכבר</h2>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects
+mkdir playground\notes        <span class="cm"># creates both folders at once</span>
+cd playground\notes
+pwd                           <span class="cm"># C:\Users\you\projects\playground\notes</span>
+cat ..\..\my-agent\chat.py    <span class="cm"># task 4</span>
+cd ..\..\my-agent             <span class="cm"># task 5</span></code></pre>
+</div>
+<p>במשימה 4, כל <code>..</code> עולה רמה אחת: מ-<code>notes</code> ל-<code>playground</code>, ומשם ל-<code>projects</code>. משם יורדים ל-<code>my-agent</code>. גם <code>cd ~\projects\my-agent</code> הוא פתרון תקין למשימה 5.</p>
+
+<h2><span class="sec">2</span>להרוס ולבנות מחדש</h2>
+<p><code>uv sync</code> קרא את <code>uv.lock</code>, שבו רשומה הגרסה המדויקת של כל חבילה, והתקין בדיוק אותן. לכן הסביבה החדשה זהה לקודמת.</p>
+<p>אילו מחקתם גם את <code>uv.lock</code>, הפקודה <code>uv sync</code> הייתה יוצרת אותו מחדש מתוך <code>pyproject.toml</code>. שם רשום רק "מגרסה 2.10.0 ומעלה", ולכן <code>uv</code> היה בוחר את הגרסאות החדשות ביותר שקיימות <em>באותו יום</em>. היום התוצאה הייתה זהה. בעוד חצי שנה, אחרי שיצאו גרסאות חדשות, הייתם מקבלים סביבה שונה מזו של מי שבנה אותה היום. זו הסיבה שמשתפים את ה-<span class="en">lock file</span>.</p>
+
+<h2><span class="sec">3</span>משתנה סביבה משלכם</h2>
+<div class="codebox">
+  <div class="label"><span>chat.py</span></div>
+<pre><code>MODEL = os.getenv("CHAT_MODEL", "claude-opus-5-5")
+MOCK = os.getenv("CHAT_MOCK", "0") == "1"
+<span class="hl">AGENT_NAME = os.getenv("AGENT_NAME", "agent")</span>
+
+...
+
+        <span class="hl">print(f"{AGENT_NAME}&gt; {reply}\n")</span></code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>.env.example</span></div>
+<pre><code># The name printed before each reply
+AGENT_NAME=agent</code></pre>
+</div>
+<p><strong>למה לעדכן את <code>.env.example</code>:</strong> הקובץ <code>.env</code> שלכם לא משותף. מי שיקבל את הפרויקט לא יידע שהמשתנה קיים אלא אם הוא מופיע בתבנית. כל משתנה חדש שהקוד קורא נרשם שם.</p>
+<p><strong>מי ניצח:</strong> הערך מה-<span class="en">terminal</span>. <code>load_dotenv()</code> אינו דורס משתנה שכבר קיים בסביבה. זו בחירה מכוונת: הקובץ <code>.env</code> נותן ערכי ברירת מחדל למחשב שלכם, ומי שמריץ את התוכנית יכול לגבור עליהם בלי לערוך קבצים. בשרת אמיתי אין בכלל קובץ <code>.env</code>, והמערכת שמריצה את התוכנית מגדירה את המשתנים ישירות.</p>
+
+<h2><span class="sec">4</span>להוסיף חבילה</h2>
+<div class="codebox">
+  <div class="label"><span>chat.py</span></div>
+<pre><code>from dotenv import load_dotenv
+<span class="hl">from rich.console import Console</span>
+
+...
+
+SYSTEM_PROMPT = "You are a friendly assistant. Keep your answers short."
+
+<span class="hl">console = Console()</span>
+
+...
+
+        <span class="hl">console.print(f"{AGENT_NAME}&gt; {reply}\n", style="cyan", markup=False)</span></code></pre>
+</div>
+<p>הותקנו ארבע חבילות: <code>rich</code> עצמה, ושלוש שהיא צריכה כדי לעבוד (<code>markdown-it-py</code>, <code>mdurl</code>, <code>pygments</code>). אלה ה-<span class="en">transitive dependencies</span> שלה.</p>
+<ul>
+  <li>ב-<code>pyproject.toml</code> נוספה שורה אחת, <code>"rich&gt;=15.0.0"</code>. רשומות בו רק החבילות שאתם ביקשתם.</li>
+  <li>ב-<code>uv.lock</code> נוספו ארבעתן, כל אחת עם הגרסה המדויקת שלה.</li>
+</ul>
+<p>הפרמטר <code>markup=False</code> נחוץ כי <code>rich</code> מפרש סוגריים מרובעים כהוראות עיצוב, והתשובות במצב <span class="en">mock</span> מתחילות בסוגריים מרובעים.</p>
+
+<h2><span class="sec">5</span>ציד באגים עם ה-debugger</h2>
+<p>ב-<span class="en">breakpoint</span> רואים ש-<code>messages</code> מכיל 10 איברים וש-<code>max_turns</code> שווה 3. ב-<span class="en">Debug Console</span>, הביטוי <code>messages[-max_turns:]</code> מחזיר 3 איברים בלבד.</p>
+<p><strong>הבאג:</strong> תור אחד הוא <em>שתי</em> הודעות, אחת של <code>user</code> ואחת של <code>assistant</code>. התנאי בשורה הראשונה של הפונקציה זוכר את זה (<code>max_turns * 2</code>), אבל ה-<code>return</code> שוכח וחותך לפי מספר התורות.</p>
+<div class="codebox">
+  <div class="label"><span>debug_me.py</span></div>
+<pre><code>    return messages[-max_turns * 2:]</code></pre>
+</div>
+<p><strong>למה זה מסוכן:</strong> חיתוך של מספר אי-זוגי של הודעות משאיר רשימה שמתחילה בתשובה של <code>assistant</code>, בלי השאלה שקדמה לה. ה-<span class="en">API</span> דורש שההודעה הראשונה תהיה של <code>user</code>, ולכן הבקשה הבאה הייתה נדחית בשגיאה. והבאג היה מתגלה רק בשיחה ארוכה מספיק, כלומר אצל משתמש אמיתי ולא אצלכם בבדיקה קצרה. בפרק 3 תלמדו לכתוב בדיקה אוטומטית שתופסת באג כזה.</p>
+
+<h2><span class="sec">6</span>מבחן החבר</h2>
+<p>אין פתרון יחיד. דוגמה ל-<code>README.md</code> נמצאת בתיקייה <code>checkpoints\chapter-01</code>. הדברים שנשכחים בדרך כלל בניסיון הראשון:</p>
+<ul>
+  <li>הצעד <code>cp .env.example .env</code>. בלעדיו התוכנית עוצרת עם <span class="en">ANTHROPIC_API_KEY is not set</span>.</li>
+  <li>הדרישה ש-<code>uv</code> יהיה מותקן, והקישור להתקנה שלו.</li>
+  <li>ההסבר שאפשר לרוץ בלי מפתח, במצב <span class="en">mock</span>.</li>
+  <li>שכחתם להעתיק את <code>uv.lock</code> לתיקיית הבדיקה. הפרויקט עדיין רץ, אבל כבר לא מובטח שעם אותן גרסאות.</li>
+</ul>
+<p>הקבצים שצריך להעתיק: <code>chat.py</code>, <code>debug_me.py</code>, <code>pyproject.toml</code>, <code>uv.lock</code>, <code>.env.example</code> ו-<code>README.md</code>. שתי פקודות מביאות את החבר לשיחה ראשונה: <code>uv sync</code> ואז <code>uv run python chat.py</code>, אחרי יצירת <code>.env</code>.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-01.html">→ חזרה לפרק 1</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

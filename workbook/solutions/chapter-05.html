@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 5 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-05.html">→ חזרה לפרק 5</a>
+    <span>פתרונות לפרק 5</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 5 · APIs</h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. הפלטים כאן הם מה שהתקבל באמת כשהתרגילים נעשו. המזהים, התאריכים והמפתח אצלכם יהיו אחרים. הקוד המלא נמצא ב-<code>checkpoints\chapter-05</code>.</p>
+</header>
+
+<h2><span class="sec">1</span>סיור ב-<span class="en">Swagger</span></h2>
+<p>אחרי <span class="en">Authorize</span>, כל בקשה ל-<span class="en">endpoint</span> עם מנעול נשלחת עם <code>X-API-Key</code> והערך שהזנתם. פקודת ה-<code>curl</code> ש-<span class="en">Swagger</span> מציג כוללת אותו, ואת <code>Content-Type: application/json</code>. היא כתובה בסגנון של Linux, עם מירכאות בודדות, ולכן לא תעבוד כמו שהיא ב-PowerShell 5.1 (פרק 4, תרגיל 5).</p>
+<p>ב-<code>ChatRequest</code> מופיעים <code>minLength: 1</code> ו-<code>maxLength: 4000</code> על <code>message</code>, ו-<code>message</code> ברשימת השדות החובה. הם הגיעו מ-<code>Field(min_length=1, max_length=4000)</code>: אותה שורה גם בודקת את הקלט וגם מתעדת אותו. ליד <code>conversation_id</code> מופיע התיאור מ-<code>description</code>.</p>
+
+<h2><span class="sec">2</span>טבלת <span class="en">status codes</span></h2>
+<div class="table-wrap">
+<table>
+  <tr><th>קוד</th><th>הבקשה</th><th><code>detail</code></th></tr>
+  <tr><td><code>200</code></td><td><code>POST /chat</code> עם מפתח ו-<code>chat-hello.json</code></td><td>(אין: תשובה רגילה)</td></tr>
+  <tr><td><code>401</code></td><td>אותה בקשה בלי <code>X-API-Key</code>, או עם מפתח שגוי</td><td><code>Missing or wrong X-API-Key header.</code></td></tr>
+  <tr><td><code>404</code></td><td><code>GET /nothing-here</code></td><td><code>Not Found</code></td></tr>
+  <tr><td><code>404</code></td><td><code>POST /chat</code> עם <code>conversation_id</code> שלא קיים, או ישן מלפני הפעלה מחדש</td><td><code>No conversation with this id.</code></td></tr>
+  <tr><td><code>405</code></td><td><code>GET /chat</code> (ה-<span class="en">header</span> <code>allow: POST</code> אומר מה כן)</td><td><code>Method Not Allowed</code></td></tr>
+  <tr><td><code>422</code></td><td><code>chat-typo.json</code></td><td>רשימה, עם <code>"type":"missing"</code> ו-<code>"loc":["body","message"]</code></td></tr>
+  <tr><td><code>502</code></td><td>שרת במצב אמיתי מול <code>http://127.0.0.1:9</code></td><td><code>Could not reach the API. Check your internet connection.</code></td></tr>
+</table>
+</div>
+<div class="codebox">
+  <div class="label"><span>PowerShell (the 502)</span></div>
+<pre><code>$env:CHAT_MOCK = "0"; $env:ANTHROPIC_API_KEY = "not-a-real-key"; $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:9"
+uv run uvicorn agent.api:create_app --factory
+<span class="cm"># second window: send chat-hello.json with the key, as in section 5.8</span>
+<span class="cm"># afterwards, in the server window:</span>
+Remove-Item Env:CHAT_MOCK, Env:ANTHROPIC_API_KEY, Env:ANTHROPIC_BASE_URL</code></pre>
+</div>
+<p>משתני הסביבה גוברים על <code>.env</code> (פרק 1, תרגיל 3), ולכן השרת עלה במצב אמיתי. התשובה לקחה אצלנו כ-7.7 שניות: ה-SDK ניסה שלוש פעמים, וכל ניסיון חיכה כשתי שניות עד ש-Windows ויתר (פרק 4). ב-<code>agent.log</code> נמצאת כל השרשרת, מ-<code>httpx2.ConnectError: [WinError 10061]</code> ועד <code>agent.llm.LLMError</code>.</p>
+<p><strong>שני סוגי <code>404</code>:</strong> הראשון הוא של FastAPI: אין <span class="en">endpoint</span> כזה בכלל. השני הוא שלכם: ה-<span class="en">endpoint</span> קיים, אבל המשאב שביקשתם, השיחה, לא. לקוח צריך להבחין ביניהם, ולכן ה-<code>detail</code> שונה. <strong>למה <code>502</code>:</strong> <code>500</code> אומר "יש באג אצלנו", וזה לא נכון כאן. השרת שלכם עבד בדיוק כמו שצריך, והשירות שהוא תלוי בו לא ענה. <code>502 Bad Gateway</code> אומר בדיוק את זה, ולקוח יודע שמותר לנסות שוב מאוחר יותר. <code>500</code> אמיתי תקבלו כשחריגה לא נתפסת בכלל.</p>
+
+<h2><span class="sec">3</span><code>GET /conversations/{id}</code></h2>
+<div class="codebox">
+  <div class="label"><span>agent\api.py (the additions)</span></div>
+<pre><code>from typing import Annotated, Literal
+...
+
+class Message(BaseModel):
+    """One message in a conversation."""
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ConversationOut(BaseModel):
+    """What GET /conversations/{conversation_id} sends back."""
+
+    conversation_id: str
+    messages: list[Message]
+
+...
+    @app.get("/conversations/{conversation_id}", dependencies=[require_key])
+    def get_conversation(conversation_id: str) -&gt; ConversationOut:
+        """The messages the agent still remembers in one conversation."""
+        try:
+            messages = conversations.messages(conversation_id)
+        except ConversationNotFound:
+            raise HTTPException(status_code=404, detail="No conversation with this id.") from None
+        return ConversationOut(
+            conversation_id=conversation_id,
+            messages=[Message.model_validate(message) for message in messages],
+        )</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>tests\test_api.py</span></div>
+<pre><code>def test_get_conversation_returns_its_messages(client):
+    started = client.post("/chat", json={"message": "hello"}, headers=AUTH).json()
+    response = client.get(f"/conversations/{started['conversation_id']}", headers=AUTH)
+    assert response.status_code == 200
+    messages = response.json()["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[0]["content"] == "hello"
+
+
+def test_get_unknown_conversation_is_404(client):
+    assert client.get("/conversations/nope", headers=AUTH).status_code == 404
+
+
+def test_get_conversation_needs_the_key(client):
+    started = client.post("/chat", json={"message": "hello"}, headers=AUTH).json()
+    assert client.get(f"/conversations/{started['conversation_id']}").status_code == 401</code></pre>
+</div>
+<p><code>uv run pytest</code>: <code>58 passed</code>. <strong><code>mypy</code>:</strong> <code>Message(role=m["role"], content=m["content"])</code> נכשל בשתי שגיאות <code>arg-type</code>, כי ה-<code>MessageParam</code> של ה-SDK רחב יותר מהחוזה שלכם: <code>role</code> יכול להיות גם <code>"system"</code>, ו-<code>content</code> יכול להיות גם רשימה של בלוקים, לא רק <code>str</code>. <code>Message.model_validate(message)</code> מקבל כל אובייקט, ו-Pydantic בודק בזמן ריצה. אצלנו התוכן תמיד מחרוזת, אז הבדיקה עוברת. אילו יום אחד ייכנס לשם משהו אחר, תקבלו שגיאה ברורה במקום תשובה מוזרה.</p>
+<p><strong>למה לא להחזיר ישר את הרשימה:</strong> אז החוזה היה המבנה הפנימי של ה-SDK. כל שינוי בו, או בליבה, היה משנה את ה-<span class="en">API</span> בלי שהחלטתם על זה, ו-<code>/docs</code> לא היה יודע לתאר את התשובה. <code>ConversationOut</code> הוא החוזה, והליבה חופשית להשתנות מאחוריו. זה יהיה חשוב בפרק 6, כשההודעות יגיעו מטבלה.</p>
+
+<h2><span class="sec">4</span><code>DELETE /conversations/{id}</code></h2>
+<div class="codebox">
+  <div class="label"><span>agent\conversations.py</span></div>
+<pre><code>    def delete(self, conversation_id: str) -&gt; None:
+        """Forget the conversation itself. Its id stops working."""
+        self.messages(conversation_id)  # raises ConversationNotFound for an unknown id
+        del self._messages[conversation_id]</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>agent\api.py</span></div>
+<pre><code>    @app.delete("/conversations/{conversation_id}", status_code=204, dependencies=[require_key])
+    def delete_conversation(conversation_id: str) -&gt; None:
+        """Forget a conversation. The API version of /reset in the terminal."""
+        try:
+            conversations.delete(conversation_id)
+        except ConversationNotFound:
+            raise HTTPException(status_code=404, detail="No conversation with this id.") from None</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>tests\test_api.py</span></div>
+<pre><code>def test_delete_forgets_the_conversation(client):
+    started = client.post("/chat", json={"message": "hello"}, headers=AUTH).json()
+    url = f"/conversations/{started['conversation_id']}"
+    deleted = client.delete(url, headers=AUTH)
+    assert deleted.status_code == 204
+    assert deleted.content == b""
+    assert client.get(url, headers=AUTH).status_code == 404
+    # Deleting twice: the second time there is nothing to delete.
+    assert client.delete(url, headers=AUTH).status_code == 404</code></pre>
+</div>
+<p><code>59 passed</code>. <code>204</code> אומר "הצלחתי, ואין מה להחזיר", ולכן ה-<span class="en">body</span> ריק. <strong>המחיקה השנייה מחזירה <code>404</code>, וזה לא סותר <span class="en">idempotency</span>.</strong> <span class="en">Idempotency</span> עוסקת ב<em>מצב</em> שנשאר בשרת, לא בתשובה: אחרי מחיקה אחת או אחרי עשר, השיחה לא קיימת. לקוח שמנסה שוב מחיקה שה-<span class="en">timeout</span> שלה פג יכול להתייחס ל-<code>404</code> כאל הצלחה. יש <span class="en">APIs</span> שמחזירים <code>204</code> גם בפעם השנייה, כדי לחסוך ללקוח את ההבחנה. שתי הבחירות לגיטימיות, בתנאי שהן כתובות בחוזה.</p>
+
+<h2><span class="sec">5</span><code>scripts\ask.py</code></h2>
+<div class="codebox">
+  <div class="label"><span>scripts\ask.py</span></div>
+<pre><code>"""Ask the agent's HTTP API one question, from another program.
+
+Run it with: uv run python scripts/ask.py "your message" [--conversation ID]
+
+It reads AGENT_API_KEY (and AGENT_URL, default http://127.0.0.1:8000) from the
+environment or from .env, like the server does.
+"""
+
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+from dotenv import load_dotenv
+
+
+def ask(url: str, key: str, message: str, conversation_id: str | None) -&gt; dict[str, object]:
+    """POST /chat and return the JSON reply. Raises urllib errors on failure."""
+    body = json.dumps({"message": message, "conversation_id": conversation_id})
+    request = urllib.request.Request(
+        f"{url}/chat",
+        data=body.encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-API-Key": key},
+        method="POST",
+    )
+    # Always a timeout: without one, a server that never answers blocks us forever.
+    with urllib.request.urlopen(request, timeout=30) as response:
+        reply: dict[str, object] = json.load(response)
+        return reply
+
+
+def main() -&gt; None:
+    load_dotenv()
+    parser = argparse.ArgumentParser(description="Send one message to the agent's API.")
+    parser.add_argument("message")
+    parser.add_argument("--conversation", help="continue this conversation id")
+    args = parser.parse_args()
+
+    url = os.getenv("AGENT_URL", "http://127.0.0.1:8000")
+    key = os.getenv("AGENT_API_KEY")
+    if not key:
+        sys.exit("AGENT_API_KEY is not set.")
+
+    try:
+        data = ask(url, key, args.message, args.conversation)
+    except urllib.error.HTTPError as error:
+        # The server answered, with an error status (4xx or 5xx). Its body says why.
+        detail = json.load(error).get("detail")
+        sys.exit(f"The API answered {error.code}: {detail}")
+    except urllib.error.URLError as error:
+        # No answer at all: DNS or connection failed (chapter 4).
+        sys.exit(f"Could not reach {url}: {error.reason}")
+
+    print(data["reply"])
+    print(f"(conversation {data['conversation_id']}, turns: {data['turns']})")
+
+
+if __name__ == "__main__":
+    main()</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>PS&gt; uv run python scripts\ask.py "hello"          <span class="cm"># server not running</span>
+Could not reach http://127.0.0.1:8000: [WinError 10061] No connection could be made because the target machine actively refused it
+PS&gt; uv run python scripts\ask.py "hello"          <span class="cm"># server running</span>
+[mock reply, turn 1] You said: hello
+(conversation 7cc3f2cfd60c4278ae3bba811fab2efa, turns: 1)
+PS&gt; uv run python scripts\ask.py "again" --conversation 7cc3f2cfd60c4278ae3bba811fab2efa
+[mock reply, turn 2] You said: again
+(conversation 7cc3f2cfd60c4278ae3bba811fab2efa, turns: 2)
+PS&gt; uv run python scripts\ask.py "again" --conversation nope
+The API answered 404: No conversation with this id.
+PS&gt; $env:AGENT_API_KEY = "wrong"; uv run python scripts\ask.py "hello"; Remove-Item Env:AGENT_API_KEY
+The API answered 401: Missing or wrong X-API-Key header.</code></pre>
+</div>
+<p><span class="en">Exit code</span>: <code>0</code> בהצלחה, <code>1</code> בכל שגיאה. <code>sys.exit</code> עם מחרוזת מדפיס אותה ל-<span class="en">stderr</span> ויוצא עם <code>1</code>. שימו לב לסדר של ה-<code>except</code>: <code>HTTPError</code> הוא תת-מחלקה של <code>URLError</code>, ולכן הוא חייב לבוא ראשון, אחרת גם תשובות <code>401</code> היו מדווחות כ"לא הצלחתי להגיע". ו-<code>HTTPError</code> הוא גם תשובה: אפשר לקרוא ממנו את ה-<span class="en">body</span> עם <code>json.load</code>, ושם ה-<code>detail</code>.</p>
+
+<h2><span class="sec">6</span>דף שלא שוכח (עד כמה שאפשר)</h2>
+<p>פתרון אפשרי אחד. ב-<code>chat.html</code>, החלק העליון של ה-<code>&lt;script&gt;</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\static\chat.html (the new top of the script)</span></div>
+<pre><code>  // The conversation id is kept in sessionStorage, so a page reload continues the same chat.
+  let conversationId = null;
+  const keyInput = document.getElementById("key");
+  try {
+    keyInput.value = localStorage.getItem("agent-key") || "";
+    conversationId = sessionStorage.getItem("conversation-id");
+  } catch (e) { /* no storage: every reload starts a new chat */ }
+
+  function remember(id) {
+    conversationId = id;
+    try {
+      if (id) sessionStorage.setItem("conversation-id", id);
+      else sessionStorage.removeItem("conversation-id");
+    } catch (e) { /* no storage */ }
+  }
+
+  function lost() {
+    // 404: the server no longer knows this conversation. In memory, a restart loses everything.
+    remember(null);
+    show("השיחה הקודמת אבדה, כנראה כי השרת הופעל מחדש. ההודעה הבאה תפתח שיחה חדשה.", "error");
+  }
+
+  async function loadHistory() {
+    if (!conversationId) return;
+    try {
+      const response = await fetch("/conversations/" + conversationId, {
+        headers: { "X-API-Key": keyInput.value },
+      });
+      if (response.status === 404) return lost();
+      if (!response.ok) return;
+      const data = await response.json();
+      for (const m of data.messages) show(m.content, m.role === "user" ? "user" : "agent");
+    } catch (e) { /* server down: the first send will say so */ }
+  }</code></pre>
+</div>
+<p>ובטיפול בתשובה של <code>POST /chat</code>: <code>remember(data.conversation_id)</code> במקום ההשמה, ענף <code>else if (response.status === 404) { lost(); }</code> לפני השגיאה הכללית, ו-<code>loadHistory();</code> בסוף הסקריפט. <code>sessionStorage</code> שייך ללשונית: רענון ממשיך את השיחה, לשונית חדשה מתחילה שיחה חדשה. זה מה שרוצים כאן. ה-<code>try</code> סביב כל גישה לאחסון קיים כי בחלון פרטי, או כשהאחסון חסום, הגישה זורקת חריגה, והדף צריך לעבוד גם אז.</p>
+<p>בדקנו בדפדפן: שתי הודעות, רענון, ושתיהן חזרו עם התשובות, כי בשרת נרשם <code>GET /conversations/... 200</code>. ואחרי הפעלה מחדש של השרת, רענון הציג את הודעת "השיחה הקודמת אבדה" (<code>GET /conversations/... 404</code>).</p>
+<p><strong>מה הדף לא יכול להציל:</strong> את השיחה עצמה. הדף זוכר רק <em>מזהה</em>. ההודעות נמצאות בשרת, ובזיכרון שלו בלבד, ולכן הפעלה מחדש מוחקת אותן ואין מאיפה להחזיר. וגם כשהשרת חי, <code>GET</code> מחזיר רק את מה שהליבה עוד זוכרת, כלומר את <code>CHAT_MAX_TURNS</code> התורות האחרונים: הקיצוץ מפרק 3 מוחק את השאר לתמיד. הפתרון הוא לשמור כל הודעה, כשהיא נוצרת, במקום שחי מחוץ לתהליך: בסיס נתונים, עם טבלת שיחות (המזהה, מתי נוצרה) וטבלת הודעות (לאיזו שיחה, תפקיד, תוכן, מתי). מה שנשלח למודל יכול עדיין להיות מקוצץ, אבל מה שנשמר הוא הכול. זה פרק 6.</p>
+<p>ה-<span class="en">README</span> המעודכן נמצא ב-<code>checkpoints\chapter-05</code>. ההיסטוריה בסוף הפרק, אחרי <code>git merge</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>git log --oneline</span></div>
+<pre><code>3d433b7 Document the HTTP service
+3b9bdbc Keep the conversation across page reloads; handle a lost one
+09567fb Add scripts/ask.py, a client for the API
+df951eb Add DELETE /conversations/{id}
+4e429f0 Add GET /conversations/{id}
+abaa121 Test the API with FastAPI's TestClient
+88ddfb1 Serve a web chat page where Hebrew reads right
+ed232ae Require an API key on POST /chat
+f7263d5 Add POST /chat with request and response schemas
+a499c20 Add a FastAPI app with GET /health
+4bfb660 Move conversations into a core that the CLI uses
+...</code></pre>
+</div>
+<p>בסוף, מתיקייה נקייה: <code>uv run pytest</code> מדווח <code>59 passed</code>, ו-<code>ruff check</code>, <code>ruff format --check</code> ו-<code>mypy agent scripts</code> נקיים.</p>
+
+<nav class="footer-nav">
+  <a href="../chapter-05.html">→ חזרה לפרק 5</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

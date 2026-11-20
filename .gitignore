@@ -1,0 +1,12 @@
+# Virtual environments are rebuilt from uv.lock, never shared
+.venv/
+# Private settings and secrets
+.env
+# Python and editor leftovers
+__pycache__/
+*.pyc
+.vscode/
+.idea/
+
+# The author brief and build notes are kept outside the published repository
+authoring/

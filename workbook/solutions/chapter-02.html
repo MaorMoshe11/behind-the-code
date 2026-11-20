@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פתרונות לפרק 2 | מאחורי הקוד</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="../chapter-02.html">→ חזרה לפרק 2</a>
+    <span>פתרונות לפרק 2</span>
+    <span class="spacer"></span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פתרונות</div>
+  <h1>פרק 2 · Git ו-GitHub</h1>
+  <p class="lead">קראו פתרון רק אחרי שניסיתם את התרגיל בעצמכם. הפלטים כאן הם מה שהתקבל באמת כשהתרגילים נעשו. המזהים והשעות אצלכם יהיו אחרים.</p>
+</header>
+
+<h2><span class="sec">1</span>מכונת זמן</h2>
+<p><strong>חלק א.</strong> אחרי מחיקת <code>ask_mock</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>PS&gt; git status --short
+ M chat.py
+PS&gt; git diff --stat
+ chat.py | 7 -------
+ 1 file changed, 7 deletions(-)</code></pre>
+</div>
+<p>(<code>--short</code> הוא תצוגה מקוצרת של <code>git status</code>. האות <code>M</code> פירושה <span class="en">modified</span>.) שבע שורות נמחקו: חמש השורות של הפונקציה ושתי השורות הריקות שאחריה. אחרי <code>git restore chat.py</code> הקובץ חזר, <code>git status</code> נקי, והסוכן עונה כרגיל.</p>
+
+<p><strong>חלק ב.</strong></p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>PS&gt; git commit -am "Print the conversation before each request"
+[main a1590bc] Print the conversation before each request
+ 1 file changed, 1 insertion(+)
+PS&gt; git revert --no-edit HEAD
+[main d224c0b] Revert "Print the conversation before each request"
+ Date: Wed Nov 18 12:03:51 2026 +0200
+ 1 file changed, 1 deletion(-)
+PS&gt; git log --oneline
+d224c0b Revert "Print the conversation before each request"
+a1590bc Print the conversation before each request
+517d756 Accept 'bye' as a way to quit
+0d1691e Initial commit: chat agent from chapter 1</code></pre>
+</div>
+<p>נוספו <strong>שני</strong> <span class="en">commits</span>: השינוי הגרוע, וה-<span class="en">revert</span> שמבטל אותו. הקוד חזר למצב שלפני, אבל ההיסטוריה לא נמחקה. היא מספרת מה קרה. כך מי שכבר קיבל את <code>a1590bc</code> יקבל עכשיו גם את התיקון, וההיסטוריות לא סותרות.</p>
+<ul>
+  <li><code>restore</code>: לשינויים שעוד לא נשמרו ב-<span class="en">commit</span>. פשוט וסופי. השינוי נעלם ואינו נרשם בשום מקום.</li>
+  <li><code>revert</code>: ל-<span class="en">commit</span> שכבר קיים, ובמיוחד לכזה שכבר נשלח. בטוח תמיד, כי הוא רק מוסיף.</li>
+</ul>
+
+<h2><span class="sec">2</span>הפקודה <code>/reset</code> על ענף</h2>
+<p>בדיקה במצב <span class="en">mock</span>: אחרי <code>/reset</code> מספר התור חוזר ל-1, כי הרשימה <code>messages</code> ריקה:</p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Type a message and press Enter. Type '/reset' to start over, 'exit' to quit.
+
+you&gt; hello
+agent&gt; [mock reply, turn 1] You said: hello
+
+you&gt; how are you
+agent&gt; [mock reply, turn 2] You said: how are you
+
+you&gt; /reset
+Conversation cleared. Starting over.
+
+you&gt; hello again
+agent&gt; [mock reply, turn 1] You said: hello again</code></pre>
+</div>
+<p>ה-<span class="en">diff</span> המלא של השינוי:</p>
+<div class="codebox output">
+  <div class="label"><span>git diff</span></div>
+<pre><code>@@ -61,7 +61,7 @@ def main():
+-    print("Type a message and press Enter. Type 'exit' to quit.\n")
++    print("Type a message and press Enter. Type '/reset' to start over, 'exit' to quit.\n")
+     messages = []
+@@ -70,6 +70,11 @@ def main():
+         if not user_text:
+             continue
++        if user_text == "/reset":
++            # Forget the whole conversation and start a new one.
++            messages.clear()
++            print("Conversation cleared. Starting over.\n")
++            continue
+
+         messages.append({"role": "user", "content": user_text})</code></pre>
+</div>
+<p>ה-<code>merge</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>PS&gt; git merge feature/reset-command
+Updating d224c0b..405a787
+<span class="hl">Fast-forward</span>
+ chat.py | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+PS&gt; git branch -d feature/reset-command
+Deleted branch feature/reset-command (was 405a787).
+PS&gt; git push origin --delete feature/reset-command
+To C:\Users\you\projects\remotes\my-agent.git
+ - [deleted]         feature/reset-command</code></pre>
+</div>
+<p>המילה היא <span class="en">Fast-forward</span>. מאז שיצרתם את הענף, <code>main</code> לא זז. הענף הוא פשוט <code>main</code> ועוד <span class="en">commit</span> אחד, ולכן אין שני קווים לחבר: git מזיז את התווית <code>main</code> קדימה ל-<code>405a787</code>. ה-<span class="en">commit</span> לא "עבר" לשום מקום. הוא היה שם כל הזמן, ועכשיו גם <code>main</code> מצביע עליו. ומחיקת הענף מחקה רק את התווית, לא את ה-<span class="en">commit</span>.</p>
+
+<h2><span class="sec">3</span>שותפה לצוות וקונפליקט</h2>
+<p>בשכפול הגיעו כל הקבצים ששמורים ב-git, כולל <code>.gitignore</code> ו-<code>.git</code>, אבל לא <code>.env</code> ולא <code>.venv</code>. זה מבחן החבר מפרק 1, בפקודה אחת: כדי להריץ, דנה צריכה <code>uv sync</code> ו-<code>.env</code> משלה.</p>
+<p>ה-<code>push</code> שלכם נדחה, כי דנה הקדימה:</p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>To C:\Users\you\projects\remotes\my-agent.git
+ ! [rejected]        main -&gt; main (fetch first)
+error: failed to push some refs to 'C:\Users\you\projects\remotes\my-agent.git'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>PS&gt; git fetch
+From C:\Users\you\projects\remotes\my-agent
+   405a787..3ac2720  main       -&gt; origin/main
+PS&gt; git status
+On branch main
+Your branch and 'origin/main' have diverged,
+and have 1 and 1 different commits each, respectively.
+PS&gt; git merge origin/main
+Auto-merging chat.py
+CONFLICT (content): Merge conflict in chat.py
+Automatic merge failed; fix conflicts and then commit the result.</code></pre>
+</div>
+<p>פתרון אפשרי, ששומר את שתי הבקשות. הסוגריים מאפשרים לפצל מחרוזת ארוכה על פני שתי שורות, ו-Python מחבר אותן:</p>
+<div class="codebox">
+  <div class="label"><span>chat.py</span></div>
+<pre><code>SYSTEM_PROMPT = (
+    "You are a friendly assistant. Keep your answers short and clear. "
+    "Answer in the language the user writes in."
+)</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>PS&gt; git add chat.py
+PS&gt; git commit --no-edit
+[main 637eb78] Merge remote-tracking branch 'origin/main'
+PS&gt; git push
+To C:\Users\you\projects\remotes\my-agent.git
+   3ac2720..637eb78  main -&gt; main</code></pre>
+</div>
+<p>ואצל דנה, <code>git pull</code> הסתיים ב-<span class="en">Fast-forward</span>, כי אצלה לא היה שום דבר חדש.</p>
+<p><strong>למה git לא איחד לבד:</strong> <code>/reset</code> ו-<code>"bye"</code> שינו שורות שאף אחד אחר לא נגע בהן. כאן שני אנשים שינו <em>את אותה שורה</em> בצורות שונות. כל אחת מהגרסאות הגיונית, וגם שילוב שלהן הגיוני, ורק מי שמבין מה רצו יכול לבחור. git מחליט לפי טקסט, לא לפי משמעות.</p>
+<p><strong>למה להריץ:</strong> מאותה סיבה. git מסמן קונפליקט רק בשורות שהתנגשו בטקסט. שתי שורות שהתאחדו "בלי בעיה" יכולות יחד לשבור את התוכנית, למשל אם אחד שינה שם של פונקציה והשני הוסיף קריאה בשם הישן. וגם בפתרון ידני קל לשכוח סוגר או מירכאה.</p>
+
+<h2><span class="sec">4</span>כללי הצוות, ו-<span class="en">rebase</span></h2>
+<p>דוגמה ל-<code>CONTRIBUTING.md</code> נמצאת ב-<code>checkpoints\chapter-02</code>. הפלט של ה-<code>rebase</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>PS&gt; git log --oneline --graph --all
+* 0efd356 (origin/main, origin/HEAD, main) Document the chat commands in README
+| * c338483 (HEAD -&gt; docs/contributing) Add CONTRIBUTING.md with the team git workflow
+|/
+*   637eb78 Merge remote-tracking branch 'origin/main'
+PS&gt; git rebase main
+Successfully rebased and updated refs/heads/docs/contributing.
+PS&gt; git log --oneline --graph --all
+* 4a68c39 (HEAD -&gt; docs/contributing) Add CONTRIBUTING.md with the team git workflow
+* 0efd356 (origin/main, origin/HEAD, main) Document the chat commands in README
+*   637eb78 Merge remote-tracking branch 'origin/main'
+PS&gt; git switch main
+Switched to branch 'main'
+Your branch is up to date with 'origin/main'.
+PS&gt; git merge docs/contributing
+Updating 0efd356..4a68c39
+Fast-forward
+ CONTRIBUTING.md | 24 ++++++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+ create mode 100644 CONTRIBUTING.md</code></pre>
+</div>
+<p><strong>למה המזהה השתנה:</strong> המזהה מחושב מכל מה שיש ב-<span class="en">commit</span>, כולל ההורה שלו. <code>rebase</code> יצר <span class="en">commit</span> חדש עם אותו תוכן אבל הורה אחר (<code>0efd356</code> במקום <code>637eb78</code>), ולכן מזהה אחר. ה-<span class="en">commit</span> הישן לא השתנה. הוא פשוט כבר לא שייך לאף ענף.</p>
+<p><strong>אילו הענף כבר היה בשרת:</strong> בשרת הענף מצביע על <code>c338483</code>, ואצלכם על <code>4a68c39</code>, שאינו ממשיך אותו. <code>git push</code> רגיל נדחה. בדקנו:</p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code> ! [rejected]        tmp -&gt; tmp (non-fast-forward)
+hint: Updates were rejected because the tip of your current branch is behind
+hint: its remote counterpart.
+PS&gt; git push --force-with-lease
+ + cc1c51a...36c2b02 tmp -&gt; tmp (forced update)</code></pre>
+</div>
+<p>(בבדיקה הזו הענף נקרא <code>tmp</code>.) הפתרון הוא <code>git push --force-with-lease</code>, ורק כי זה ענף שאתם לבד עובדים עליו. אל תעשו מה שה-<span class="en">hint</span> מציע, <code>git pull</code>: הוא היה מאחד את הגרסה הישנה של ה-<span class="en">commit</span> עם החדשה, ומכפיל אותו בהיסטוריה.</p>
+
+<p><strong>ההיסטוריה המלאה</strong> בסוף תרגיל 4, להשוואה עם שלכם. הצורה צריכה להיות זהה, המזהים לא:</p>
+<div class="codebox output">
+  <div class="label"><span>git log --oneline --graph</span></div>
+<pre><code>* 4a68c39 (HEAD -&gt; main, origin/main, origin/HEAD) Add CONTRIBUTING.md with the team git workflow
+* 0efd356 Document the chat commands in README
+*   637eb78 Merge remote-tracking branch 'origin/main'
+|\
+| * 3ac2720 Ask for clear answers in the system prompt
+* | d68df42 Answer in the user's language
+|/
+* 405a787 Add /reset command to clear the conversation
+* d224c0b Revert "Print the conversation before each request"
+* a1590bc Print the conversation before each request
+* 517d756 Accept 'bye' as a way to quit
+* 0d1691e Initial commit: chat agent from chapter 1</code></pre>
+</div>
+
+<h2><span class="sec">5</span><span class="en">code review</span></h2>
+<p>דוגמה ל-<span class="en">review</span>. הניסוח שלכם יכול להיות אחר. מה שחשוב הוא שמצאתם את הבעיות והסברתם למה הן חשובות.</p>
+<div class="table-wrap">
+<table>
+  <tr><th>שורה</th><th>הערה</th><th>סוג</th></tr>
+  <tr><td><code>api_key="sk-ant-..."</code></td><td>מפתח <span class="en">API</span> כתוב בקוד. אם הוא אמיתי, הוא כבר בהיסטוריה של הענף ובשרת, ולכן צריך לבטל אותו ולהנפיק חדש, לא רק למחוק את השורה. וגם אם לא: הקוד צריך לקרוא את המפתח מהסביבה, כמו קודם.</td><td>חובה</td></tr>
+  <tr><td><code>{len(messages)} turns</code></td><td>באג: <code>len(messages)</code> סופר הודעות, ותור הוא שתי הודעות. אחרי שני תורות זה מדפיס <code>4 turns so far</code>. הרצנו ובדקנו. זו בדיוק הטעות של <code>trim_history</code> מפרק 1. צריך <code>len(messages) // 2</code>.</td><td>חובה</td></tr>
+  <tr><td><code>print("DEBUG", messages)</code></td><td>הדפסה שנשארה מ-debugging. מציגה למשתמש את כל השיחה בפורמט פנימי.</td><td>חובה</td></tr>
+  <tr><td><code>claude-haiku-5-5</code></td><td>שינוי של מודל ברירת המחדל, שלא קשור ל-<code>/history</code> ולא מוזכר בשום מקום. אם הוא מכוון, הוא שייך ל-<span class="en">pull request</span> נפרד עם הסבר. ואם רוצים מודל אחר מקומית, משנים את <code>CHAT_MODEL</code> ב-<code>.env</code>.</td><td>חובה</td></tr>
+  <tr><td>כותרת ותיאור</td><td><code>fix stuff</code> לא אומר כלום, וזו גם הודעת ה-<span class="en">commit</span>. צריך כותרת כמו <code>Add /history command</code>, ותיאור: מה, למה, איך בודקים.</td><td>חובה</td></tr>
+  <tr><td>שורת העזרה, <code>README.md</code></td><td>הפקודה החדשה לא מוזכרת בשורת ההסבר שבהתחלה ולא בטבלת הפקודות ב-<code>README.md</code>.</td><td>הצעה</td></tr>
+</table>
+</div>
+<p><strong>החלטה:</strong> <span class="en">Request changes</span>. יש סוד בקוד ובאג. ושימו לב לטון: ההערות מתארות את הקוד ואת הסיבה, לא את מי שכתב אותו. מתכנת חדש שמקבל <span class="en">review</span> כזה לומד ממנו, במקום להתגונן.</p>
+<p><strong>תיאור לענף <code>docs/contributing</code>,</strong> לדוגמה:</p>
+<div class="codebox">
+  <div class="label"><span>pull request description</span></div>
+<pre><code>## What
+Adds CONTRIBUTING.md: how we name branches, what goes into a commit,
+and the steps from a branch to a merged pull request.
+
+## Why
+There are two of us now. We already had one conflict, and we did not agree
+on merge vs. rebase. Writing the rules down means we do not have to guess.
+
+## How to test
+Read it. Check that every command in it matches what we actually do.
+
+## Notes for the reviewer
+Documentation only, no code changes. The merge-vs-rebase rule
+("rebase your own branch on main before opening a PR") is a proposal:
+please push back if you disagree.</code></pre>
+</div>
+
+<h2><span class="sec">6</span>מחזור מלא ב-<span class="en">GitHub</span></h2>
+<p>אין פתרון יחיד. כמה דברים שכדאי שתבחינו בהם:</p>
+<ul>
+  <li><strong>אפשרות ה-<span class="en">merge</span>:</strong> כל אחת לגיטימית אם יש לה סיבה. <span class="en">Squash and merge</span> מתאים כשה-<span class="en">commits</span> בענף הם "ניסיון", "תיקון", "עוד תיקון", ומה שחשוב ב-<code>main</code> הוא <span class="en">commit</span> אחד מסודר. <span class="en">Create a merge commit</span> שומר את כל הצעדים. מה שחשוב הוא לבחור אחת ולכתוב אותה ב-<code>CONTRIBUTING.md</code>.</li>
+  <li><strong>אישור עצמי:</strong> GitHub לא מאפשר למי שפתח <span class="en">pull request</span> לאשר אותו. אפשר להעיר (<span class="en">Comment</span>), אבל <span class="en">Approve</span> שמור לאדם אחר. זה בדיוק הרעיון: עוד זוג עיניים.</li>
+  <li><strong><span class="en">Branch protection</span>:</strong> בחשבון חינמי, אכיפה של כללים על <code>main</code> זמינה ל-<span class="en">repositories</span> ציבוריים. ב-<span class="en">repository</span> פרטי בחשבון חינמי תגלו שהכללים לא נאכפים, או שהממשק מציין שהם דורשים תוכנית בתשלום. זה תקין, ולא טעות שלכם.</li>
+  <li><strong>מה היה שונה מה-<span class="en">remote</span> המקומי:</strong> פקודות git זהות לחלוטין. מה שנוסף הוא שכבה של אנשים: מקום לתאר את השינוי, לדון בשורות ספציפיות, לאשר, ולתעד את ההחלטה. וההתחברות הראשונה דרך הדפדפן.</li>
+  <li><strong>מעכשיו:</strong> אם תמשיכו לעבוד מול GitHub, ה-<code>-u</code> ב-<code>git push -u github main</code> קבע ש-<code>git push</code> ו-<code>git pull</code> על <code>main</code> הולכים ל-GitHub. בפרק 9 תצטרכו את ה-<span class="en">repository</span> ב-GitHub, כדי להריץ עליו בדיקות אוטומטיות.</li>
+</ul>
+
+<nav class="footer-nav">
+  <a href="../chapter-02.html">→ חזרה לפרק 2</a>
+  <a href="../index.html">תוכן העניינים</a>
+</nav>
+
+</main>
+<script src="../assets/workbook.js"></script>
+</body>
+</html>

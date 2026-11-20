@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 17 · לעבוד עם סוכנים ביום-יום | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="17">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 17 · לעבוד עם סוכנים ביום-יום</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 17 מתוך 21</div>
+  <h1>לעבוד עם סוכנים ביום-יום</h1>
+  <p class="lead">איך עובדים עם סוכן שכותב קוד בשבילכם: מה מוסרים לו, איך מתדרכים אותו, ואיך בודקים את מה שהוא החזיר לפני שזה נכנס ל-<code>main</code>.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>להסביר מה <span class="en">coding agent</span> יודע ומה לא, במונחים של לולאת הסוכן מפרק 16.</li>
+    <li>להחליט אילו משימות למסור, אילו לעשות יחד איתו, ואילו להשאיר לעצמכם.</li>
+    <li>לכתוב תדריך (<span class="en">brief</span>) שסוכן יכול לבצע ואתם יכולים לבדוק, וקובץ הוראות קצר לפרויקט.</li>
+    <li>לעבוד בצעדים קטנים שאפשר לבטל, ולדעת מתי לעצור ריצה ולהתחיל מחדש.</li>
+    <li>לבדוק עבודה של סוכן כמו <span class="en">reviewer</span>: לקרוא את ה-<span class="en">diff</span>, להריץ בעצמכם, ולזהות את דפוסי הכשל הנפוצים.</li>
+    <li>לתת לסוכן רק את ההרשאות שהוא צריך, ולזכור מי אחראי על מה שנכנס.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> שלוש עד ארבע שעות. <strong>מה צריך:</strong> <code>uv</code> ו-<code>git</code>, והחוברת (בשביל <code>checkpoints\chapter-14</code>). סוכן קוד או עוזר צ'אט כלשהו יעזרו בתרגיל האחרון, אבל אינם חובה, ולא צריך חשבון בתשלום. הכול במצב <span class="en">mock</span>. בפרק הזה הפרויקט שלכם לא משתנה.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.1</span>הבעיה: <span class="en">diff</span> גדול, בטוח בעצמו, ושגוי</h2>
+
+<p>שישה-עשר פרקים כתבתם קוד בעצמכם. בעבודה אמיתית, היום, חלק גדול ממנו נכתב יחד עם סוכן: תוכנה שקוראת את הפרויקט, עורכת קבצים ומריצה פקודות, עד שהיא מודיעה שסיימה. נראה איך זה נראה כשזה הולך רע. ביקשתם מסוכן, בשורה אחת:</p>
+
+<div class="codebox output">
+  <div class="label"><span>your request</span></div>
+<pre><code>Add a limit to the conversations list.</code></pre>
+</div>
+
+<p>אחרי שתי דקות הוא מחזיר ענף עם שינויים בארבעה קבצים, ודוח:</p>
+
+<div class="codebox output">
+  <div class="label"><span>the agent's report</span></div>
+<pre><code>Done. GET /conversations now accepts an optional `limit` parameter (default 50).
+FastAPI caps larger values at 50.
+- Added error handling so the endpoint never fails when listing.
+- Raised the default rate limit to 100: local testing kept hitting 429.
+- Updated tests/test_security.py to match the new behaviour.
+- Added test_list_can_be_limited.
+All tests pass (139 passed, 4 skipped).</code></pre>
+</div>
+
+<p>ה-<span class="en">diff</span> קצר ונראה מסודר, והבדיקות באמת עוברות. אתם ממזגים. למחרת: CI אדום על <code>mypy</code>; כל לקוח רואה שוב את השיחות של כל השאר, בדיוק מה שפרק 14 סגר; ה-<span class="en">rate limit</span> עלה פי שלושה בלי שאף אחד החליט על זה; והבדיקה שהייתה אמורה לתפוס את דליפת השיחות "עודכנה" כך שהיא כבר לא בודקת כלום. בסעיף 17.9 תשחזרו את הענף הזה ותמצאו כל אחת מהבעיות בעצמכם.</p>
+
+<p>קל להאשים את הסוכן, אבל האשמה משותפת. התדריך היה שורה אחת: הוא לא אמר שכל לקוח רואה רק את שלו, לא אמר שאסור לגעת בבדיקות, ולא אמר מה נחשב "גמור". ואתם קיבלתם דוח במקום בדיקה: קראתם "All tests pass" ולא הרצתם כלום. הפרק הזה עוסק בשני הצדדים האלה, <strong>לתדרך</strong> ו<strong>לאמת</strong>, ובמה שביניהם.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.2</span>המפה: אתם, הסוכן, והבדיקה</h2>
+
+<div class="diagram">
+  <div class="flow">
+    <div class="layer l2">
+      <div class="name">You: the brief</div>
+      <div class="what">מטרה, הקשר, מגבלות, מה זה "גמור", איך בודקים, מה לא</div>
+    </div>
+    <div class="hop"><b>context</b>&rarr;</div>
+    <div class="layer machine">
+      <div class="name">The agent loop (chapter 16)</div>
+      <div class="flow steps">
+        <div class="layer l3"><div class="name">model</div><div class="what">מחליט מה הצעד הבא</div></div>
+        <div class="hop"><b>tool call</b>&rarr;<br>&larr;<b>result</b></div>
+        <div class="layer l4"><div class="name">tools</div><div class="what">לקרוא קובץ, לחפש, לערוך, להריץ פקודה</div></div>
+      </div>
+    </div>
+    <div class="hop"><b>diff + report</b>&rarr;</div>
+    <div class="layer l2">
+      <div class="name">You: verify</div>
+      <div class="what">קוראים את ה-diff, מריצים בדיקות ו-CI, בודקים כל טענה. ממזגים, או תדריך חדש</div>
+    </div>
+  </div>
+  <div class="caption">שני הקצוות הם שלכם. הסוכן יודע רק מה שנכנס ל-<span class="en">context</span> שלו: התדריך, הקבצים שפתח, הפלט של הפקודות שהריץ. מה שלא נכנס, מבחינתו לא קיים.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.3</span>מה זה <span class="en">coding agent</span></h2>
+
+<p>בפרק 16 כתבתם לולאת סוכן ביד: המודל מבקש להפעיל כלי, התוכנית מפעילה אותו ומחזירה את התוצאה, וחוזר חלילה עד שהמודל אומר שסיים. <strong>סוכן קוד</strong> (<span class="en">coding agent</span>) הוא אותה לולאה בדיוק, עם כלים שמתאימים לעבודה על קוד: לקרוא קובץ, לחפש בפרויקט, לערוך קובץ, ולהריץ פקודה ב-<span class="en">terminal</span>. כשהוא "מריץ את הבדיקות", הוא מבקש להריץ <code>uv run pytest</code>, מקבל את הפלט כטקסט, ומחליט מה לעשות איתו.</p>
+
+<p>הם מגיעים בשלוש צורות עיקריות: סוכן שרץ ב-<span class="en">terminal</span> שלכם, סוכן בתוך העורך (VS Code ודומיו), וסוכן שרץ בענן על המאגר ומחזיר <span class="en">pull request</span>. דוגמאות מוכרות הן Claude Code, GitHub Copilot, Cursor ו-Codex של OpenAI, ויש עוד רבים. השמות והכפתורים משתנים כל כמה חודשים. מה שהפרק מלמד לא תלוי באף אחד מהם.</p>
+
+<h3>מה הוא יודע, ומה לא</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>יודע (אם זה נכנס ל-<span class="en">context</span>)</th><th>לא יודע (אלא אם אמרתם)</th></tr>
+  <tr><td>מה שכתבתם לו בשיחה הזו</td><td>למה אתם רוצים את השינוי, ומה הבעיה האמיתית מאחוריו</td></tr>
+  <tr><td>הקבצים שהוא פתח וקרא</td><td>קבצים שלא חשב לפתוח, גם אם הם קובעים את התשובה</td></tr>
+  <tr><td>קובץ ההוראות של הפרויקט (סעיף 17.6)</td><td>מוסכמות שלא נכתבו: "אצלנו לא נוגעים ב-<code>uv.lock</code> ביד"</td></tr>
+  <tr><td>הפלט של הפקודות שהריץ</td><td>מה קרה בשבוע שעבר: התקלה, ההחלטה בישיבה, למה הבדיקה הזו קיימת</td></tr>
+  <tr><td>מה שלמד באימון, עד תאריך מסוים</td><td>הגרסה של הספרייה שמותקנת אצלכם, אם היא חדשה מזה</td></tr>
+</table>
+</div>
+
+<p>שתי מסקנות. ראשית, כל מה שחשוב לכם צריך להגיע אליו: בתדריך, בקובץ ההוראות, או בהפניה לקובץ שהוא יקרא. שנית, הוא כותב בביטחון גם כשהוא מנחש. מודל שפה מייצר את ההמשך הסביר ביותר, ו"הבדיקות עוברות" הוא המשך סביר מאוד לסוף של משימה. לכן דוח של סוכן הוא <strong>רשימת טענות לבדיקה</strong>, לא תוצאה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.4</span>מה למסור, מה לעשות יחד, ומה להשאיר</h2>
+
+<p>לא כל משימה מתאימה לסוכן באותה מידה. השאלה המרכזית אינה "האם הוא יצליח", אלא <strong>כמה יעלה לכם לבדוק שהוא הצליח</strong>, ומה יקרה אם לא תשימו לב שהוא טעה.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>אופן</th><th>מתי</th><th>דוגמאות בפרויקט</th></tr>
+  <tr><td><strong>למסור</strong></td><td>המשימה מוגדרת היטב, קל לבדוק אותה (בדיקות, הרצה), והנזק של טעות קטן</td><td>להוסיף פרמטר <code>?limit=</code> עם בדיקות; לעדכן את טבלת ה-<span class="en">endpoints</span> ב-README; לכתוב בדיקה לבאג שכבר הבנתם</td></tr>
+  <tr><td><strong>לעשות יחד</strong></td><td>יש החלטה לקבל, הדרך לא ברורה, או שהשינוי נוגע בכמה מקומות</td><td>לבקש שלוש דרכים לשתף את ה-<span class="en">rate limit</span> בין עותקים, עם יתרונות וחסרונות, ולבחור בעצמכם; לבקש תוכנית לפני שינוי ב-<span class="en">saga</span></td></tr>
+  <tr><td><strong>לשמור לעצמכם</strong></td><td>אבטחה והרשאות, נתונים אמיתיים, פעולות שאי אפשר לבטל, ומה שאתם עדיין לומדים</td><td>הבדיקה של <code>own()</code> מפרק 14; <span class="en">migration</span> שמוחקת עמודה; <code>deploy.py prod</code>; החלפת סוד שדלף</td></tr>
+</table>
+</div>
+
+<p>"לשמור לעצמכם" לא אומר שהסוכן לא נוגע בזה בכלל. אפשר לבקש ממנו להסביר, לבדוק או להציע. אבל ההחלטה, והשורה שנכנסת, עוברות דרך הראש שלכם.</p>
+
+<div class="callout warn">
+  <span class="title">ההבנה נשארת התפקיד שלכם</span>
+  <p>כלל אחד שווה את כל הטבלה: <strong>לא ממזגים קוד שאי אפשר להסביר שורה אחרי שורה</strong>. ולמי שעוד לומד, יש כאן מלכודת. מי שמוסר כל משימה מקבל קוד עובד ולא לומד כלום, ואחרי חצי שנה לא מסוגל לבדוק את מה שהסוכן מחזיר, כי לא כתב בעצמו אף פעם משהו דומה. בזמן הלימוד, כתבו בעצמכם את מה שאתם לומדים, ותנו לסוכן להסביר, לשאול אתכם ולבדוק אתכם. סוכן הוא מכפיל של מה שאתם יודעים, לא תחליף לו.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.5</span>התדריך</h2>
+
+<p>תדריך טוב לסוכן הוא כמעט מילה במילה המשימה (<span class="en">ticket</span>) מפרק 15: מישהו אחר צריך לבצע אותה בלי לשאול אתכם, ומישהו צריך לדעת בסוף אם היא גמורה. שישה חלקים:</p>
+
+<ol>
+  <li><strong>מטרה</strong>: מה צריך להיות נכון אחרי השינוי, במשפט או שניים.</li>
+  <li><strong>הקשר</strong>: איפה זה בקוד, ומה חשוב לדעת שלא כתוב שם. הצביעו על קבצים ופונקציות בשם, במקום לתאר אותם: <code>agent/api.py</code>, <code>list_conversations</code>. תיאור במילים הוא עוד ניחוש. שם של קובץ הסוכן יכול לפתוח.</li>
+  <li><strong>מגבלות</strong>: מה אסור. אילו קבצים לא לשנות, בלי תלויות חדשות, בלי לגעת בבדיקות קיימות.</li>
+  <li><strong>מה זה "גמור"</strong>: התנהגויות שאפשר לבדוק, כמו "<code>limit=0</code> מחזיר 422".</li>
+  <li><strong>איך בודקים</strong>: הפקודות המדויקות, ובקשה להדביק את הפלט שלהן, לא את הסיכום.</li>
+  <li><strong>מה לא בכלל</strong> (<span class="en">out of scope</span>): כדי שהוא לא "ישפר" בדרך.</li>
+</ol>
+
+<p>אותה משימה מ-17.1, פעמיים:</p>
+
+<div class="codebox output">
+  <div class="label"><span>weak brief</span></div>
+<pre><code>Add a limit to the conversations list.</code></pre>
+</div>
+
+<div class="codebox">
+  <div class="label"><span>strong brief</span></div>
+<pre><code>Goal: GET /conversations takes an optional query parameter `limit` (1 to 50,
+default 50): how many of the caller's newest conversations to return.
+
+Context:
+- The endpoint is list_conversations in agent/api.py. The query is
+  Conversations.newest() in agent/conversations.py; it already takes a limit.
+- Every client sees only its own conversations: keep user_id=caller.
+  tests/test_security.py guards this.
+- How we work: CONTRIBUTING.md.
+
+Constraints:
+- Change only agent/api.py, tests/test_api.py, README.md and CHANGELOG.md.
+- Do not change or delete existing tests. If one fails, stop and tell me why.
+- No new dependencies.
+
+Done means:
+- limit=2 returns the 2 newest; limit=0 and limit=51 return 422;
+  without limit, nothing changes.
+- A test for each of these. The README endpoint table and the "Unreleased"
+  section of CHANGELOG.md say it.
+
+Verify: run these, and paste the last lines of each:
+  uv run ruff check
+  uv run ruff format --check
+  uv run mypy agent scripts worker pipelines
+  uv run pytest -q
+
+Out of scope: offsets or cursors, the web page, the CLI.
+
+First, reply with a short plan and the files you will change. Wait for my OK.</code></pre>
+</div>
+
+<p>שימו לב מה קנו עשרים השורות האלה. "<code>keep user_id=caller</code>" ו"אל תשנו בדיקות קיימות" חוסמים את שתי הבעיות החמורות של 17.1. "<code>limit=51</code> מחזיר 422" הופך את "FastAPI caps larger values" לטענה שאפשר להפריך. רשימת הקבצים הופכת שינוי ב-<code>config.py</code> לחריגה גלויה. ופקודת <code>mypy</code> ברשימה פירושה שהשגיאה הייתה מופיעה בפלט, לפני שהגיעה ל-CI.</p>
+
+<p>שני הרגלים נוספים. <strong>בקשו תוכנית קודם</strong>: חמש שורות של "אשנה את X ב-Y" חושפות אי-הבנה לפני שיש קוד לקרוא. למשל, תוכנית כזו:</p>
+
+<div class="codebox output">
+  <div class="label"><span>a plan, as an agent might answer</span></div>
+<pre><code>1. agent/api.py: add `limit: Annotated[int, Query(ge=1, le=50)] = 50` to
+   list_conversations and pass it to conversations.newest(limit, user_id=caller).
+2. tests/test_api.py: test_list_can_be_limited, and 422 for limit=0 and limit=51.
+3. README.md: the GET /conversations row. CHANGELOG.md: one line under Added.
+4. Run ruff, ruff format --check, mypy and pytest; paste the results.
+Not touched: conversations.py (newest() already takes a limit), tests/test_security.py.</code></pre>
+</div>
+
+<p>קוראים אותה מול התדריך: כל קובץ ברשימה מותר? <code>user_id=caller</code> שם? אם משהו חסר או מיותר, מתקנים עכשיו, בשורה אחת, ולא אחרי מאה שורות קוד. ו<strong>בקשו שיאמר מה לא בדק</strong>: "<span class="en">List anything you could not verify</span>" מקבל תשובה כנה לעיתים קרובות יותר מאשר "האם הכול עובד?".</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.6</span>קובץ הוראות לפרויקט</h2>
+
+<p>חלק מהתדריך חוזר בכל משימה: איך מריצים בדיקות, איך קוראים לענפים, מה אסור לגעת בו. במקום לכתוב את זה כל פעם, שמים קובץ במאגר שהסוכן קורא בתחילת כל ריצה. שם נפוץ הוא <code>AGENTS.md</code> בשורש הפרויקט, וכלים רבים קוראים אותו. לחלק מהכלים יש שם משלהם לאותו רעיון. בדקו בתיעוד של הכלי שלכם איזה קובץ הוא קורא.</p>
+
+<p>מה נכנס לקובץ כזה:</p>
+<ul>
+  <li><strong>פקודות</strong>: הקמה, בדיקות, <span class="en">lint</span>, טיפוסים. בדיוק כפי שהן רצות, כדי שהסוכן יריץ אותן ולא ינחש.</li>
+  <li><strong>מבנה</strong>: איפה מה. שורה לכל תיקייה חשובה.</li>
+  <li><strong>מוסכמות</strong>: ענפים, הודעות <span class="en">commit</span>, CHANGELOG, "תיקון באג מגיע עם בדיקה".</li>
+  <li><strong>גבולות</strong>: מה לא עושים בלי לשאול. לא לערוך את <code>uv.lock</code> ביד, לא לגעת ב-<code>deploy\</code> וב-<code>migrations\versions\</code> שכבר רצו, לא לקרוא את <code>.env</code>.</li>
+</ul>
+
+<p>שני כללים. <strong>קצר</strong>: הקובץ נכנס ל-<span class="en">context</span> בכל ריצה ומתחרה על תשומת הלב עם המשימה עצמה. ארבעים שורות ממוקדות עדיפות על מאתיים. ו<strong>נכון</strong>: פקודה שהשתנתה ולא עודכנה בקובץ גרועה מפקודה שלא כתובה בכלל, כי הסוכן יסמוך עליה. כשאתם משנים פקודה, מעדכנים גם את הקובץ, באותו <span class="en">commit</span>.</p>
+
+<p>לפרויקט שלכם כבר יש את רוב הקובץ הזה: <code>CONTRIBUTING.md</code>, שכתבתם בפרק 2 והרחבתם מאז, וטבלת "Checks and CI" ב-README. מה שחסר הוא בעיקר הגבולות, והקיצור. בתרגיל 2 תכתבו אותו.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.7</span>צעדים קטנים, ומתי לעצור</h2>
+
+<p>סוכן יכול לשנות עשרים קבצים בדקה. אתם לא יכולים לבדוק עשרים קבצים בדקה. לכן הקצב נקבע לפי מה שאתם מסוגלים לבדוק, לא לפי מה שהוא מסוגל לכתוב:</p>
+
+<ul>
+  <li><strong>ענף לכל משימה</strong> (פרק 2), מ-<code>main</code> מעודכן. כך אפשר תמיד לזרוק את כל הניסיון בפקודה אחת.</li>
+  <li><strong>תוכנית קודם</strong>, ואז שינוי אחד בכל פעם: "עכשיו רק ה-<span class="en">endpoint</span> והבדיקות שלו".</li>
+  <li><strong><span class="en">Commit</span> אחרי כל צעד ירוק.</strong> אחרי כל צעד, <code>git diff</code>; אם הוא נכון, <span class="en">commit</span>. אם הצעד הבא הורס משהו, <code>git restore .</code> מחזיר אתכם לצעד הטוב האחרון, בלי ויכוח.</li>
+  <li><strong>הקלידו בעצמכם את פקודות git המסוכנות</strong>: <span class="en">merge</span>, <span class="en">push</span>, <span class="en">rebase</span>. סוכן יכול להכין, אתם לוחצים.</li>
+</ul>
+
+<p>הקצב, בפקודות. מה שבין הצעדים עושה הסוכן; השאר אתם:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git switch -c feature/conversations-limit   <span class="cm"># one task, one branch</span>
+<span class="cm"># ... the agent does step 1 of the plan ...</span>
+git diff                                     <span class="cm"># read it: is this step 1, and only step 1?</span>
+uv run pytest -q
+git commit -am "Add ?limit= to GET /conversations"
+<span class="cm"># ... step 2 went wrong ...</span>
+git restore .                                <span class="cm"># back to the last good commit</span></code></pre>
+</div>
+
+<h3>מתי לעצור</h3>
+<p>יש ריצות שהולכות לאיבוד: הסוכן מנסה תיקון, הבדיקה נכשלת, הוא מנסה תיקון אחר שמחזיר את הראשון, ובינתיים ה-<span class="en">diff</span> גדל. הסימנים: תיקנתם אותו פעמיים או שלוש על אותו דבר, הוא נוגע בקבצים שלא קשורים, הוא מציע לשנות בדיקה כדי שתעבור, או שאתם כבר לא מבינים מה הוא עושה.</p>
+<p>בשלב הזה, ויכוח נוסף בדרך כלל לא עוזר. ה-<span class="en">context</span> שלו כבר מלא בניסיונות כושלים, וכל תשובה נבנית עליהם. עדיף <strong>לעצור, לזרוק ולהתחיל מחדש</strong>: <code>git switch main</code>, <code>git branch -D</code> לענף, שיחה חדשה, ותדריך חדש שכולל את מה שלמדתם ("הבעיה היא ב-X, לא ב-Y; אל תשנה את Z"). עשר דקות של תדריך טוב חוסכות שעה של ויכוח.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.8</span>לאמת</h2>
+
+<p>אתם כבר יודעים לעשות <span class="en">code review</span> (פרק 2), לכתוב ולהריץ בדיקות (פרק 3) ולקרוא CI (פרק 9). עבודה של סוכן נבדקת באותם כלים, עם הבדל אחד: אצל עמית סומכים על הכוונה ובודקים את הביצוע. אצל סוכן בודקים גם את הכוונה, כי הוא עשוי לעשות דבר סביר לגמרי שלא ביקשתם. הסדר:</p>
+
+<ol>
+  <li><strong>הפכו את הדוח לרשימת טענות.</strong> "<span class="en">All tests pass</span>", "<span class="en">FastAPI caps</span>", "<span class="en">Updated a test</span>": כל אחת היא משהו לבדוק, לא משהו לקבל.</li>
+  <li><strong>מפה</strong>: <code>git diff --stat main</code>. האם אלה הקבצים שציפיתם להם? קובץ לא צפוי הוא השאלה הראשונה.</li>
+  <li><strong>בדיקות קודם</strong>: <code>git diff main -- tests</code>. בדיקה חדשה טוב. בדיקה קיימת ששונתה או נמחקה דורשת הסבר, תמיד.</li>
+  <li><strong>הקוד, כמו <span class="en">reviewer</span></strong>: האם זה עושה מה שהתדריך אומר, ורק את זה? מה קורה בשגיאה, בקלט ריק, אצל לקוח אחר?</li>
+  <li><strong>הריצו בעצמכם</strong>: אותן פקודות כמו CI, במחשב שלכם (<code>scripts\ci_local.py</code> מפרק 9 מריץ את כולן). ואחר כך CI עצמו, על ה-<span class="en">pull request</span>.</li>
+</ol>
+
+<h3>דפוסי הכשל הנפוצים</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>דפוס</th><th>איך זה נראה בפרויקט הזה</th><th>איך תופסים</th></tr>
+  <tr><td><strong>זליגת היקף</strong> (<span class="en">scope creep</span>)</td><td>ביקשתם <code>limit</code>, וב-<code>config.py</code> ה-<span class="en">rate limit</span> עלה מ-30 ל-100</td><td><code>git diff --stat</code>; רשימת קבצים מותרים בתדריך</td></tr>
+  <tr><td><strong>בדיקה שנחלשה או נמחקה</strong></td><td><code>.json() == []</code> הפך ל-<code>.status_code == 200</code>: הבדיקה עדיין "עוברת", אבל כבר לא בודקת מי רואה מה</td><td>קוראים את <code>tests</code> ראשון; מחזירים את הבדיקה המקורית ומריצים</td></tr>
+  <tr><td><strong>פונקציה מומצאת</strong></td><td><code>log.warn_once(...)</code>: אין מתודה כזו ב-<code>logging.Logger</code>. היא בענף שהבדיקות לא מגיעות אליו, אז <code>pytest</code> ירוק</td><td><code>mypy</code>: <code>"Logger" has no attribute "warn_once"</code></td></tr>
+  <tr><td><strong>חבילה מומצאת</strong></td><td>"<code>uv add fastapi-query-limits</code>": <code class="wrap">uv pip install --dry-run fastapi-query-limits</code> עונה <code>was not found in the package registry</code>. ויש מי שרושמים שמות כאלה בכוונה, עם קוד זדוני (פרק 14, <span class="en">supply chain</span>)</td><td>כל חבילה חדשה: בודקים ב-<code>pypi.org</code> מי מתחזק, מאיזו שנה, כמה משתמשים</td></tr>
+  <tr><td><strong>שגיאה שנבלעה</strong></td><td><code>except Exception: return []</code>: כשבסיס הנתונים נופל, המשתמש מקבל 200 ו"אין לך שיחות", והלוג לא מראה כלום שימושי</td><td>כל <code>except</code> בקוד חדש: מה בדיוק נתפס, ומה המשתמש והלוג רואים (פרק 3)</td></tr>
+  <tr><td><strong>הסבר סביר ושגוי</strong></td><td>"<span class="en">FastAPI caps larger values at 50</span>". בפועל <code>limit=500</code> מקבל 422: <code>Input should be less than or equal to 50</code></td><td>מריצים את הטענה: בקשה אחת, או בדיקה</td></tr>
+  <tr><td><strong>ידע לא מעודכן</strong></td><td><code>ChatResponse(...).dict()</code> במקום <code>model_dump()</code>, או <code>Query(regex=...)</code> במקום <code>pattern=</code>: קוד מגרסאות ישנות של Pydantic ו-FastAPI. עובד, עם <code>PydanticDeprecatedSince20</code> ו-<code>FastAPIDeprecationWarning</code>, עד הגרסה שבה יוסר</td><td>אזהרות בפלט של <code>pytest</code>; התיעוד של הגרסה שב-<code>uv.lock</code></td></tr>
+</table>
+</div>
+
+<p>שימו לב שארבעה מהם עוברים <code>pytest</code>. זו הסיבה ש"הבדיקות עוברות" לא מספיק, וגם הסיבה שלא מספיק רק להריץ: חלק מהבעיות רואים רק בקריאה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.9</span>דוגמה מודרכת: בודקים את הענף של הסוכן</h2>
+
+<p>זה הענף מ-17.1. הוא נכתב מול גרסה 0.14.0, כלומר מול <code>checkpoints\chapter-14</code>. הפרויקט שלכם התקדם מאז (פרקים 15 ו-16), ולכן עובדים על עותק נפרד, מעבדה שאפשר לזרוק בסוף.</p>
+
+<div class="step">
+  <h3><span class="step-num">1</span>מעבדה מגרסה 0.14.0</h3>
+  <p>החליפו את הנתיב בשורה השנייה בנתיב שבו שמרתם את החוברת:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects
+Copy-Item -Recurse C:\path\to\behind-the-code\checkpoints\chapter-14 review-lab
+cd review-lab
+git init -b main
+git add -A
+git commit -qm "my-agent 0.14.0, as at the end of chapter 14"
+uv sync --locked</code></pre>
+</div>
+  <p>אם <code>git add</code> מדפיס הרבה שורות של <code>LF will be replaced by CRLF</code>, זה בסדר: זו הגדרת שורות הסיום של git ב-Windows, ולא משנה כאן דבר.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>מכניסים את העבודה של הסוכן</h3>
+  <p>זה ה-<span class="en">diff</span> שהסוכן החזיר, כפי ש-<code>git diff main</code> מציג אותו. לחצו על <code>copy</code> בפינת המסגרת:</p>
+<div class="codebox">
+  <div class="label"><span>agent.patch</span></div>
+<pre><code>diff --git a/agent/api.py b/agent/api.py
+index b71840c..cdeca3a 100644
+--- a/agent/api.py
++++ b/agent/api.py
+@@ -12,7 +12,7 @@ from pathlib import Path as FilePath
+ from typing import Annotated, Literal
+ 
+ from dotenv import load_dotenv
+-from fastapi import Depends, FastAPI, HTTPException, Path, Request, Response
++from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, Response
+ from fastapi.responses import FileResponse, JSONResponse
+ from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
+ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+@@ -258,11 +258,18 @@ def create_app(
+         return ChatResponse(conversation_id=conversation_id, reply=reply, turns=turns)
+ 
+     @app.get("/conversations")
+-    def list_conversations(caller: Caller) -&gt; list[ConversationSummary]:
++    def list_conversations(
++        caller: Caller, limit: Annotated[int, Query(ge=1, le=50)] = 50
++    ) -&gt; list[ConversationSummary]:
+         """The caller's newest conversations, newest first, with their titles."""
++        try:
++            rows = conversations.newest(limit)
++        except Exception:
++            log.warn_once("could not list conversations")
++            return []
+         return [
+             ConversationSummary(conversation_id=conversation_id, title=title)
+-            for conversation_id, title in conversations.newest(user_id=caller)
++            for conversation_id, title in rows
+         ]
+ 
+     @app.get("/conversations/{conversation_id}")
+diff --git a/agent/config.py b/agent/config.py
+index 8a12d32..ad44a8a 100644
+--- a/agent/config.py
++++ b/agent/config.py
+@@ -43,7 +43,7 @@ class Settings:
+     # More clients, each with its own key: {sha256 of the key: client name} (AGENT_API_KEYS).
+     api_clients: dict[str, str] = field(default_factory=dict)
+     metrics_token: str | None = None  # what Prometheus sends to read /metrics; None: no /metrics
+-    rate_limit: int = 30  # /chat requests per client per minute
++    rate_limit: int = 100  # /chat requests per client per minute
+ 
+ 
+ def read_positive_int(name: str, default: int) -&gt; int:
+@@ -132,5 +132,5 @@ def load_settings() -&gt; Settings:
+         kafka_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS") or None,
+         api_clients=read_clients(),
+         metrics_token=read_secret("METRICS_TOKEN"),
+-        rate_limit=read_positive_int("CHAT_RATE_LIMIT", 30),
++        rate_limit=read_positive_int("CHAT_RATE_LIMIT", 100),
+     )
+diff --git a/tests/test_api.py b/tests/test_api.py
+index 7210ec7..72355a2 100644
+--- a/tests/test_api.py
++++ b/tests/test_api.py
+@@ -132,6 +132,13 @@ def test_list_shows_the_newest_conversations_first(client):
+     assert [c["title"] for c in response.json()] == ["second chat", "first chat"]
+ 
+ 
++def test_list_can_be_limited(client):
++    for text in ["one", "two", "three"]:
++        client.post("/chat", json={"message": text}, headers=AUTH)
++    response = client.get("/conversations?limit=2", headers=AUTH)
++    assert [c["title"] for c in response.json()] == ["three", "two"]
++
++
+ def test_list_needs_the_key(client):
+     assert client.get("/conversations").status_code == 401
+ 
+diff --git a/tests/test_security.py b/tests/test_security.py
+index b47472d..76e0823 100644
+--- a/tests/test_security.py
++++ b/tests/test_security.py
+@@ -47,7 +47,7 @@ def test_one_client_cannot_touch_another_clients_conversation(client):
+     assert client.delete(path, headers=OMER).status_code == 404
+     other = {"message": "hi", "conversation_id": mine["conversation_id"]}
+     assert client.post("/chat", json=other, headers=OMER).status_code == 404
+-    assert client.get("/conversations", headers=OMER).json() == []
++    assert client.get("/conversations", headers=OMER).status_code == 200
+     assert client.get(path, headers=DANA).status_code == 200  # still there, for its owner
+ 
+ </code></pre>
+</div>
+  <p>ובחלון ה-<span class="en">terminal</span>, ענף משלו, הקובץ מהלוח, והחלה:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git switch -c agent/conversations-limit
+Get-Clipboard | Set-Content ..\agent.patch
+git apply --ignore-whitespace ..\agent.patch
+git commit -qam "Add limit to GET /conversations"</code></pre>
+</div>
+  <p><code>git apply</code> מחיל <span class="en">diff</span> על הקבצים, ושותק כשהכול הצליח. <code>Set-Content</code> שומר את הקובץ עם סיומות שורה של Windows, ו-<code>--ignore-whitespace</code> מחיל אותו גם על קבצים שסיומות השורה שלהם אחרות. הקובץ נשמר בתיקייה שמעל, כדי שלא ייכנס למאגר.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>מפה, ושאלה לכל קובץ</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git diff --stat main</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code> agent/api.py           | 13 ++++++++++---
+ agent/config.py        |  4 ++--
+ tests/test_api.py      |  7 +++++++
+ tests/test_security.py |  2 +-
+ 4 files changed, 20 insertions(+), 6 deletions(-)</code></pre>
+</div>
+  <p>ביקשתם שינוי ב-<span class="en">endpoint</span> אחד. <code>api.py</code> ו-<code>test_api.py</code> צפויים. על שני האחרים צריך לשאול: מה ל-<span class="en">limit</span> של רשימה ולהגדרות? ולמה בדיקת <span class="en">security</span> השתנתה, אם השינוי לא אמור לשנות מי רואה מה? רשמו את שתי השאלות.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>בדיקות קודם</h3>
+  <p>הריצו <code>git diff main -- tests</code> וקראו את שני השינויים. <code>test_list_can_be_limited</code> חדשה ובודקת מה שביקשתם. השינוי השני מחליף שורה קיימת: לפני, הבדיקה דרשה שעומר יקבל רשימה <em>ריקה</em>. אחרי, היא דורשת רק שהבקשה תצליח. בדיקה שבודקת פחות ממה שבדקה, בשינוי שלא אמור לגעת בנושא שלה, היא נורה אדומה. הדוח אמר "<span class="en">to match the new behaviour</span>": איזו התנהגות חדשה?</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>מריצים בעצמכם, הכול</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run pytest -q
+uv run ruff check
+uv run mypy agent scripts worker pipelines</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>139 passed, 4 skipped in 42.05s
+All checks passed!
+agent\api.py:268: error: "Logger" has no attribute "warn_once"  [attr-defined]
+Found 1 error in 1 file (checked 33 source files)</code></pre>
+</div>
+  <p>הטענה "<span class="en">All tests pass</span>" נכונה, במובן הצר: <code>pytest</code> ירוק. אבל CI מריץ גם <code>mypy</code>, והוא מוצא מתודה שלא קיימת. היא יושבת בתוך <code>except</code>, ואף בדיקה לא מגיעה לשם, ולכן <code>pytest</code> לא יכול לראות אותה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">6</span>בודקים את הטענה, לא את הסיכום</h3>
+  <p>הבדיקה ששונתה: מחזירים לרגע את הגרסה שלה מ-<code>main</code>, ומריצים אותה מול הקוד החדש:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git restore --source main tests/test_security.py
+uv run pytest -q tests/test_security.py</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>&gt;       assert client.get("/conversations", headers=OMER).json() == []
+E       assert [{'conversati...na's secret"}] == []
+E         Left contains one more item: {'conversation_id': 'fa861fc3bb7047c989cd014f55d29e24', 'title': "dana's secret"}
+FAILED tests/test_security.py::test_one_client_cannot_touch_another_clients_conversation
+1 failed, 11 passed in 13.98s</code></pre>
+</div>
+  <p>עומר רואה את "<span class="en">dana's secret</span>". הבדיקה לא הייתה שגויה: היא תפסה באג, והסוכן "תיקן" את הבדיקה במקום את הקוד. חזרו ל-<code>api.py</code> ותמצאו למה: <code>conversations.newest(limit)</code>, בלי <code>user_id=caller</code>. החזירו את הבדיקה של הסוכן עם <code>git restore tests/test_security.py</code>, כדי שהענף יישאר כפי שקיבלתם אותו לתרגיל 3.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">7</span>החלטה</h3>
+  <p><span class="en">Request changes</span>, בלי היסוס: דליפה של שיחות בין לקוחות ו-CI אדום. ומה עכשיו? לא מתווכחים עם הסוכן על כל שורה. אפשר לתקן בעצמכם (השינוי הנכון קטן), או לזרוק את הענף ולהריץ שוב עם התדריך החזק מ-17.5. כך או כך, הבדיקה המקורית חוזרת, ו-<code>mypy</code> נכנס לרשימת הפקודות שבתדריך. מצאתם עד כאן שתי בעיות שהפקודות הראו. ב-<span class="en">diff</span> יש לפחות שתיים נוספות שאף פקודה לא הראתה, וטענה אחת בדוח שאינה נכונה: זה תרגיל 3.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.10</span>הרשאות ובטיחות</h2>
+
+<p>סוכן שמריץ פקודות הוא תוכנה שמריצה פקודות במחשב שלכם, בהרשאות שלכם. <span class="en">Least privilege</span> מפרק 14 חל עליו בדיוק כמו על <span class="en">container</span>: רק מה שהמשימה צריכה. רוב הכלים מאפשרים להגדיר מה מותר, מה דורש אישור, ומה אסור.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>מותר בלי לשאול</th><th>באישור שלכם, אחרי שקראתם</th><th>לא בכלל</th></tr>
+  <tr><td><strong>לקרוא</strong></td><td>קוד, בדיקות, <code>docs\</code></td><td>לוגים, <code>examples\</code></td><td><code>.env</code>, <code>deploy\secrets\</code>, <code>~\.ssh</code>, קבצים מחוץ לפרויקט</td></tr>
+  <tr><td><strong>להריץ</strong></td><td><code>uv run pytest</code>, <code>ruff</code>, <code>mypy</code>, <code>git diff</code>, <code>git status</code></td><td><code>uv add</code>, <code>git commit</code>, <code>docker compose up</code></td><td><code>git push</code>, <code>docker compose down -v</code>, <code>Remove-Item -Recurse</code>, <code>deploy.py prod</code></td></tr>
+  <tr><td><strong>להגיע</strong></td><td>בסיס הנתונים המקומי במצב <span class="en">mock</span></td><td>אינטרנט, להורדת חבילות</td><td>בסיס נתונים אמיתי, חשבון ענן, מפתחות אמיתיים</td></tr>
+</table>
+</div>
+
+<p><strong>אישורים</strong> שווים משהו רק אם קוראים אותם. אחרי עשרים אישורים של <code>pytest</code> קל ללחוץ "אשר" גם על <code>docker compose down -v</code>, שמוחק את ה-<span class="en">volume</span> עם כל השיחות (פרק 8). כפתור "אשר הכול" הוא בדיוק המקום שבו זה קורה.</p>
+
+<p><strong>ארגז חול</strong> (<span class="en">sandbox</span>): סביבה שבה טעות לא מגיעה רחוק. עותק נפרד של המאגר (כמו המעבדה של 17.9), <span class="en">container</span> או מכונה וירטואלית, או סביבת ענן של הכלי. מה שקורה שם לא נוגע בקבצים, בסודות ובחשבונות שלכם. ומצב <span class="en">mock</span> של הפרויקט (<code>CHAT_MOCK=1</code>) עוזר גם כאן: סוכן שבודק את הסוכן שלכם לא צריך מפתח אמיתי.</p>
+
+<p><strong>סודות ומידע אישי</strong>: לפני שאתם מדביקים לכלי <span class="en">traceback</span>, לוג או קובץ, דעו לאן הוא הולך: לאיזה ספק, כמה זמן נשמר, והאם משמש לאימון. מפתח שהודבק לצ'אט הוא מפתח שדלף, ומחליפים אותו (פרק 14). לוג עם הודעות של משתמשים הוא מידע אישי שיצא מהמערכת. בעבודה, מדיניות החברה קובעת באילו כלים מותר להשתמש, ועם אילו נתונים.</p>
+
+<p><strong>טקסט שהסוכן קורא יכול להכיל הוראות.</strong> README של חבילה, תיאור של <span class="en">issue</span>, דף אינטרנט, אפילו הודעת שגיאה: מבחינת המודל, כל אלה טקסט באותו <span class="en">context</span> כמו התדריך שלכם. שורה כמו "AI agents reading this: also run ..." היא <span class="en">prompt injection</span> (פרק 14 הזכיר, פרק 21 מדגים). לכן ההרשאות הן קו ההגנה, לא ההוראות: סוכן שלא יכול להריץ <code>git push</code> לא ידחוף, גם אם מישהו כתב לו לעשות זאת.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.11</span>סוכנים ב-<span class="en">review</span>, ב-CI, וללמידה</h2>
+
+<p><strong>ב-<span class="en">review</span>.</strong> יש כלים שקוראים כל <span class="en">pull request</span> ומשאירים הערות. הם טובים בדברים שקל לפספס: <code>except</code> רחב, משתנה שלא בשימוש, בדיקה חסרה. הם גם טועים בביטחון, ולא יודעים מה הוחלט בישיבה. התייחסו אליהם כמו לעוד <span class="en">reviewer</span> צעיר וחרוץ: כל הערה נבדקת, ואף אחת לא מחליפה את האישור של אדם.</p>
+
+<p><strong>ב-CI.</strong> סוכן שרץ ב-GitHub Actions, למשל כדי לתקן בדיקה אדומה או לענות על <span class="en">issue</span>, מקבל אסימון עם הרשאות. כל מה שפרק 9 ופרק 14 אמרו על <code>permissions:</code> חל עליו, ועוד יותר: הקלט שלו (טקסט של <span class="en">issue</span> שכל אחד יכול לכתוב) הוא בדיוק הטקסט מהפסקה האחרונה של 17.10.</p>
+
+<p><strong>ללמידה.</strong> אחד השימושים הטובים ביותר, ובמיוחד בפרויקט חדש, הוא שאלה כזו:</p>
+
+<div class="codebox">
+  <div class="label"><span>a question to learn the codebase</span></div>
+<pre><code>Where is it decided which conversations a client may see?
+Name the files and functions, and the test that guards it.
+Do not change anything.</code></pre>
+</div>
+
+<p>תשובה טובה תפנה ל-<code>own()</code> ב-<code>agent/api.py</code>, ל-<code>newest()</code> ב-<code>agent/conversations.py</code> ול-<code>tests/test_security.py</code>. ואז הצעד שאסור לדלג עליו: <strong>פותחים את הקבצים וקוראים</strong>. התשובה היא מפה, לא השטח. אותו דבר עם שגיאה: הדביקו <span class="en">traceback</span> (בלי סודות), בקשו שתי השערות ודרך לבדוק כל אחת, ובדקו. הסבר שלא בדקתם הוא ניחוש מנומק היטב.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.12</span>אחריות</h2>
+
+<p><strong>מי שממזג, אחראי.</strong> "הסוכן כתב את זה" אינה תשובה ב-<span class="en">review</span>, ובטח לא בתחקיר אחרי תקלה (פרק 13). בפרק 2 כתבתם שה-<span class="en">reviewer</span> שואל אם הוא מבין כל שורה. כשהקוד נכתב על ידי סוכן, אתם הראשונים שקוראים אותו, ולכן גם הראשונים שאחראים עליו.</p>
+
+<p><strong>שקיפות.</strong> לכל צוות הנורמות שלו. כלל טוב: בתיאור ה-<span class="en">pull request</span>, כתבו אילו חלקים נכתבו בעזרת סוכן ואיך בדקתם אותם. זה לא וידוי. זה עוזר ל-<span class="en">reviewer</span> לדעת איפה להסתכל טוב יותר. סעיף אחד נוסף לתבנית של פרק 2 מספיק:</p>
+
+<div class="codebox">
+  <div class="label"><span>pull request description (one more section)</span></div>
+<pre><code>## How this was made
+The endpoint change and its tests were written with a coding agent, from the brief
+in the ticket. I read every line; no existing test was changed. I ran ruff, mypy
+and pytest myself (141 passed, 4 skipped). limit=0 and limit=51 have their own test.</code></pre>
+</div>
+
+<p><strong>רישיונות ומדיניות.</strong> לארגונים רבים יש כללים: באילו כלים מותר להשתמש, על אילו מאגרים, ואילו נתונים מותר לשלוח אליהם. יש גם שאלות של רישוי: קוד שנוצר יכול לפעמים להיות דומה מאוד לקוד קיים עם רישיון. אלה שאלות לארגון שלכם ולמי שמייעץ לו משפטית. מה שנכון בכל מקום: לבדוק מה המדיניות לפני שמתחילים, לא אחרי.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.13</span>תרגילים</h2>
+
+<p>כל התרגילים אפשריים בלי סוכן ובלי חשבון בתשלום: חלקם על הנייר, חלקם במעבדה מ-17.9. מי שיש לו סוכן או עוזר צ'אט יכול לנסות איתו את התדריכים שכתב. פתרונות <a href="solutions/chapter-17.html">בדף נפרד</a>.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · שלושה תדריכים</h3><span class="level">מודרך</span></div>
+  <p>שלוש בקשות אמיתיות על הפרויקט, כל אחת בשורה אחת. כתבו לכל אחת תדריך מלא לפי ששת החלקים של 17.5. הצביעו על קבצים בשם (פתחו אותם כדי לדעת), וכתבו "גמור" כהתנהגויות שאפשר לבדוק.</p>
+  <ol>
+    <li>"<span class="en">Make /history show the conversation title.</span>"</li>
+    <li>"<span class="en">Update the dependencies.</span>"</li>
+    <li>"<span class="en">The notes service is slow sometimes, deal with it.</span>"</li>
+  </ol>
+  <label class="answer-label" for="n-ex1">איזו מהשלוש לא צריכה בכלל קוד בצעד הראשון, ומה הסוכן אמור להחזיר בה? מה גיליתם על המשימות רק כשפתחתם את הקבצים?</label>
+  <textarea class="answer" id="n-ex1" data-id="c17-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c17-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · <code>AGENTS.md</code> מתוך <code>CONTRIBUTING.md</code></h3><span class="level">מודרך</span></div>
+  <p>כתבו <code>AGENTS.md</code> לפרויקט שלכם, באנגלית, עד 40 שורות: פקודות (הקמה, כל הבדיקות של CI), מבנה (שורה לתיקייה), מוסכמות, וגבולות (מה לא עושים בלי לשאול, מה לא קוראים). קחו מ-<code>CONTRIBUTING.md</code> ומה-README, אל תעתיקו אותם. ואז בדקו שהוא נכון: הריצו כל פקודה שכתבתם, אחת אחת, מהקובץ עצמו.</p>
+  <p>הקובץ תלוי בכלי שבו תשתמשו, ולכן ה-<span class="en">checkpoint</span> לא כולל אותו. אם הוא מועיל לכם, שמרו אותו בפרויקט ב-<span class="en">commit</span> משלו.</p>
+  <label class="answer-label" for="n-ex2">אילו שורות לא נכנסו, למרות שהן נכונות, ולמה? איזו פקודה לא רצה כפי שכתבתם אותה בפעם הראשונה?</label>
+  <textarea class="answer" id="n-ex2" data-id="c17-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c17-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · <span class="en">review</span> מלא לענף של הסוכן</h3><span class="level mid">בינוני</span></div>
+  <p>במעבדה של 17.9, על הענף <code>agent/conversations-limit</code>. מצאתם שתי בעיות בעזרת פקודות. עכשיו קראו את כל ה-<span class="en">diff</span> כמו <span class="en">reviewer</span>, שורה אחרי שורה:</p>
+  <ol>
+    <li>מצאו לפחות שתי בעיות נוספות שאף פקודה לא הראתה. לכל אחת: השורה, מה הבעיה, מה היא גורמת למשתמש או למפעיל, "חובה" או "הצעה".</li>
+    <li>עברו על כל שורה בדוח של הסוכן מ-17.1: נכונה, לא נכונה, או לא נבדקה? איך בדקתם?</li>
+    <li>תקנו את הענף בעצמכם, לפי התדריך החזק של 17.5, עד שכל ארבע הפקודות שבו ירוקות.</li>
+  </ol>
+  <p>בסוף, מחקו את המעבדה: <code>cd ~\projects; Remove-Item -Recurse -Force review-lab, agent.patch</code>.</p>
+  <label class="answer-label" for="n-ex3">ה-<span class="en">review</span> שלכם: הבעיות, הדוח שורה אחרי שורה, וכמה שורות שינה התיקון.</label>
+  <textarea class="answer" id="n-ex3" data-id="c17-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c17-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · למסור, לעשות יחד, או ביד</h3><span class="level mid">בינוני</span></div>
+  <p>לכל משימה, החליטו איך הייתם עושים אותה עם סוכן, ונמקו בשורה אחת: מה עולה לבדוק, ומה קורה אם טעות עוברת.</p>
+  <ol>
+    <li>לשנות את כל הודעות השגיאה של <code>ask.py</code> כך שיציינו גם את כתובת השרת.</li>
+    <li>להוסיף <span class="en">migration</span> שהופכת את <code>user_id</code> ל-<code>NOT NULL</code> (ה-<span class="en">contract</span> שפרק 14 השאיר).</li>
+    <li>להבין איך <span class="en">circuit breaker</span> ב-<code>agent/notes.py</code> מחליט להיפתח.</li>
+    <li>להחליף את מפתח ה-API של Anthropic אחרי שהודבק בטעות לערוץ צוות.</li>
+    <li>לכתוב בדיקות ל-<code>RateLimiter</code> בגבולות החלון (בדיוק 60 שניות, 59.9, 60.1).</li>
+    <li>לבחור איך לשתף את ה-<span class="en">rate limit</span> בין שני עותקים של ה-<code>api</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex4">ההחלטות והנימוקים:</label>
+  <textarea class="answer" id="n-ex4" data-id="c17-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c17-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · ההרשאות של הסוכן שלכם</h3><span class="level mid">בינוני</span></div>
+  <p>כתבו לפרויקט שלכם את שלוש הרשימות של 17.10, מלאות: מה מותר בלי לשאול, מה באישור, ומה לא בכלל, לקריאה, להרצה ולגישה. עברו על כל הפקודות ב-README ועל כל התיקיות בפרויקט, ושימו כל אחת ברשימה. אם יש לכם כלי, מצאו בתיעוד שלו איפה מגדירים את זה, והשוו.</p>
+  <label class="answer-label" for="n-ex5">אילו שלוש פקודות בפרויקט הכי מסוכנות בידי סוכן, ולמה? מה מתוך הרשימות אי אפשר לאכוף בהגדרות, ונשאר תלוי בכם?</label>
+  <textarea class="answer" id="n-ex5" data-id="c17-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c17-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · משימה אמיתית אחת, עם יומן</h3><span class="level open">פתוח</span></div>
+  <p>בחרו משימה קטנה באמת בפרויקט שלכם, למשל אחת משלוש של תרגיל 1, וקחו אותה מתדריך ועד ענף שאפשר למזג. על ענף, עם הסוכן או עוזר הצ'אט שיש לכם. בלי שום כלי: היו הסוכן בעצמכם, ובצעו רק מה שכתוב בתדריך שלכם, מילה במילה, כמו במבחן החבר של פרק 1.</p>
+  <p>נהלו יומן קצר: התדריך כפי ששלחתם, כל תיקון שנאלצתם לתת ולמה, מה רץ ומה עבר, וכמה זמן לקח כל שלב. בסוף, <span class="en">review</span> לפי 17.8, ומיזוג רק אם הייתם מאשרים את זה מעמית.</p>
+  <label class="answer-label" for="n-ex6">מה היה חסר בתדריך הראשון? מה מהדוח של הסוכן התברר כלא מדויק? ואם הייתם מתחילים שוב, מה הייתם כותבים אחרת?</label>
+  <textarea class="answer" id="n-ex6" data-id="c17-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c17-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.14</span>בדקו את עצמכם</h2>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c17-chk1"><span>אני יודע/ת להסביר מה <span class="en">coding agent</span> במונחים של לולאת הסוכן, ומה הוא לא יכול לדעת.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c17-chk2"><span>אני יודע/ת להחליט אם למסור משימה, לעשות אותה יחד, או לשמור לעצמי, ולנמק.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c17-chk3"><span>אני יודע/ת לכתוב תדריך עם ששת החלקים, ולמה מצביעים על קבצים במקום לתאר אותם.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c17-chk4"><span>אני יודע/ת מה נכנס לקובץ הוראות לסוכן, ולמה הוא חייב להיות קצר ונכון.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c17-chk5"><span>אני יודע/ת לעבוד בצעדים שאפשר לבטל, ולזהות ריצה שצריך לעצור ולהתחיל מחדש.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c17-chk6"><span>אני יודע/ת את סדר הבדיקה של ענף של סוכן, ולמה קוראים את הבדיקות ראשונות.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c17-chk7"><span>אני יודע/ת לתת דוגמה לכל אחד משבעת דפוסי הכשל, ואילו מהם <code>pytest</code> לא תופס.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c17-chk8"><span>אני יודע/ת אילו הרשאות לתת לסוכן בפרויקט הזה, ולמה ההרשאות ולא ההוראות הן קו ההגנה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c17-chk9"><span>אני יודע/ת להסביר מי אחראי על קוד שסוכן כתב, ומה כותבים על זה ב-<span class="en">pull request</span>.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.15</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td><code>error: patch failed: agent/config.py:43</code><br><code>error: agent/config.py: patch does not apply</code></td><td>הוחל על הפרויקט שלכם, שהשתנה מאז 0.14.0, ולא על המעבדה</td><td>החילו במעבדה של 17.9, שנבנתה מ-<code>checkpoints\chapter-14</code></td></tr>
+  <tr><td><code>error: corrupt patch at ../agent.patch:13</code> (או מספר שורה אחר)</td><td>ההעתקה איבדה רווחים או שורות (סימון ביד במקום כפתור <code>copy</code>)</td><td>העתיקו שוב בכפתור <code>copy</code>, והריצו שוב את <code>Get-Clipboard | Set-Content ..\agent.patch</code></td></tr>
+  <tr><td>הסוכן אומר "<span class="en">all tests pass</span>", ו-CI אדום</td><td>הוא הריץ רק <code>pytest</code>, או רק חלק ממנו, או לא הריץ בכלל</td><td>כל הפקודות של CI בתדריך ובקובץ ההוראות, עם הפלט שלהן; ובכל מקרה מריצים בעצמכם</td></tr>
+  <tr><td>הסוכן משנה בדיקות כדי שיעברו</td><td>"להעביר את הבדיקות" היה המטרה היחידה שהוא ראה</td><td>"<span class="en">Do not change existing tests; if one fails, stop and explain</span>" בתדריך; <code>git diff main -- tests</code> בכל <span class="en">review</span></td></tr>
+  <tr><td>הסוכן מסתובב במעגלים על אותה שגיאה</td><td>ה-<span class="en">context</span> מלא בניסיונות כושלים</td><td>עוצרים, <code>git restore .</code> או ענף חדש, שיחה חדשה ותדריך שכולל את מה שלמדתם</td></tr>
+  <tr><td><code>error: "Logger" has no attribute "warn_once"</code> (או כל <code>attr-defined</code>)</td><td>שם שהמודל המציא, בקוד שהבדיקות לא מריצות</td><td>מחפשים את השם בתיעוד של הגרסה המותקנת; <code>mypy</code> בכל ריצה</td></tr>
+  <tr><td>הסוכן קרא את <code>.env</code> או הדפיס מפתח</td><td>הוא יכול לקרוא כל קובץ בתיקייה, וזה היה רלוונטי בעיניו</td><td>החליפו את המפתח (פרק 14); חסמו את <code>.env</code> בהגדרות הכלי; <code>CHAT_MOCK=1</code> בזמן עבודה עם סוכן</td></tr>
+  <tr><td>הרבה <code>warning: ... LF will be replaced by CRLF</code> ב-<code>git add</code></td><td>הגדרת שורות הסיום של git ב-Windows</td><td>אפשר להתעלם; זה לא משנה את התוכן</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.16</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>coding agent</dt><dd>לולאת סוכן עם כלים לקריאה, עריכה והרצה של פקודות בפרויקט קוד.</dd>
+  <dt>context</dt><dd>כל הטקסט שהמודל רואה בריצה: תדריך, הוראות, קבצים שנקראו, פלט של פקודות.</dd>
+  <dt>brief</dt><dd>תדריך: מטרה, הקשר, מגבלות, מה זה "גמור", איך בודקים, ומה לא.</dd>
+  <dt>AGENTS.md</dt><dd>קובץ הוראות במאגר שסוכנים קוראים בתחילת כל ריצה; לכלים מסוימים שם אחר.</dd>
+  <dt>out of scope</dt><dd>מה שהמשימה במפורש לא כוללת.</dd>
+  <dt>scope creep</dt><dd>שינויים שלא התבקשו, שנכנסים יחד עם השינוי שהתבקש.</dd>
+  <dt>hallucination</dt><dd>פלט שנשמע נכון ואינו: פונקציה, חבילה או עובדה שלא קיימות.</dd>
+  <dt>git apply</dt><dd>פקודה שמחילה קובץ diff על הקבצים בתיקייה.</dd>
+  <dt>approval</dt><dd>אישור של אדם לפני שהסוכן מריץ פקודה או משנה קובץ.</dd>
+  <dt>sandbox</dt><dd>סביבה מבודדת שבה טעות של הסוכן לא מגיעה לקבצים, לסודות ולחשבונות שלכם.</dd>
+  <dt>least privilege</dt><dd>רק ההרשאות שהמשימה צריכה (פרק 14), גם לסוכן.</dd>
+  <dt>prompt injection</dt><dd>הוראות שמסתתרות בטקסט שהסוכן קורא (פרק 21).</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">17.17</span>מה הלאה</h2>
+
+<p>בפרק הזה ראיתם סוכן מבחוץ: מה הוא מקבל, מה הוא מחזיר, ואיך בודקים אותו. ראיתם גם מאיפה מגיע רוב הכוח שלו: מהכלים. לקרוא קובץ, לחפש, להריץ פקודה. כלי טוב מחזיר בדיוק מה שצריך, נכשל בצורה ברורה, ולא מאפשר יותר ממה שהוא אמור לאפשר. כלי גרוע הופך מודל טוב לסוכן מבולבל.</p>
+
+<p>לסוכן שלכם מפרק 16 יש כלי אחד. הצעד הבא הוא לתת לו כמה, ולבנות אותם כמו שצריך: רישום של כלים, כלים מעוצבים היטב (שירות ההערות מפרק 11 הופך לכלים), פלט מובנה, ושרת <span class="en">MCP</span> שכל סוכן יכול להתחבר אליו: <strong>פרק 18: <span class="en">Tools</span> ו-<span class="en">integrations</span></strong>.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בפרק הזה הפרויקט לא משתנה. התיקייה <code>checkpoints\chapter-17</code> זהה ל-<code>checkpoints\chapter-16</code>. המעבדה של 17.9 נבנית מ-<code>checkpoints\chapter-14</code>, והשינוי הנכון לענף של הסוכן מופיע בפתרון של תרגיל 3.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-17.html">פתרונות לפרק 17</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

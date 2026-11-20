@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 14 · אבטחה | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="14">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 14 · אבטחה</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 14 מתוך 21</div>
+  <h1>אבטחה</h1>
+  <p class="lead">איך מסתכלים על המערכת שבניתם בעיניים של מי שרוצה לנצל אותה, ומה עושים עם מה שמוצאים: סודות, הרשאות, קלט עוין, תלויות, הגבלת קצב ומידע אישי.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>לבנות מודל איום פשוט: מה מגינים עליו, מאיפה נכנסים, ואיפה עובר גבול האמון.</li>
+    <li>לסרוק היסטוריה של git לסודות, ולדעת מה עושים כשסוד נכנס בכל זאת: קודם מחליפים, אחר כך מנקים.</li>
+    <li>להבדיל בין אימות להרשאה, ולתת לכל חלק במערכת רק את מה שהוא צריך: מפתח לכל לקוח, משתמש בלי הרשאות ב-<span class="en">container</span>, אסימון נפרד ל-<code>/metrics</code>.</li>
+    <li>להתייחס לכל קלט כעוין: גבולות עם Pydantic, למה <span class="en">SQL injection</span> ו-<span class="en">XSS</span> קורים ואיך הקוד שלכם כבר מונע אותם.</li>
+    <li>לבדוק תלויות לחולשות ידועות, להגביל קצב עם 429, ולטפל במידע אישי: מה שומרים, מה לא כותבים ללוג, ואיך מוחקים.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> חמש עד שש שעות. <strong>מה צריך:</strong> הפרויקט מסוף פרק 13, Docker Desktop, וחיבור לאינטרנט (להורדת gitleaks ולבדיקת התלויות). הכול במצב <span class="en">mock</span>.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.1</span>הבעיה: מי עוד מסתכל על המערכת?</h2>
+
+<p>המערכת מסוף פרק 13 עובדת, שקופה ומנוטרת. עכשיו נסו משהו אחר: שבו מולה כאילו אתם מישהו מבחוץ, שמגיע לפורט שלה ויש לו זמן. הרימו את compose, שלחו שתי הודעות, ואז:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:8000/metrics      <span class="cm"># no key at all</span>
+curl.exe -s http://127.0.0.1:8000/metrics | Select-String '^http_requests_total|^llm_tokens'
+docker compose exec api whoami</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>200
+http_requests_total{method="GET",route="/ready",status="200"} 3.0
+http_requests_total{method="POST",route="/chat",status="200"} 2.0
+http_requests_total{method="GET",route="/metrics",status="200"} 1.0
+llm_tokens_total{kind="input"} 10.0
+llm_tokens_total{kind="output"} 26.0
+root</code></pre>
+</div>
+
+<p>בלי שום מפתח, כל אחד שמגיע לפורט רואה כמה משתמשים יש, מה נכשל ובכמה <span class="en">tokens</span> הם משתמשים. והשירות רץ כ-<code>root</code>: מי שיצליח להריץ קוד בתוכו יכול לשנות את הקוד עצמו. עכשיו עם המפתח, כמו כל לקוח:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$h = @{ "X-API-Key" = "&lt;your AGENT_API_KEY&gt;" }
+$t = Measure-Command { $codes = 1..100 | ForEach-Object { (Invoke-WebRequest http://127.0.0.1:8000/chat -Method Post -Headers $h -ContentType "application/json" -Body '{"message": "again"}' -UseBasicParsing).StatusCode } }
+$codes | Group-Object | ForEach-Object { "{0} x {1}" -f $_.Name, $_.Count }; "{0:N1} s" -f $t.TotalSeconds
+(Invoke-RestMethod http://127.0.0.1:8000/conversations -Headers $h).Count</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>200 x 100
+6.8 s
+50</code></pre>
+</div>
+
+<p>מאה הודעות בשבע שניות, ואף אחת לא נעצרה. עם מודל אמיתי כל אחת עולה כסף. והרשימה מחזירה 50 שיחות: את <em>כל</em> השיחות של <em>כולם</em>, כי יש מפתח אחד לכל המשתמשים, ומי שמחזיק בו רואה הכול. גוף של 5 MB נקרא כולו לזיכרון לפני ש-Pydantic דוחה אותו ב-422. ומה שפרקים קודמים השאירו פתוח בכוונה: המפתח בין הצ'אט לשירות ההערות הוא סיסמה אחת קבועה (פרק 11), Kafka מקבל כל מי שמתחבר (פרק 12), הדף שומר את המפתח ב-<code>localStorage</code> לתמיד (פרק 5), עמודה <code>user_id</code> מחכה ריקה מאז פרק 7, ואף אחד לא בדק אם יש חולשה ידועה באחת מ-49 החבילות.</p>
+
+<p>מצאתם גם משהו טוב: <code>docker compose logs api notes worker | Select-String</code> על הטקסט ששלחתם ועל המפתחות מחזיר אפס שורות. ההחלטה מפרק 13 לא לכתוב תוכן ללוג מחזיקה. אבטחה היא בדיוק זה: <strong>הרגל</strong> של שתי שאלות שחוזרות על כל חלק במערכת. <strong>מי יכול לעשות מה?</strong> ו<strong>מה אם הקלט הזה עוין?</strong></p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.2</span>המפה: מודל איום</h2>
+
+<div class="diagram">
+  <div class="layers">
+    <div class="layer"><div class="name">outside: browsers, ask.py, anyone who reaches the port</div><div class="what">לא סומכים על כלום. כל בקשה נבדקת: מי אתה, מה מותר לך, האם הקלט סביר</div></div>
+    <div class="layer l2"><div class="name">trust boundary 1: api (8000)</div><div class="what">המקום היחיד שבו נכנסים מבחוץ: <code>/chat</code>, <code>/conversations</code>, הדף, <code>/metrics</code>, <code>/health</code>, <code>/ready</code></div>
+      <div class="inner"><div class="row">
+        <div class="layer l3"><div class="name">notes /v1</div><div class="what">מפתח אחד של הצ'אט</div></div>
+        <div class="layer l3"><div class="name">kafka</div><div class="what">בלי אימות</div></div>
+        <div class="layer l3"><div class="name">worker :9100</div><div class="what">בלי אימות</div></div>
+        <div class="layer l4"><div class="name">db, notes-db</div><div class="what">השיחות וההערות: הנכס העיקרי</div></div>
+      </div></div>
+    </div>
+    <div class="layer l4"><div class="name">trust boundary 2: the model provider</div><div class="what">יוצא: טקסט של משתמשים. חוזר: טקסט שגם הוא קלט, לא פקודה</div></div>
+  </div>
+  <div class="caption">שלושה דברים: <strong>נכסים</strong> (מה ששווה להגן עליו), <strong>נקודות כניסה</strong> (איפה בקשה נכנסת), ו<strong>גבולות אמון</strong> (איפה נתונים עוברים ממי שלא סומכים עליו למי שכן). בתוך הרשת הפנימית, היום, כל <span class="en">container</span> סומך על כל השאר.</div>
+</div>
+
+<p><strong>מודל איום</strong> (<span class="en">threat model</span>) הוא המפה הזו בכתב: טבלה של נכסים (שיחות, הערות, מפתח ה-API של Anthropic, מפתחות הלקוחות, הכסף שכל קריאה למודל עולה), טבלה של נקודות כניסה עם מי מורשה ומה נבדק, והגבולות. עבור כל נקודת כניסה שואלים: מי יכול להתחזות כאן? מה אפשר לשנות? מה אפשר לראות? מה אפשר להפיל? (יש לזה שם, <span class="en">STRIDE</span>, אבל ארבע השאלות מספיקות כדי להתחיל.) המטרה אינה מערכת "מאובטחת", אלא רשימה מסודרת של מה סגרתם, מה פתוח ובאיזה סדר תטפלו בו. בתרגיל 6 תכתבו אותו ל-<code>docs\security.md</code>.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.3</span>סודות</h2>
+
+<p>מפתח שדלף אינו "כמעט בסדר". מפתח ה-API של Anthropic שווה כסף, כי מי שמחזיק בו מוציא מהחשבון שלכם. סיסמת בסיס נתונים שווה את כל השיחות. ומאגרים ציבוריים נסרקים כל הזמן על ידי תוכנות שמחפשות מפתחות, כך שהזמן מדחיפה ועד שימוש לרעה נמדד לפעמים בדקות. בפרק 2 עצרתם את <code>.env</code> עם <code>.gitignore</code>. אבל סוד יכול להגיע ל-git גם בדרכים אחרות: מודבק ל-<code>.env.example</code>, לבדיקה, להערה בקוד.</p>
+
+<h3>סורקים את ההיסטוריה</h3>
+<p><strong>gitleaks</strong> הוא כלי שעובר על כל ה-<span class="en">commits</span> ומחפש מחרוזות שנראות כמו סודות, לפי מאות כללים (מפתחות של Anthropic, AWS, GitHub, ומחרוזות אקראיות ארוכות ליד מילים כמו <code>key</code>). זה קובץ <code>exe</code> אחד, בלי התקנה ובלי הרשאות מנהל. מורידים מדף ה-<span class="en">releases</span> שלו, ובודקים שהקובץ הוא מה שהיוצרים פרסמו:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~; $v = "8.30.1"; $base = "https://github.com/gitleaks/gitleaks/releases/download/v$v"
+Invoke-WebRequest "$base/gitleaks_${v}_windows_x64.zip" -OutFile gitleaks.zip -UseBasicParsing
+Invoke-WebRequest "$base/gitleaks_${v}_checksums.txt" -OutFile checksums.txt -UseBasicParsing
+(Get-FileHash gitleaks.zip -Algorithm SHA256).Hash.ToLower()
+Select-String "windows_x64" checksums.txt</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e
+
+checksums.txt:10:d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e  gitleaks_8.30.1_windows_x64.zip</code></pre>
+</div>
+<p>שני המספרים זהים, ולכן הקובץ לא השתנה בדרך. זה ה-<span class="en">checksum</span>: טביעת אצבע של הקובץ. אחר כך <code>Expand-Archive gitleaks.zip -DestinationPath tools\gitleaks</code>, ולחלון הנוכחי <code>$env:Path += ";$HOME\tools\gitleaks"</code>. ובפרויקט:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects\my-agent
+gitleaks git -v --redact .</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>INF 10 commits scanned.
+INF scanned ~715116 bytes (715.12 KB) in 603ms
+INF no leaks found</code></pre>
+</div>
+<p><code>git</code> סורק את ההיסטוריה, לא רק את הקבצים של היום. <code>--redact</code> מסתיר את הסוד עצמו בפלט, כי גם פלט של כלי יכול להגיע ללוג של CI. יש גם <code>gitleaks dir</code>, שסורק תיקייה, אבל בפרויקט שלנו הוא נכנס גם ל-<code>.venv</code> ומוצא שם ארבע "דליפות" בקוד של SQLAlchemy: <span class="en">false positives</span>. כל סורק טועה לפעמים לשני הכיוונים, ולכן הוא רשת ביטחון, לא תחליף לזהירות.</p>
+
+<h3>ואם סוד כבר נכנס?</h3>
+<p>תרגיל 1 מראה את זה בעיניים: <span class="en">commit</span> שמכניס מפתח (מזויף), <span class="en">commit</span> שמוחק אותו, ו-gitleaks עדיין מוצא אותו, כי ההיסטוריה זוכרת. הסדר:</p>
+<ol>
+  <li><strong>קודם מחליפים</strong> (<span class="en">rotate</span>): יוצרים מפתח חדש, מבטלים את הישן אצל הספק. מהרגע שהמפתח נדחף הוא אצל אחרים: בעותקים, ב-<span class="en">forks</span>, ב-<span class="en">caches</span>. מחיקה מההיסטוריה לא מחזירה אותו.</li>
+  <li><strong>בודקים</strong> אם השתמשו בו: לוח הבקרה של הספק מראה שימוש ועלויות.</li>
+  <li><strong>מנקים את ההיסטוריה</strong> רק אחר כך, אם בכלל: כלים כמו <code>git filter-repo</code> כותבים אותה מחדש, וכל מי שעובד על המאגר צריך לשכפל מחדש. על ענף שלא נדחף, מספיק למחוק את הענף.</li>
+</ol>
+<p>ובשביל שזה לא יקרה: <strong><span class="en">pre-commit hook</span></strong>, סקריפט ש-git מריץ לפני כל <span class="en">commit</span> ועוצר אותו אם הוא נכשל. הכלי הנפוץ לניהול שלהם נקרא <code>pre-commit</code>, ול-gitleaks יש מצב בשבילו (<code>gitleaks git --pre-commit --staged</code>). ובשרת, הסריקה רצה ב-CI על כל <span class="en">pull request</span> (סעיף 14.11). GitHub עצמו מציע <span class="en">secret scanning</span> שחוסם דחיפה של מפתחות מוכרים.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.4</span>אימות, הרשאה, ומינימום הרשאות</h2>
+
+<p>שתי שאלות שונות. <strong>אימות</strong> (<span class="en">authentication</span>): מי אתה? <strong>הרשאה</strong> (<span class="en">authorization</span>): מה מותר לך? <code>X-API-Key</code> של פרק 5 עונה על הראשונה בקירוב גס ("מישהו שיש לו את המפתח"), ועל השנייה בכלל לא: מי שעבר את הבדיקה רשאי לכל דבר. כש-50 השיחות של כולם חוזרות ללקוח אחד, זו בעיה של הרשאה.</p>
+
+<h3>איך נראה מפתח טוב יותר</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>שלב</th><th>מה הוא נותן</th><th>אצלנו</th></tr>
+  <tr><td>מפתח לכל לקוח</td><td>יודעים מי פנה, אפשר לבטל לקוח אחד בלי לפגוע באחרים, ולתת לכל אחד רק את שלו</td><td>בונים עכשיו</td></tr>
+  <tr><td>שומרים רק <span class="en">hash</span></td><td>מי שגונב את קובץ ההגדרות או גיבוי לא מקבל מפתחות שעובדים</td><td>בונים עכשיו</td></tr>
+  <tr><td><span class="en">Rotation</span></td><td>מפתח חדש, שתי השורות פעילות עד שהלקוח עבר, ואז מוחקים את הישנה</td><td>אפשרי עכשיו, ידני</td></tr>
+  <tr><td>אסימונים קצרי חיים</td><td>מפתח שנגנב מת אחרי דקות. משתמש מתחבר פעם אחת ומקבל אסימון לשעה</td><td>מוסבר</td></tr>
+  <tr><td>OAuth 2.0 ו-JWT</td><td>שירות זהות (Google, Microsoft, Auth0, Keycloak) מאמת את האדם ומנפיק <span class="en">JWT</span>: JSON חתום עם מי, עד מתי ואילו הרשאות. השירות שלכם רק בודק את החתימה</td><td>מוסבר (פרק 5 פענח אחד)</td></tr>
+</table>
+</div>
+<p>למה <span class="en">hash</span> אחד של SHA-256 מספיק כאן, כשלסיסמאות אומרים "רק bcrypt או argon2"? כי סיסמה שאדם בחר קצרה מספיק כדי לנחש אותה מיליארדי פעמים בשנייה מול ה-<span class="en">hash</span>, ופונקציה איטית מאטה את זה. מפתח של 256 ביטים אקראיים אי אפשר לנחש בכל מהירות שהיא.</p>
+
+<h3>מינימום הרשאות</h3>
+<p><strong><span class="en">Least privilege</span></strong>: כל חלק מקבל בדיוק את מה שהוא צריך, ולא יותר, כדי שכשמשהו נפרץ (וזה יקרה), הנזק יהיה קטן. ארבעה מקומות אצלנו:</p>
+<ul>
+  <li><strong>ה-<span class="en">container</span>.</strong> שירות לא צריך להיות <code>root</code>. כמשתמש בלי הרשאות, מי שמריץ בו קוד לא יכול לשנות את הקוד, להתקין כלים או לגעת בקבצים של המערכת.</li>
+  <li><strong>בסיס הנתונים.</strong> ה-<code>api</code> מתחבר כ-<code>agent</code>, הבעלים של הטבלאות, ובסביבה המקומית אפילו <span class="en">superuser</span>. אבל הוא צריך רק לקרוא ולכתוב שורות. רק <code>migrate</code> צריך לשנות טבלאות. תרגיל 4 בונה משתמש כזה.</li>
+  <li><strong>CI.</strong> ל-<code>ci.yml</code> כבר יש <code>permissions: contents: read</code> (פרק 9). כאן נוסיף נעיצה של כל <span class="en">action</span> ל-<span class="en">commit</span>, בסעיף 14.8.</li>
+  <li><strong>ענן.</strong> שם זה נקרא IAM: לכל שירות יש זהות (<span class="en">service account</span>) עם רשימת הרשאות. השירות שקורא סודות מקבל "קריאה של הסוד הזה", לא "מנהל הסודות של החשבון" (פרק 10). ומי שיכול להריץ <code>docker</code> על השרת הוא בפועל מנהל שלו.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.5</span>דוגמה מודרכת, חלק א': מפתח לכל לקוח, ושיחה לכל בעלים</h2>
+
+<p>על ענף <code>feature/security</code>. ה-<code>agent/security.py</code> החדש:</p>
+
+<div class="step">
+  <h3><span class="step-num">1</span>שומרים <span class="en">hash</span>, לא מפתח</h3>
+<div class="codebox">
+  <div class="label"><span>agent\security.py (shortened)</span></div>
+<pre><code>DEFAULT_CLIENT = "default"  <span class="cm"># the client of a single-key setup (AGENT_API_KEY), and the terminal</span>
+
+def hash_key(key: str) -&gt; str:
+    """The SHA-256 of a key, as 64 hex characters: what the server stores instead of the key."""
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+def parse_clients(text: str) -&gt; dict[str, str]:
+    """AGENT_API_KEYS: "name:sha256" entries, separated by commas or new lines. Returns {hash: name}."""</code></pre>
+</div>
+  <p>ב-<code>config.py</code> נוספים <code>api_clients</code> (מ-<code>AGENT_API_KEYS</code>, או מקובץ ב-<code>AGENT_API_KEYS_FILE</code>), <code>metrics_token</code> ו-<code>rate_limit</code>. <code>AGENT_API_KEY</code> נשאר ועובד: הוא הלקוח <code>default</code>, כך שאף הגדרה מפרקים קודמים לא נשברת. ב-<code>api.py</code>, הבדיקה לא שואלת עוד "האם זה המפתח", אלא "של מי זה":</p>
+<div class="codebox">
+  <div class="label"><span>agent\api.py</span></div>
+<pre><code>def key_checker(clients: dict[str, str]) -&gt; Callable[[str | None], str]:
+    """Build the dependency that says who is calling: no key, or an unknown key, gets 401."""
+
+    def check(key: Annotated[str | None, Depends(api_key_header)]) -&gt; str:
+        <span class="cm"># We look up the key's hash, never the key itself. A wrong key changes its whole</span>
+        <span class="cm"># hash, so how long the lookup takes reveals nothing about the right keys.</span>
+        client = clients.get(hash_key(key)) if key else None
+        if client is None:
+            raise HTTPException(status_code=401, detail="Missing or wrong X-API-Key header.")
+        return client
+
+    return check</code></pre>
+</div>
+  <p>ה-<code>compare_digest</code> של פרק 5 נעלם, והתגובה בקוד מסבירה למה זה בטוח: מי שמנחש לא שולט ב-<span class="en">hash</span> של מה שהוא שולח, ולכן זמן החיפוש לא מלמד אותו כלום.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>הרשאה: כל שיחה שייכת למישהו</h3>
+<div class="codebox">
+  <div class="label"><span>agent\api.py (inside create_app, shortened)</span></div>
+<pre><code>    Caller = Annotated[str, Depends(key_checker(clients))]  <span class="cm"># the client's name</span>
+
+    def own(conversation_id: str, caller: str) -&gt; None:
+        """Authorization: only the owner may touch a conversation. Others get 404, not 403,
+        so they cannot even learn that the id exists."""
+        if conversations.owner(conversation_id) != caller:
+            raise ConversationNotFound(conversation_id)
+
+    @app.get("/conversations/{conversation_id}")
+    def get_conversation(conversation_id: ConversationId, caller: Caller) -&gt; ConversationOut:
+        try:
+            own(conversation_id, caller)
+            ...</code></pre>
+</div>
+  <p>כל <span class="en">endpoint</span> מקבל <code>caller</code>, ו-<code>own</code> נקרא לפני כל פעולה על שיחה. <code>/chat</code> פותח שיחה חדשה עם <code>conversations.start(caller)</code>, ו-<code>GET /conversations</code> מסנן לפי <code>user_id=caller</code>. העמודה מפרק 7 מקבלת סוף סוף משמעות, ו-<span class="en">index</span> כי מסננים לפיה. את השיחות הקיימות צריך לתת למישהו. כמו בפרק 7, <span class="en">migration</span> עם <span class="en">backfill</span>:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run alembic revision --autogenerate --rev-id 0007 -m "conversations belong to a client"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>INFO  [alembic.autogenerate.compare.constraints] Detected added index 'ix_conversations_user_id' on '('user_id',)'</code></pre>
+</div>
+<div class="codebox">
+  <div class="label"><span>migrations\versions\0007_conversations_belong_to_a_client.py (upgrade)</span></div>
+<pre><code>    with op.batch_alter_table("conversations", schema=None) as batch_op:
+        batch_op.create_index(batch_op.f("ix_conversations_user_id"), ["user_id"], unique=False)
+    <span class="cm"># Every conversation from before had one possible owner: whoever held the single key.</span>
+    op.execute(
+        conversations.update()
+        .where(conversations.c.user_id.is_(None))
+        .values(user_id=sa.literal("default", sa.String))
+    )</code></pre>
+</div>
+  <p>העמודה נשארת <code>nullable</code>: גרסה 0.13 עשויה עדיין לרוץ בזמן ה-<span class="en">deploy</span> ולכתוב שורה בלי בעלים (ה-<span class="en">expand/contract</span> של פרק 7). ה-CLI פותח שיחות כ-<code>default</code>, כי הטרמינל שייך לבעל המערכת.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>לקוח שני</h3>
+  <p><code>scripts\new_key.py</code> יוצר מפתח עם <code>secrets.token_urlsafe(32)</code>, ומדפיס אותו פעם אחת, יחד עם השורה שהשרת שומר:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python scripts/new_key.py dana</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (the key is replaced here)</span></div>
+<pre><code>Key for dana (shown once, give it to them privately):
+  &lt;43 random characters&gt;
+Add this entry to AGENT_API_KEYS (comma separated), then restart the api:
+  dana:664fa6ee460b891e96f3...</code></pre>
+</div>
+  <p>הוסיפו ל-<code>.env</code> שורה <code>AGENT_API_KEYS=dana:...</code>, הפעילו מחדש עם <code>docker compose up --build -d --wait</code> (ה-<code>migrate</code> מריץ את 0007), ובדקו מה כל לקוח רואה:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose exec db psql -U agent -c "SELECT user_id, count(*) FROM conversations GROUP BY user_id"
+$env:AGENT_API_KEY = "&lt;dana's key&gt;"; uv run python scripts/ask.py "hi, I am Dana"
+"mine: " + (Invoke-RestMethod http://127.0.0.1:8000/conversations -Headers $h).Count
+"dana: " + (Invoke-RestMethod http://127.0.0.1:8000/conversations -Headers @{ "X-API-Key" = $env:AGENT_API_KEY }).Count
+curl.exe -s -w " %{http_code}`n" -H "X-API-Key: $env:AGENT_API_KEY" http://127.0.0.1:8000/conversations/3d3db11fc6af46b1b2c449c7f77f995c</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code> user_id | count
+---------+-------
+ default |   103
+(1 row)
+
+[mock reply, turn 1] You said: hi, I am Dana
+(conversation c0597d34c1364b31979bc8ddcbc6080e, turns: 1, request 083588ec444a4c58aff14ab61c0f35d7)
+mine: 50
+dana: 1
+{"detail":"No conversation with this id."} 404</code></pre>
+</div>
+  <p>כל 103 השיחות הישנות שייכות עכשיו ל-<code>default</code>. דנה רואה רק את שלה, ושיחה של מישהו אחר (כאן, הראשונה מ-14.1) עונה לה 404, בדיוק כמו שיחה שלא קיימת. אחרי זה <code>Remove-Item Env:AGENT_API_KEY</code>. <span class="en">Commit</span>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span><code>/metrics</code> עם אסימון משלו</h3>
+  <p>מי צריך לקרוא את המדדים? רק Prometheus. לכן הוא מקבל אסימון משלו, <code>METRICS_TOKEN</code>, שפותח את <code>/metrics</code> ושום דבר אחר. המפתח של לקוח לא פותח אותו, והאסימון לא פותח את <code>/chat</code>:</p>
+<div class="codebox">
+  <div class="label"><span>agent\api.py</span></div>
+<pre><code>    @app.get("/metrics", include_in_schema=False)
+    def metrics_page(
+        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    ) -&gt; Response:
+        if settings.metrics_token is None:
+            raise HTTPException(status_code=404, detail="Not Found")  <span class="cm"># off unless configured</span>
+        token = credentials.credentials if credentials else ""
+        if not secrets.compare_digest(token, settings.metrics_token):
+            raise HTTPException(status_code=401, detail="Missing or wrong metrics token.")
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)</code></pre>
+</div>
+  <p>בלי ההגדרה אין מדדים בכלל: ברירת מחדל סגורה (<span class="en">fail closed</span>). Prometheus קורא סודות מקבצים, ו-compose יודע להפוך משתנה מ-<code>.env</code> לקובץ ב-<code>/run/secrets</code>:</p>
+<div class="codebox">
+  <div class="label"><span>compose.yaml and monitoring\prometheus.yml (the changes)</span></div>
+<pre><code>  prometheus:
+    ...
+    secrets: [metrics_token]  <span class="cm"># the token it sends to read the api's /metrics</span>
+
+secrets:
+  metrics_token:
+    environment: METRICS_TOKEN
+
+  - job_name: api
+    static_configs:
+      - targets: ["api:8000"]
+    authorization:  <span class="cm"># Authorization: Bearer &lt;the token in this file&gt;</span>
+      credentials_file: /run/secrets/metrics_token</code></pre>
+</div>
+  <p>הוסיפו <code>METRICS_TOKEN</code> ל-<code>.env</code> (צרו אותו כמו את <code>AGENT_API_KEY</code>), ו-<code>docker compose --profile monitoring up -d --wait</code>:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>curl.exe -s -o NUL -w "no token: %{http_code}`n" http://127.0.0.1:8000/metrics
+curl.exe -s -o NUL -w "with the token: %{http_code}`n" -H "Authorization: Bearer &lt;your METRICS_TOKEN&gt;" http://127.0.0.1:8000/metrics
+(Invoke-RestMethod http://127.0.0.1:9090/api/v1/targets).data.activeTargets | ForEach-Object { "{0} {1} {2}" -f $_.labels.job, $_.health, $_.lastError }</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>no token: 401
+with the token: 200
+api up
+worker up</code></pre>
+</div>
+  <p>ה-<span class="en">worker</span> נשאר בלי אסימון: לפורט 9100 שלו אין פורט במחשב, רק ברשת של compose. זה פער שנרשם, לא שנשכח. בדיקות: <code>tests\test_security.py</code> (לקוח אחד לא נוגע בשיחה של אחר, 404 ולא 403; ההגדרה השגויה לא מדפיסה את המפתח; <code>/metrics</code> בלי אסימון, עם מפתח של לקוח, ועם האסימון). <span class="en">Commit</span>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.6</span>קלט עוין</h2>
+
+<p>כל דבר שמגיע מבחוץ הוא קלט: גוף הבקשה, ה-<span class="en">path</span>, כותרות כמו <code>X-Request-ID</code> (ולכן <code>SAFE_ID</code> של פרק 13: הוא נכתב ללוגים שלכם), אירוע מ-Kafka (ולכן <span class="en">dead letters</span> של פרק 12), ותשובה של המודל. הכלל: <strong>לא סומכים על קלט, בודקים אותו בכניסה, ומגבילים אותו לצורה המדויקת שאתם מצפים לה</strong>. קל יותר לומר מה מותר (<span class="en">allow list</span>) מאשר לנחש כל מה שאסור.</p>
+
+<h3>גבולות עם Pydantic, וגודל</h3>
+<p>ל-<code>message</code> כבר יש 1 עד 4000 תווים. ל-<code>conversation_id</code> לא היה כלום. מזהים נוצרים אצלנו, 32 תווי <span class="en">hex</span>, ולכן כל דבר אחר נדחה לפני שהוא נוגע בבסיס הנתונים:</p>
+<div class="codebox">
+  <div class="label"><span>agent\api.py</span></div>
+<pre><code>CONVERSATION_ID = r"^[0-9a-f]{32}$"
+ConversationId = Annotated[str, Path(pattern=CONVERSATION_ID)]  <span class="cm"># for /conversations/{conversation_id}</span>
+MAX_BODY = 64 * 1024  <span class="cm"># bytes; a message is at most 4000 characters</span></code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>curl.exe ... --data-binary "@bad-id.json"   (conversation_id "nope")</span></div>
+<pre><code>{"detail":[{"type":"string_pattern_mismatch","loc":["body","conversation_id"],"msg":"String should match pattern '^[0-9a-f]{32}$'","input":"nope","ctx":{"pattern":"^[0-9a-f]{32}$"}}]}</code></pre>
+</div>
+<p>וגודל: Pydantic בודק את <code>max_length</code> אחרי שהגוף כולו כבר נקרא ופוענח. ה-<span class="en">middleware</span> מפרק 13 בודק עכשיו את <code>Content-Length</code> קודם ועונה 413 (<span class="en">Payload Too Large</span>); אותם 5 MB מ-14.1 מקבלים 413 בלי שהשרת קורא אותם. גוף שנשלח בחתיכות, בלי <code>Content-Length</code>, עובר את הבדיקה הזו, ולכן בייצור מגבילים גודל גם ב-<span class="en">proxy</span> שלפני השירות.</p>
+
+<h3><span class="en">SQL injection</span></h3>
+<p>מה קורה כשמדביקים קלט לתוך טקסט של SQL? <code>scripts\injection_lab.py</code> מראה את זה על טבלה בזיכרון בלבד, שנעלמת כשהסקריפט נגמר:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python scripts/injection_lab.py "x' OR '1'='1"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>unsafe:
+  SQL sent: SELECT name, private_note FROM users WHERE name = 'x' OR '1'='1'
+  rows: [('Dana', 'dentist on Tuesday'), ('Omer', 'salary 21,000'), ('Noa', 'new job soon')]
+safe:
+  SQL sent: SELECT name, private_note FROM users WHERE name = ?   value: "x' OR '1'='1"
+  rows: []</code></pre>
+</div>
+<p>הגרשיים בקלט סגרו את המחרוזת, והשאר הפך לחלק מהשאילתה: "או ש-1 שווה 1", כלומר כל השורות. בגרסה הבטוחה, טקסט ה-SQL קבוע, והקלט נוסע בנפרד כ<strong>פרמטר</strong>: בסיס הנתונים יודע שזה ערך ולא קוד, ומחפש משתמש ששמו באמת <code>x' OR '1'='1</code>. בפרויקט שלנו כל שאילתה עוברת דרך SQLAlchemy (<code>select(...).where(...)</code>), שתמיד שולח פרמטרים, ולכן אין בו את החולשה הזו. היא חוזרת ברגע שמישהו כותב <code>text(f"...{x}...")</code>. בתרגיל 3 תכתבו את הגרסה הבטוחה בעצמכם.</p>
+
+<h3><span class="en">XSS</span>: קלט שהופך לקוד בדפדפן</h3>
+<p>אותו רעיון, בדפדפן. אם הדף מכניס טקסט עם <code>innerHTML</code>, טקסט כמו <code>&lt;img src=x onerror="..."&gt;</code> הופך לתגית אמיתית, והקוד ב-<code>onerror</code> רץ בדף שלכם, עם כל מה שהדף יכול לקרוא. זה <span class="en">Cross-Site Scripting</span>. בדקו את <code>agent\static\chat.html</code>: הוא משתמש ב-<code>div.textContent = text</code>, וההערה מפרק 5 אומרת למה. גם הודעת המשתמש, גם תשובת המודל (שמצטטת אותה ב-<span class="en">mock</span>), וגם ההיסטוריה שנטענת מחדש: הכול נכנס כטקסט. תרגיל 2 מראה מה היה קורה אחרת.</p>
+<p>ומה שתרגיל 2 יגלה: הקוד הזר קורא את המפתח מהאחסון של הדף. לכן הדף שומר עכשיו את המפתח ב-<code>sessionStorage</code> במקום <code>localStorage</code>: הוא נשכח כשסוגרים את הלשונית, ולא נשאר על הדיסק לתמיד (והדף מוחק את העותק הישן שגרסאות קודמות השאירו). זה צעד קטן ולא פתרון: סקריפט שרץ בדף עדיין יכול לקרוא אותו. הפתרון האמיתי הוא התחברות עם <span class="en">cookie</span> מסוג <code>HttpOnly</code>, שקוד בדף לא יכול לקרוא בכלל, ו-<span class="en">Content-Security-Policy</span>, כותרת שאומרת לדפדפן מאילו מקורות מותר להריץ סקריפטים.</p>
+
+<h3>גם טקסט שנשלח למודל הוא קלט</h3>
+<p>משתמש יכול לכתוב לסוכן "התעלם מההוראות שלך ו...". זה <strong><span class="en">prompt injection</span></strong>, וכשלסוכן יהיו כלים (פרק 18), הוא יכול לגרום להם לפעול. לאותה בעיה אין עדיין פתרון שלם כמו פרמטרים ל-SQL: מגבילים מה הכלים יכולים לעשות, מבקשים אישור של אדם לפעולות מסוכנות, ובודקים. פרק 21 מדגים ומטפל. בינתיים: תשובת המודל היא טקסט, נשמרת כטקסט ומוצגת כטקסט.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.7</span>דוגמה מודרכת, חלק ב': בלי <code>root</code>, ועם גבול</h2>
+
+<div class="step">
+  <h3><span class="step-num">1</span>משתמש בלי הרשאות</h3>
+<div class="codebox">
+  <div class="label"><span>Dockerfile (added before EXPOSE)</span></div>
+<pre><code><span class="cm"># Run as a user with no rights, not as root. The code and packages stay owned by root, so</span>
+<span class="cm"># the service cannot change them; it may write only to /data (the worker's database).</span>
+RUN useradd --system --uid 10001 --no-create-home app \
+    &amp;&amp; mkdir /data &amp;&amp; chown app /data
+USER app</code></pre>
+</div>
+  <p>אותו דבר ב-<code>notes-service\Dockerfile</code>, בלי <code>/data</code>: שירות ההערות לא כותב קבצים. <code>docker compose up --build -d --wait</code>, ו-<code>docker compose exec api whoami</code> מדפיס עכשיו <code>app</code>. הכול ירוק. שלחו הודעה אחת, וחכו כמה שניות:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose ps -a worker --format "{{.Name}} {{.Status}}"
+docker compose logs worker --no-log-prefix | Select-String "error" | Select-Object -Last 3
+docker compose run --rm --no-deps worker ls -ln /data</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>my-agent-worker-1 Exited (1) 3 seconds ago
+sqlalchemy.exc.OperationalError: (raised as a result of Query-invoked autoflush; consider using a session.no_autoflush block if this flush is occurring prematurely)
+(sqlite3.OperationalError) attempt to write a readonly database
+(Background on this error at: https://sqlalche.me/e/21/e3q8)
+total 28
+-rw-r--r-- 1 0 0 28672 Nov 18 21:36 usage.db</code></pre>
+</div>
+  <p>ה-<span class="en">worker</span> מת בכתיבה הראשונה. הקובץ ב-<span class="en">volume</span> נוצר בפרק 12, כשה-<span class="en">worker</span> היה <code>root</code> (משתמש 0), ומשתמש 10001 לא יכול לכתוב אליו. <span class="en">Volume</span> חדש היה מקבל את הבעלות של <code>/data</code> מה-<span class="en">image</span>; <span class="en">volume</span> קיים שומר את מה שהיה בו. זו בדיוק הסיבה שאנשים "מתקנים" כך: חוזרים ל-<code>root</code>. במקום זה, מעבירים את הבעלות פעם אחת, כ-<code>root</code>, בפקודה חד-פעמית:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>docker compose run --rm --no-deps --user root worker chown -R app /data
+docker compose up -d --wait worker</code></pre>
+</div>
+  <p>ה-<span class="en">worker</span> עולה, וקורא שוב את האירוע שלא הספיק לאשר (<span class="en">at least once</span>, פרק 12). ה-README מתעד את הפקודה תחת "Security", כי כל מי שמשדרג מ-0.13 ייתקל בזה. <span class="en">Commit</span>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>הגבלת קצב</h3>
+  <p>כל הודעה ל-<code>/chat</code> עולה כסף, ולקוח אחד (או מפתח אחד שדלף) יכול לשלוח אלפים. <strong>הגבלת קצב</strong> (<span class="en">rate limiting</span>) אומרת: עד N בקשות לפרק זמן, ומעבר לזה 429 (<span class="en">Too Many Requests</span>) עם כותרת <code>Retry-After</code> שאומרת בעוד כמה שניות לנסות שוב. הלקוח של פרק 11 כבר מנסה שוב אחרי 429, עם המתנה (אם כי הוא עוד לא קורא את <code>Retry-After</code>).</p>
+<div class="codebox">
+  <div class="label"><span>agent\security.py (shortened)</span></div>
+<pre><code>class RateLimiter:
+    """At most `limit` requests per client in every window of `window` seconds."""
+
+    def check(self, client: str) -&gt; int | None:
+        """Count one request. None: allowed. A number: refused, retry after that many seconds."""
+        now = self.clock()
+        start, count = self.counts.get(client, (now, 0))
+        if now - start &gt;= self.window:
+            start, count = now, 0  <span class="cm"># a new window begins</span>
+        if count &gt;= self.limit:
+            return max(1, math.ceil(start + self.window - now))
+        self.counts[client] = (start, count + 1)
+        return None</code></pre>
+</div>
+  <p>ב-<code>/chat</code>, אחרי האימות: <code>wait = limiter.check(caller)</code>, ואם יש <code>wait</code>, <code>HTTPException(429, ..., headers={"Retry-After": str(wait)})</code>. ברירת המחדל: 30 בדקה (<code>CHAT_RATE_LIMIT</code>). הבדיקות מזיזות שעון מזויף במקום לחכות דקה. ומה-14.1, אותה לולאה, עם 40 בקשות:</p>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>200 x 30
+429 Retry-After 59 x 10</code></pre>
+</div>
+  <p>ו-<code>ask.py</code> של דנה, באותה דקה, עונה כרגיל: לכל לקוח ספירה משלו. זה <span class="en">fixed window</span>, הפשוט ביותר; <span class="en">token bucket</span> מחליק פרצים, אבל הרעיון זהה.</p>
+  <p><strong>הגבולות שלו.</strong> הספירה בזיכרון של תהליך אחד: שני עותקים של ה-<code>api</code> מרשים פי שניים, והפעלה מחדש מאפסת. לכן מגבילים בשני מקומות. <strong>בקצה</strong> (<span class="en">edge</span>: ה-<span class="en">proxy</span>, ה-<span class="en">load balancer</span> או שירות ה-CDN שלפני השירותים), לפי כתובת IP: זול, עוצר הצפה לפני שהיא מגיעה אליכם, אבל לא יודע מי הלקוח. <strong>באפליקציה</strong>, לפי לקוח: יודע מי, ויודע כמה כל פעולה עולה. כשיש כמה עותקים, הספירה עוברת למקום משותף, בדרך כלל Redis. <span class="en">Commit</span>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.8</span>תלויות</h2>
+
+<p>יש בפרויקט 49 חבילות, ורק 11 מהן ביקשתם. כל אחת היא קוד של מישהו אחר שרץ עם ההרשאות של השירות שלכם. כשמתגלה בה חולשה, היא מקבלת מזהה (<span class="en">CVE</span>, או <span class="en">GHSA</span> של GitHub) ונכנסת למאגרים ציבוריים. <code>uv audit</code> משווה את <code>uv.lock</code> מול המאגר OSV:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv audit --locked --preview-features audit
+cd notes-service; uv audit --locked --preview-features audit; cd ..</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Resolved 50 packages in 2ms
+Found no known vulnerabilities and no adverse project statuses in 49 packages
+Resolved 35 packages in 3ms
+Found no known vulnerabilities and no adverse project statuses in 34 packages</code></pre>
+</div>
+<p>הפקודה ניסיונית ב-uv 0.11 (<code>--preview-features audit</code> רק משתיק את האזהרה על כך), והיא צריכה אינטרנט. החלופה הוותיקה היא <code>pip-audit</code>. כדי לראות איך נראה ממצא, סקריפט קטן עם גרסה ישנה של <code>requests</code>, בתיקייה זמנית מחוץ לפרויקט:</p>
+<div class="codebox">
+  <div class="label"><span>old.py, and: uv audit --script old.py</span></div>
+<pre><code># /// script
+# requires-python = "&gt;=3.12"
+# dependencies = ["requests==2.31.0"]
+# ///</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Found 6 known vulnerabilities and no adverse project statuses in 5 packages
+
+requests 2.31.0 has 6 known vulnerabilities:
+
+- GHSA-9hjg-9r4m-mvj7: Requests vulnerable to .netrc credentials leak via malicious URLs
+  Fixed in: 2.32.4
+  Advisory information: https://nvd.nist.gov/vuln/detail/CVE-2024-47081
+...</code></pre>
+</div>
+<p>קוד היציאה 1, ולכן CI נכשל. מה עושים עם ממצא: קוראים את ההודעה (האם הקוד שלנו בכלל משתמש בחלק הפגיע?), ומשדרגים, בדרך כלל ב-<span class="en">pull request</span> משלו: <code>uv lock --upgrade-package requests</code>. כשאין עדיין תיקון, <code>--ignore</code> עם מזהה, והערה שמסבירה למה ועד מתי.</p>
+
+<h3><span class="en">Lock files</span>, עדכונים ושרשרת האספקה</h3>
+<p>ה-<code>uv.lock</code> מפרק 1 הוא כלי אבטחה: הוא נועל גרסה <em>ו-hash</em> לכל קובץ, כך שמה שמותקן ב-CI ובשרת הוא בדיוק מה שבדקתם. מדיניות עדכונים פשוטה: פעם בחודש <span class="en">pull request</span> אחד שמשדרג את ה-<span class="en">lock</span>, עם בדיקות ו-<code>uv audit</code> ירוקים; ממצא של <code>uv audit</code> מתוקן מיד. כלים כמו Dependabot או Renovate פותחים את ה-<span class="en">pull requests</span> האלה לבד.</p>
+<p><strong>שרשרת האספקה</strong> (<span class="en">supply chain</span>) היא כל מה שהקוד שלכם סומך עליו בדרך: חבילות, ה-<span class="en">image</span> של Python, ה-<span class="en">actions</span> ב-CI. התקפות אמיתיות קרו בכל אחד מהם: חבילה עם שם דומה לחבילה מוכרת (<span class="en">typosquatting</span>), חשבון של מתחזק שנפרץ ופרסם גרסה זדונית, <span class="en">action</span> שהתגית שלו הוזזה לקוד אחר. שימו לב ל-<code>uv.lock</code> שלכם: <code>confluent-kafka 2.16.2</code> הועלה ל-PyPI באותו בוקר שבו פרק 12 נעל אותו (השדה <code>upload-time</code>). גרסה בת שעות לא נבדקה עדיין על ידי אף אחד. יש צוותים שמחכים כמה ימים לפני שהם מאמצים גרסה חדשה (<code>uv lock --exclude-newer &lt;date&gt;</code> עושה את זה). לא נשנה את הנעילה הזו עכשיו, אבל עכשיו אתם יודעים לשאול.</p>
+<p>ב-CI, תגית כמו <code>actions/checkout@v7</code> היא שם שאפשר להזיז. <span class="en">Commit</span> לא. לכן כל <span class="en">action</span> ננעץ עכשיו ל-<span class="en">commit</span>, עם התגית בהערה. את ה-<span class="en">commit</span> של תגית מוצאים כך:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git ls-remote --tags https://github.com/actions/checkout.git refs/tags/v7.0.1</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output, and the line in ci.yml</span></div>
+<pre><code>3d3c42e5aac5ba805825da76410c181273ba90b1	refs/tags/v7.0.1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1</code></pre>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.9</span>תעבורה: HTTPS ו-CORS</h2>
+
+<p><strong>HTTPS</strong> הוא HTTP בתוך <strong>TLS</strong>: הצפנה (מי שבדרך לא קורא), שלמות (לא משנה), וזהות (תעודה שמוכיחה שזה באמת השרת). בלעדיו, כל מי שברשת (Wi-Fi בבית קפה, ספק, נתב) קורא את <code>X-API-Key</code> ואת ההודעות. אצלנו הכול על <code>127.0.0.1</code>, ולכן HTTP מספיק. בייצור, ה-TLS בדרך כלל <strong>מסתיים בקצה</strong>: ה-<span class="en">load balancer</span> או הפלטפורמה (Cloud Run, למשל, פרק 10) מחזיקים את התעודה, ומשם התעבורה ממשיכה פנימה. ופנימה זה חשוב: "הרשת הפנימית בטוחה" היא הנחה שנשברת בפריצה הראשונה. ארגונים רבים מצפינים גם בין שירותים (<span class="en">mTLS</span>, שבו גם הלקוח מציג תעודה, וזו גם דרך טובה יותר לזהות את הצ'אט מול שירות ההערות מאשר מפתח משותף). בסיסי נתונים, Kafka ו-Redis תומכים כולם ב-TLS.</p>
+
+<p><strong>CORS</strong> (<span class="en">Cross-Origin Resource Sharing</span>): דפדפן לא נותן לדף מאתר אחד לקרוא תשובות מאתר אחר, אלא אם האתר השני מרשה זאת בכותרות. בלי זה, כל אתר שתבקרו בו היה יכול לשלוח בקשות לשירותים שלכם בשמכם ולקרוא את התשובות. הדף שלנו מוגש מאותו מקור כמו ה-API, ולכן לא צריך CORS בכלל, ולא הדלקנו אותו. אם יום אחד דף מדומיין אחר יצטרך גישה, מרשים בדיוק את המקור הזה (<code>CORSMiddleware</code> עם <code>allow_origins</code> מפורש), ולעולם לא <code>"*"</code> יחד עם הרשאות.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.10</span>מידע אישי</h2>
+
+<p><strong>מידע אישי</strong> הוא כל מידע על אדם מזוהה או שאפשר לזהות: שם, מייל, טלפון, כתובת IP, ומה שאנשים כותבים לצ'אט ("תוצאות בדיקת הדם שלי חזרו"). אצלנו: ההודעות, ההערות, ובמידה פחותה גם מזהי שיחות ושעות, שמקשרים פעולות לאדם. חמישה עקרונות:</p>
+<ul>
+  <li><strong>מזעור</strong> (<span class="en">data minimization</span>): לא אוספים מה שלא צריך. האירועים ב-Kafka נושאים <code>user_chars</code>, לא את הטקסט; המדדים סופרים, לא מצטטים.</li>
+  <li><strong>לא בלוג.</strong> בדקתם ב-14.1: אפס שורות עם תוכן או מפתח, והבדיקה מתרגיל 5 של פרק 13 שומרת על זה. מפתח בלוג הוא דליפה של סוד, ותוכן בלוג הוא עותק נוסף של מידע אישי, במקום שנשמר זמן רב ושיותר אנשים קוראים.</li>
+  <li><strong>שמירה ומחיקה</strong> (<span class="en">retention</span>): מחליטים כמה זמן שומרים, ומוחקים אחרי זה. ה-<span class="en">saga</span> של פרק 12 היא המנגנון של "הזכות להימחק": היא מוחקת הודעות, הערות, ושורת השימוש של ה-<span class="en">worker</span>. מה שהיא לא מגיעה אליו: אירועים ב-Kafka (7 ימים), לוגים, וגיבויים. אלה צריכים תקופה מוגדרת.</li>
+  <li><strong>הצפנה</strong>: בתעבורה (TLS, 14.9) ובמנוחה (<span class="en">encryption at rest</span>: דיסקים ובסיסי נתונים מוצפנים, כברירת מחדל אצל רוב ספקי הענן).</li>
+  <li><strong>שקיפות</strong>: לומר למשתמשים מה נשמר, כמה זמן, ולמי זה נשלח. כאן, למשל, הטקסט נשלח לספק המודל.</li>
+</ul>
+<p>חוקים בעולם מחייבים חלק מזה: ה-<span class="en">GDPR</span> באירופה, וחוק הגנת הפרטיות בישראל, למשל. מה בדיוק הם דורשים משירות מסוים, ומתי, זו שאלה לעורך דין. מה שכתוב כאן אינו ייעוץ משפטי. אבל מערכת שבנויה לפי חמשת העקרונות האלה מוכנה לרוב מה שחוק כזה ישאל.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.11</span><span class="en">CI</span>, <span class="en">deploy</span>, וגרסה 0.14.0</h2>
+
+<p>ב-<code>ci.yml</code>, <span class="en">job</span> רביעי, <code>security</code>: <span class="en">checkout</span> עם <code>fetch-depth: 0</code> (כל ההיסטוריה, כי סוד ב-<span class="en">commit</span> ישן עדיין דלף), <code>gitleaks/gitleaks-action</code> (חינם למאגרים של משתמש פרטי; ארגון צריך רישיון חינמי מהם), ו-<code>uv audit --locked</code> בשני הפרויקטים. ה-<span class="en">actions</span> נעוצים ל-<span class="en">commits</span>, ו-actionlint נקי. <code>ci_local.py</code> מדלג על ה-<span class="en">action</span> של gitleaks (הוא של GitHub בלבד) ומריץ את שתי הבדיקות; את gitleaks מריצים מקומית ביד.</p>
+<p>ב-<code>deploy\</code>: ה-<code>api</code> מקבל רק <span class="en">hashes</span> (<code>AGENT_API_KEYS_FILE</code>, מהקובץ <code>api_clients.txt</code>), ו-<code>deploy.py</code> משתמש ב-<code>deploy_key.txt</code>, שלא יוצא מהמחשב שלכם. <code>make_secrets.py</code> יוצר את שניהם. ה-<span class="en">worker</span> מקבל <code>APP_ENV</code>: בפרק 13 כתבתם ש-<span class="en">fault injection</span> צריך להיחסם בסביבות אמיתיות, ושירות ההערות אכן מסרב לו ב-<code>prod</code>, אבל <code>WORKER_CRASH_BEFORE_COMMIT</code> לא נבדק בכלל. עכשיו גם הוא מסרב. גרסה 0.14.0, שירות ההערות 0.3.1 (רק ה-<code>Dockerfile</code> השתנה), ו-<code>CHANGELOG.md</code> משחרר גם את התיקון מתרגיל 4 של פרק 13 שחיכה תחת <span class="en">Unreleased</span>. <span class="en">Merge</span>, תגית <code>v0.14.0</code>.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.12</span>תרגילים</h2>
+
+<p>על compose מהדוגמה המודרכת. שינויי קוד על ענף, עם שורה תחת <span class="en">Unreleased</span>. פתרונות <a href="solutions/chapter-14.html">בדף נפרד</a>. בכל התרגילים, המטרה היא המערכת שלכם על המחשב שלכם בלבד.</p>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · מפתח שנמחק ולא נעלם</h3><span class="level">מודרך</span></div>
+  <p>על ענף <code>try/leak</code>, הכניסו ל-<code>.env.example</code>, אחרי <code>ANTHROPIC_API_KEY=</code>, את המפתח המזויף הזה (הוא בצורה של מפתח אמיתי, ואומר על עצמו שהוא לא):</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$fake = "sk-ant-api03-" + ("example-not-a-real-key-" * 5).Substring(0, 93) + "AA"
+(Get-Content .env.example) -replace '^ANTHROPIC_API_KEY=$', "ANTHROPIC_API_KEY=$fake" | Set-Content .env.example -Encoding ascii</code></pre>
+</div>
+  <p><span class="en">Commit</span>. אחר כך החזירו את השורה לריקה, ועוד <span class="en">commit</span>. הריצו <code>gitleaks git -v --redact .</code>. חזרו ל-<code>main</code>, מחקו את הענף (<code>git branch -D try/leak</code>), והריצו שוב. ולבסוף: <code>git reflog | Select-Object -First 3</code>, ו-<code>git show &lt;the first commit&gt;:.env.example</code>.</p>
+  <label class="answer-label" for="n-ex1">מה מצא הסורק כשהקובץ כבר היה נקי, ולמה? מה הוא מצא אחרי מחיקת הענף, והאם המפתח באמת נעלם? אילו מהצעדים של 14.3 הייתם עושים, ובאיזה סדר, אילו הענף היה נדחף ל-GitHub?</label>
+  <textarea class="answer" id="n-ex1" data-id="c14-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c14-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · שורה אחת של <code>innerHTML</code></h3><span class="level">מודרך</span></div>
+  <p>ב-<code>agent\static\chat.html</code>, החליפו לרגע את <code>div.textContent = text;</code> ב-<code>div.innerHTML = text;</code>. הריצו את השרת בלי Docker (<code>uv run uvicorn agent.api:create_app --factory</code>), פתחו את <code>http://127.0.0.1:8000/</code>, הדביקו מפתח, ושלחו את ההודעה:</p>
+<div class="codebox">
+  <div class="label"><span>the message to send</span></div>
+<pre><code>&lt;img src=x onerror="document.title='stolen: '+sessionStorage.getItem('agent-key')"&gt;</code></pre>
+</div>
+  <p>הסתכלו על הכותרת של הלשונית. טענו את הדף מחדש. אחר כך החזירו את <code>textContent</code> ושלחו שוב.</p>
+  <label class="answer-label" for="n-ex2">מה הופיע בכותרת, ומאיפה? למה זה קרה פעמיים בכל שליחה, ומה קרה בטעינה מחדש? במקום <code>document.title</code>, מה היה יכול לעשות תוקף עם השורה הזו, ואיך היא הייתה מגיעה למשתמש אחר?</label>
+  <textarea class="answer" id="n-ex2" data-id="c14-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c14-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · השאילתה הבטוחה</h3><span class="level mid">בינוני</span></div>
+  <p>ב-<code>scripts\injection_lab.py</code>, מחקו את גוף <code>find_safe</code> וכתבו אותו בעצמכם, עם פרמטר (<code>?</code> ב-<code>sqlite3</code>). הריצו עם <code>"Dana"</code>, עם <code>"x' OR '1'='1"</code>, ועם <code>"Dana'; DROP TABLE users; --"</code>. אחר כך חפשו בפרויקט כל מקום שבו SQL נכתב כטקסט: <code class="wrap">Select-String -Path agent\*.py, scripts\*.py, migrations\versions\*.py -Pattern '\btext\(|execute\("' -CaseSensitive</code>.</p>
+  <label class="answer-label" for="n-ex3">מה עשה הקלט השלישי בכל אחת מהגרסאות? אילו מקומות בפרויקט כותבים SQL כטקסט, והאם יש בהם קלט מבחוץ?</label>
+  <textarea class="answer" id="n-ex3" data-id="c14-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c14-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · משתמש בסיס נתונים לאפליקציה בלבד</h3><span class="level mid">בינוני</span></div>
+  <p>ב-<code>db</code> של compose: בדקו אם <code>agent</code> הוא <span class="en">superuser</span> (<code>SELECT rolname, rolsuper FROM pg_roles</code>). צרו משתמש <code>agent_app</code> עם סיסמה מקומית, ותנו לו <code>SELECT, INSERT, UPDATE, DELETE</code> על כל הטבלאות, <code>USAGE</code> על ה-<span class="en">sequences</span>, ואותו דבר כברירת מחדל לטבלאות ש-<code>agent</code> ייצור בעתיד (<code>ALTER DEFAULT PRIVILEGES FOR ROLE agent ...</code>). התחברו כ-<code>agent_app</code> (<code>docker compose exec db psql -U agent_app -d agent</code>) ונסו לקרוא, למחוק טבלה ולהוסיף עמודה. ולבסוף, הריצו את ה-<code>api</code> עם <code>DATABASE_URL</code> של <code>agent_app</code> ושלחו הודעה.</p>
+  <label class="answer-label" for="n-ex4">מה הצליח ומה נכשל, ובאיזו הודעה? למה <code>migrate</code> חייב להישאר עם <code>agent</code>? מה עוד היה צריך לשנות כדי שזה יעבוד גם על <span class="en">volume</span> חדש, וגם ב-<code>deploy\</code>?</label>
+  <textarea class="answer" id="n-ex4" data-id="c14-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c14-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · <span class="en">Image</span> בשני שלבים</h3><span class="level mid">בינוני</span></div>
+  <p>ה-<span class="en">image</span> של הצ'אט מכיל את <code>uv</code> (57 MB), שנחוץ רק בבנייה. כתבו את ה-<code>Dockerfile</code> מחדש כ-<span class="en">multi-stage build</span>: שלב ראשון <code>FROM python:3.13-slim AS build</code> שמתקין את ה-<code>.venv</code> עם <code>uv</code>, ושלב שני שמעתיק רק את <code>/app/.venv</code> (<code>COPY --from=build</code>) ואת הקוד. מדדו לפני ואחרי עם <code>docker image ls</code>, ובדקו ש-<code>uv</code> נעלם, שהמשתמש עדיין <code>app</code>, ושהשירות עולה. ואז הריצו את הבדיקות: האם <code>test_python_version.py</code> עדיין שומר על מה שהוא אמור לשמור?</p>
+  <label class="answer-label" for="n-ex5">כמה <span class="en">MB</span> חסכתם? למה ה-<code>.venv</code> עובד אחרי העתקה לשלב אחר (מה היה שובר אותו)? מה הבדיקה פספסה, ואיך תיקנתם? ומה עוד אפשר להוריד מה-<span class="en">image</span> (<span class="en">distroless</span>, למשל)?</label>
+  <textarea class="answer" id="n-ex5" data-id="c14-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c14-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · מודל האיום של המערכת</h3><span class="level open">פתוח</span></div>
+  <p>כתבו את <code>docs\security.md</code>: טבלת נכסים (איפה כל אחד, ולמה הוא חשוב), טבלת נקודות כניסה (מי מורשה, מה נבדק), גבולות האמון, מה נעשה בפרק הזה, ורשימת פערים ממוינת לפי חשיבות, כל אחד עם תיקון אפשרי. אל תשכחו את מה שהפרק לא סגר: Kafka, המפתח המשותף לשירות ההערות, משתמש בסיס הנתונים, TLS פנימי, ה-<span class="en">rate limit</span> בתהליך אחד, מפתחות שלא פגים, תקופות שמירה. הוסיפו קישור מ-<code>docs\architecture.md</code>.</p>
+  <label class="answer-label" for="n-ex6">איזה פער שמתם ראשון, ולמה דווקא הוא? איזו שאלה מארבע השאלות של 14.2 הכי קשה לענות עליה במערכת הזו?</label>
+  <textarea class="answer" id="n-ex6" data-id="c14-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c14-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.13</span>בדקו את עצמכם</h2>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c14-chk1"><span>אני יודע/ת לבנות מודל איום: נכסים, נקודות כניסה, גבולות אמון, וארבע השאלות.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c14-chk2"><span>אני יודע/ת מה עושים קודם כשסוד נכנס ל-git, ולמה מחיקה מההיסטוריה לא מספיקה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c14-chk3"><span>אני יודע/ת להסביר את ההבדל בין אימות להרשאה, עם דוגמה מהפרויקט.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c14-chk4"><span>אני יודע/ת למה שומרים <span class="en">hash</span> של מפתח, ולמה SHA-256 מספיק למפתח ולא לסיסמה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c14-chk5"><span>אני יודע/ת לתת שלוש דוגמאות ל-<span class="en">least privilege</span> במערכת הזו.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c14-chk6"><span>אני יודע/ת להסביר <span class="en">SQL injection</span> ו-<span class="en">XSS</span>, ואת השורה בקוד שמונעת כל אחת.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c14-chk7"><span>אני יודע/ת להריץ בדיקת תלויות, לקרוא ממצא, ולהסביר למה נועצים <span class="en">actions</span> ל-<span class="en">commit</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c14-chk8"><span>אני יודע/ת מה 429 ו-<code>Retry-After</code> אומרים, ולמה הגבלה בתהליך אחד לא מספיקה בכמה עותקים.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c14-chk9"><span>אני יודע/ת איפה TLS מסתיים בדרך כלל, ומה CORS מונע.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c14-chk10"><span>אני יודע/ת מה נחשב מידע אישי במערכת, איפה הוא נשמר, ומה מוחק אותו.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.14</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr><td>ה-<span class="en">worker</span> נופל עם <code>attempt to write a readonly database</code></td><td>ה-<span class="en">volume</span> נוצר כשה-<span class="en">worker</span> היה <code>root</code></td><td><code>docker compose run --rm --no-deps --user root worker chown -R app /data</code></td></tr>
+  <tr><td>ב-Prometheus, <code>api down</code> עם <code>server returned HTTP status 401 Unauthorized</code></td><td><code>METRICS_TOKEN</code> השתנה אחרי ש-Prometheus עלה, והוא עדיין שולח את הישן</td><td><code>docker compose --profile monitoring up -d --force-recreate api prometheus</code></td></tr>
+  <tr><td><code>/metrics</code> עונה 404</td><td><code>METRICS_TOKEN</code> לא מוגדר: המדדים כבויים בכוונה</td><td>הוסיפו אותו ל-<code>.env</code> והפעילו מחדש את ה-<code>api</code></td></tr>
+  <tr><td><code>Configuration error: AGENT_API_KEYS has a bad entry 'dana': expected name:&lt;64 hex characters&gt;.</code></td><td>במקום ה-<span class="en">hash</span> הודבק המפתח עצמו, או שהשורה נשברה</td><td>הדביקו את השורה השנייה של <code>new_key.py</code>, <code>name:</code> ועוד 64 תווים</td></tr>
+  <tr><td>דנה מקבלת 401 עם המפתח החדש</td><td>ה-<code>api</code> קורא את <code>AGENT_API_KEYS</code> רק בעלייה</td><td><code>docker compose up -d --wait api</code></td></tr>
+  <tr><td>הדף לא טוען את השיחות הישנות אחרי השדרוג</td><td>המפתח בדף שייך ללקוח אחר, או ש-0007 לא רץ (השיחות בלי בעלים)</td><td>הדביקו את <code>AGENT_API_KEY</code>; <code>docker compose run --rm migrate</code></td></tr>
+  <tr><td>422 עם <code>String should match pattern</code></td><td>מזהה שיחה מגרסה ישנה של לקוח, או מזהה שהוקלד ביד</td><td>מזהים הם 32 תווי <span class="en">hex</span>; השמיטו אותו כדי לפתוח שיחה חדשה</td></tr>
+  <tr><td><code>gitleaks : The term 'gitleaks' is not recognized</code></td><td>התיקייה לא ב-<code>Path</code> של החלון הזה</td><td><code>$env:Path += ";$HOME\tools\gitleaks"</code>, או הוסיפו ל-<code>Path</code> של המשתמש בהגדרות Windows</td></tr>
+  <tr><td><code>gitleaks dir</code> מוצא "סודות" ב-<code>.venv</code></td><td>קוד של חבילות שנראה כמו מפתח</td><td>סרקו את git (<code>gitleaks git</code>), לא את התיקייה</td></tr>
+  <tr><td><code>uv audit</code> נכשל בשגיאת רשת</td><td>הבדיקה שואלת את OSV באינטרנט</td><td>בדקו חיבור או <span class="en">proxy</span>; ב-CI זה רץ בכל מקרה</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.15</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>threat model</dt><dd>מפה של מה מגינים עליו, מאיפה נכנסים, ואיפה עוברים גבולות אמון.</dd>
+  <dt>trust boundary</dt><dd>מקום שבו נתונים עוברים ממי שלא סומכים עליו למי שכן; שם בודקים.</dd>
+  <dt>secret scanning</dt><dd>חיפוש אוטומטי של מפתחות וסיסמאות בקוד ובהיסטוריה (gitleaks).</dd>
+  <dt>rotation</dt><dd>החלפת סוד בחדש וביטול הישן, בלי להפיל את מי שמשתמש בו.</dd>
+  <dt>pre-commit hook</dt><dd>סקריפט ש-git מריץ לפני כל commit, ועוצר אותו אם הוא נכשל.</dd>
+  <dt>authentication</dt><dd>אימות: מי אתה.</dd>
+  <dt>authorization</dt><dd>הרשאה: מה מותר לך.</dd>
+  <dt>least privilege</dt><dd>לתת לכל רכיב רק את ההרשאות שהוא צריך.</dd>
+  <dt>hash</dt><dd>פונקציה חד-כיוונית: מהמפתח קל לחשב, מהתוצאה אי אפשר לחזור למפתח.</dd>
+  <dt>OAuth 2.0 / JWT</dt><dd>תקן להנפקת אסימונים על ידי שירות זהות; אסימון JSON חתום, עם תוקף.</dd>
+  <dt>SQL injection</dt><dd>קלט שמשנה את טקסט השאילתה; נמנע עם פרמטרים.</dd>
+  <dt>XSS</dt><dd>קלט שהופך לקוד שרץ בדפדפן; נמנע כשמציגים טקסט כטקסט.</dd>
+  <dt>prompt injection</dt><dd>טקסט שמנסה לגרום למודל לעשות משהו שלא התכוונתם (פרק 21).</dd>
+  <dt>CVE</dt><dd>מזהה ציבורי של חולשה ידועה בתוכנה.</dd>
+  <dt>supply chain</dt><dd>כל מה שהקוד סומך עליו בדרך: חבילות, images, actions.</dd>
+  <dt>rate limiting</dt><dd>הגבלת מספר הבקשות לזמן; מעבר לזה 429 עם Retry-After.</dd>
+  <dt>TLS / HTTPS</dt><dd>הצפנה, שלמות וזהות לחיבור; HTTPS הוא HTTP בתוכו.</dd>
+  <dt>CORS</dt><dd>הכללים שבהם אתר מרשה לדפים מאתר אחר לקרוא ממנו.</dd>
+  <dt>personal data</dt><dd>מידע על אדם מזוהה או שאפשר לזהות.</dd>
+  <dt>retention</dt><dd>כמה זמן שומרים מידע, ומתי מוחקים אותו.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">14.16</span>מה הלאה</h2>
+
+<p>המערכת בנויה: שני שירותים, בסיסי נתונים, אירועים, CI, סביבות, ניטור, ועכשיו גם מי מורשה למה. כל זה נבנה כאן על ידי אדם אחד, עם ספר שאומר מה הצעד הבא. בעבודה אמיתית אין ספר: יש צוות. מישהו מבקש משהו במשפט אחד בצ'אט, ואתם צריכים להבין מה בדיוק, לכתוב את זה כמשימה, להחליט לפני שכותבים קוד אם צריך מסמך תכנון, להעריך כמה זמן זה ייקח (ולטעות בצורה סבירה), ולהשאיר אחריכם תיעוד שמישהו אחר יבין.</p>
+
+<p>משימות (<span class="en">tickets</span>), מסמך תכנון קצר, הערכות זמן ותיעוד, וכרטיס אחד שאתם לוקחים מהתיאור ועד <span class="en">pull request</span> ממוזג: <strong>פרק 15: עבודה בצוות</strong>.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-14</code> נמצא הפרויקט בסוף הפרק, אחרי כל התרגילים, בלי <code>.git</code> ובלי סודות, כולל <code>docs\security.md</code> וה-<code>Dockerfile</code> בשני שלבים. עם <code>db</code> של compose למעלה, <code>uv run --locked python scripts/ci_local.py</code> מריץ 142 בדיקות בצ'אט ו-12 בשירות ההערות, שני <span class="en">images</span> שמדפיסים <code>0.14.0</code> ו-<code>0.3.1</code>, ושתי בדיקות תלויות נקיות.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-14.html">פתרונות לפרק 14</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

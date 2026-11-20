@@ -1,0 +1,36 @@
+# Secrets and private settings: never commit these
+.env
+
+# The virtual environment is rebuilt from uv.lock with `uv sync`
+.venv/
+
+# Files Python generates while running
+__pycache__/
+*.pyc
+
+# Log files the agent writes while it runs
+*.log
+# ...except the saved incident evidence, which is part of the project
+!examples/incident/*.log
+
+# Editor settings that belong to one person
+.vscode/
+.idea/
+
+# Local databases (SQLite files) and their temporary journal files
+*.db
+*.db-journal
+
+# The type checker's cache (mypy writes it on every run)
+.mypy_cache/
+
+# The secrets of the deployed environments (scripts/make_secrets.py)
+deploy/secrets/
+
+# Reports written by pipelines/usage_report.py
+reports/
+
+# Traces of agent runs (CHAT_TRACE_DIR, and failed eval runs) and saved eval results: they
+# hold what users asked and what tools returned
+traces/
+evals/results/

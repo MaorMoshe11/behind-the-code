@@ -1,0 +1,74 @@
+# Alert rules. Each one watches a symptom that users (or the data) feel, not every cause.
+# severity "page": wake someone up now. severity "ticket": look at it during working hours.
+# Every alert links to its entry in docs/runbook.md: what it means, what to check, what to do.
+groups:
+  - name: my-agent
+    rules:
+      - alert: ApiDown
+        # No data is not "no errors": if Prometheus cannot reach the api, nothing is counted.
+        expr: up{job="api"} == 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: Prometheus cannot reach the chat api.
+          runbook_url: docs/runbook.md#apidown
+
+      - alert: ChatErrors
+        expr: |
+          sum(rate(http_requests_total{route=~"/chat|/conversations.*", status=~"5.."}[5m]))
+            / sum(rate(http_requests_total{route=~"/chat|/conversations.*"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: More than 5% of chat requests fail.
+          runbook_url: docs/runbook.md#chaterrors
+
+      - alert: ChatSlow
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket{route="/chat"}[5m]))) > 3
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: One chat request in twenty takes more than 3 seconds.
+          runbook_url: docs/runbook.md#chatslow
+
+      - alert: NotesFailing
+        expr: |
+          sum(rate(notes_calls_total{outcome!="ok"}[5m]))
+            / sum(rate(notes_calls_total[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: More than 10% of calls to the notes service fail or are refused.
+          runbook_url: docs/runbook.md#notesfailing
+
+      - alert: SagaCompensationFailed
+        # One is enough: the data is now inconsistent, and only a person can fix it.
+        expr: increase(sagas_total{outcome="compensation_failed"}[15m]) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: A saga could not undo its steps. Some data is half changed.
+          runbook_url: docs/runbook.md#sagacompensationfailed
+
+      - alert: EventsLost
+        expr: increase(chat_events_total{outcome="lost"}[15m]) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: Events were never delivered to Kafka; the usage statistics miss them.
+          runbook_url: docs/runbook.md#eventslost
+
+      - alert: WorkerBehind
+        expr: max(worker_consumer_lag) > 100
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: The usage worker is more than 100 events behind, and not catching up.
+          runbook_url: docs/runbook.md#workerbehind

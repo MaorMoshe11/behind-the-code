@@ -1,0 +1,13 @@
+# Secrets and private settings: never commit these
+.env
+
+# The virtual environment is rebuilt from uv.lock with `uv sync`
+.venv/
+
+# Files Python generates while running
+__pycache__/
+*.pyc
+
+# Editor settings that belong to one person
+.vscode/
+.idea/

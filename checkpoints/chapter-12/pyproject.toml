@@ -1,0 +1,41 @@
+[project]
+name = "my-agent"
+version = "0.12.0"
+requires-python = ">=3.12"
+dependencies = [
+    "alembic>=1.20.1",
+    "anthropic>=2.10.0",
+    "confluent-kafka>=2.16.2",
+    "fastapi>=0.163.2",
+    "httpx2>=2.16.2",
+    "psycopg[binary]>=3.3.9",
+    "python-dotenv>=1.2.4",
+    "rich>=15.0.0",
+    "sqlalchemy>=2.1.9",
+    "uvicorn>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=2.4.1",
+    "pytest>=9.2.0",
+    "pyyaml>=6.0.3",
+    "ruff>=0.17.5",
+    "types-pyyaml>=6.0.12.20261113",
+]
+
+[tool.pytest.ini_options]
+# Let the tests import the `agent` package from the project folder.
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# E/F: errors and likely bugs, I: import order, B: common bug patterns, UP: modern syntax
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+# Every function in the agent package must say what it takes and what it returns.
+strict = true

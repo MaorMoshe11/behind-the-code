@@ -1,0 +1,689 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 1 · סביבת העבודה | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="01">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 1 · סביבת העבודה</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 1 מתוך 21</div>
+  <h1>סביבת העבודה</h1>
+  <p class="lead">איך לוקחים קובץ <code>.py</code> שמישהו שלח לכם, וגורמים לו לרוץ אצלכם, אצל חבר, ובעוד שנה, בדיוק באותה צורה.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>לנוע בין תיקיות ולהריץ פקודות ב-<span class="en">terminal</span> בלי לפחד ממנו.</li>
+    <li>להסביר מה זה <span class="en">virtual environment</span> ולמה לכל פרויקט יש אחד משלו.</li>
+    <li>לנהל את החבילות של פרויקט עם <code>uv</code>, ולהבין מה התפקיד של <code>pyproject.toml</code> ושל <code>uv.lock</code>.</li>
+    <li>להעביר הגדרות וסודות לתוכנית דרך <span class="en">environment variables</span> וקובץ <code>.env</code>.</li>
+    <li>לעצור תוכנית באמצע ריצה עם ה-<span class="en">debugger</span> ולהסתכל מה יש במשתנים.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> שלוש עד ארבע שעות, כולל התרגילים. <strong>מה צריך:</strong> מחשב עם Windows 10 או 11 וחיבור לאינטרנט. לא צריך כרטיס אשראי, כי כל הפרק עובד גם במצב <span class="en">mock</span> שאינו עולה כסף.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.1</span>הבעיה: "אצלי זה עובד"</h2>
+
+<p>אתם כבר יודעים לכתוב Python. כנראה כתבתם אותו ב-<span class="en">notebook</span>, ב-Colab, או בסביבה שמישהו אחר הכין בשבילכם. הקוד רץ, ולא הייתם צריכים לשאול <em>איפה</em> הוא רץ ועם <em>אילו</em> חבילות.</p>
+
+<p>עכשיו דמיינו שעמית שולח לכם קובץ אחד, <code>chat.py</code>, וכותב: "זה סוכן צ'אט קטן שעובד עם Claude, תריצו ותגידו מה דעתכם". אתם מריצים, ומקבלים את זה:</p>
+
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Traceback (most recent call last):
+  File "C:\Users\you\projects\my-agent\chat.py", line 16, in &lt;module&gt;
+    import anthropic
+ModuleNotFoundError: No module named 'anthropic'</code></pre>
+</div>
+
+<p>אצל העמית הקוד עובד. אצלכם לא. הקוד זהה, ולכן ההבדל חייב להיות במשהו שנמצא <em>מסביב</em> לקוד. לדבר הזה קוראים <strong>סביבה</strong> (<span class="en">environment</span>), והיא מורכבת מארבעה דברים:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה</th><th>השאלה שהוא עונה עליה</th><th>איך זה נשבר</th></tr>
+  <tr><td>גרסת Python</td><td>איזה <span class="en">interpreter</span> מריץ את הקוד?</td><td>הקוד משתמש בתחביר של 3.12 ואצלכם מותקן 3.9</td></tr>
+  <tr><td>חבילות (<span class="en">packages</span>)</td><td>אילו ספריות חיצוניות מותקנות, ובאילו גרסאות?</td><td>החבילה לא מותקנת, או מותקנת בגרסה אחרת שמתנהגת אחרת</td></tr>
+  <tr><td>משתני סביבה</td><td>אילו הגדרות וסודות התוכנית מקבלת מבחוץ?</td><td>חסר מפתח <span class="en">API</span>, או שהוא מצביע לחשבון אחר</td></tr>
+  <tr><td>תיקיית העבודה</td><td>מאיפה התוכנית הופעלה?</td><td>הקוד פותח קובץ בנתיב יחסי, והקובץ לא שם</td></tr>
+</table>
+</div>
+
+<p>הפרק הזה עובר על ארבעתם. בסופו <code>chat.py</code> ירוץ אצלכם, ויותר חשוב: תהיה לכם תיקייה שכל אדם אחר יכול לקחת ולהריץ בשתי פקודות. זו ההגדרה של פרויקט, להבדיל מקובץ.</p>
+
+<div class="callout">
+  <span class="title">הפרויקט שילווה אתכם בכל החוברת</span>
+  <p>הקובץ <code>chat.py</code> הוא נקודת ההתחלה של סוכן צ'אט שתבנו לאורך 21 הפרקים. היום הוא קובץ אחד שרץ ב-<span class="en">terminal</span>. בהמשך הוא יקבל בדיקות, <span class="en">API</span>, בסיס נתונים שזוכר שיחות, כלים שהוא יכול להפעיל, יפוצל לכמה שירותים שמדברים ביניהם, ובחלק האחרון יהפוך למערכת של כמה סוכנים שעובדים יחד. כל פרק מוסיף שכבה אחת, ורק אחרי שהרגשתם למה היא נחוצה.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.2</span>המפה: מה עוטף את הקוד שלכם</h2>
+
+<p>לפני שמתקינים משהו, כדאי לראות את התמונה כולה. כשאתם מריצים תוכנית Python, היא יושבת בתוך כמה שכבות, כל אחת בתוך הקודמת:</p>
+
+<div class="diagram">
+  <div class="layers">
+    <div class="layer">
+      <div class="name">Your computer (Windows)</div>
+      <div class="what">מערכת ההפעלה: קבצים, תיקיות, רשת</div>
+      <div class="inner">
+        <div class="layer l2">
+          <div class="name">Terminal (PowerShell)</div>
+          <div class="what">חלון שבו מקלידים פקודות. לכל חלון יש תיקיית עבודה ומשתני סביבה משלו</div>
+          <div class="inner">
+            <div class="layer l3">
+              <div class="name">Project folder: my-agent\</div>
+              <div class="what">כל מה ששייך לפרויקט אחד</div>
+              <div class="inner">
+                <div class="row">
+                  <div class="layer l4">
+                    <div class="name">.venv\</div>
+                    <div class="what">ה-virtual environment: עותק פרטי של Python והחבילות של הפרויקט הזה בלבד</div>
+                  </div>
+                  <div class="layer l4">
+                    <div class="name">chat.py</div>
+                    <div class="what">הקוד שלכם</div>
+                  </div>
+                  <div class="layer l4">
+                    <div class="name">.env</div>
+                    <div class="what">הגדרות וסודות, נטענים כמשתני סביבה</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="caption">כל שכבה היא מקום שבו "אצלי זה עובד" יכול להישבר. הפרק עובר עליהן מבחוץ פנימה.</div>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.3</span>ה-terminal</h2>
+
+<p>ה-<span class="en">terminal</span> הוא חלון שבו מקלידים פקודה, לוחצים <kbd>Enter</kbd>, ומקבלים תשובה בטקסט. כל הכלים שתפגשו בחוברת (<code>git</code>, <code>uv</code>, <code>docker</code>) מופעלים ממנו. גם שרתים בענן מנוהלים כך, כי אין להם מסך. לכן זה הכלי הראשון.</p>
+
+<p>ב-Windows נשתמש ב-<strong>PowerShell</strong>. כדי לפתוח: לחצו על מקש <kbd>Win</kbd>, הקלידו <code>terminal</code>, ולחצו <kbd>Enter</kbd>. תראו שורה כזו:</p>
+
+<div class="codebox output">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>PS C:\Users\you&gt; </code></pre>
+</div>
+
+<p>השורה הזו נקראת <span class="en">prompt</span>. החלק <code>C:\Users\you</code> הוא <strong>תיקיית העבודה</strong> (<span class="en">working directory</span>): המקום שבו אתם "עומדים" כרגע. כל פקודה שתריצו פועלת ביחס אליו. בדוגמאות בחוברת לא מקלידים את <code>PS ...&gt;</code>, רק את מה שבא אחריו.</p>
+
+<h3>שש הפקודות שמספיקות ל-90% מהזמן</h3>
+
+<div class="table-wrap">
+<table>
+  <tr><th>פקודה</th><th>מה היא עושה</th><th>דוגמה</th></tr>
+  <tr><td><code>pwd</code></td><td>מדפיסה איפה אתם עומדים</td><td><code>pwd</code></td></tr>
+  <tr><td><code>ls</code></td><td>מציגה את הקבצים והתיקיות כאן</td><td><code>ls</code></td></tr>
+  <tr><td><code>cd</code></td><td>עוברת לתיקייה אחרת</td><td><code>cd projects</code></td></tr>
+  <tr><td><code>mkdir</code></td><td>יוצרת תיקייה חדשה</td><td><code>mkdir my-agent</code></td></tr>
+  <tr><td><code>cat</code></td><td>מדפיסה תוכן של קובץ טקסט</td><td><code>cat chat.py</code></td></tr>
+  <tr><td><code>cp</code></td><td>מעתיקה קובץ</td><td><code>cp .env.example .env</code></td></tr>
+</table>
+</div>
+
+<h3>נתיבים: מוחלט ויחסי</h3>
+
+<p><strong>נתיב מוחלט</strong> (<span class="en">absolute path</span>) מתחיל מהכונן ונכון מכל מקום: <code>C:\Users\you\projects\my-agent</code>. <strong>נתיב יחסי</strong> (<span class="en">relative path</span>) מתחיל מהמקום שבו אתם עומדים: אם אתם ב-<code>C:\Users\you</code>, אז <code>projects\my-agent</code> מוביל לאותה תיקייה.</p>
+
+<p>שלושה קיצורים שכדאי לזכור: <code>.</code> היא התיקייה הנוכחית, <code>..</code> היא התיקייה שמעליה, ו-<code>~</code> היא תיקיית הבית שלכם (<code>C:\Users\you</code>).</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~              <span class="cm"># go to your home folder</span>
+mkdir projects    <span class="cm"># create a folder for all your code</span>
+cd projects
+pwd               <span class="cm"># C:\Users\you\projects</span>
+cd ..             <span class="cm"># one level up, back to C:\Users\you</span></code></pre>
+</div>
+
+<div class="callout good">
+  <span class="title">שני הרגלים שחוסכים המון הקלדה</span>
+  <p>מקש <kbd>Tab</kbd> משלים שמות של קבצים ותיקיות: הקלידו <code>cd pro</code> ולחצו <kbd>Tab</kbd>. מקש חץ למעלה <kbd>↑</kbd> מחזיר את הפקודה הקודמת, כך שאין צורך להקליד שוב פקודה שכבר הרצתם.</p>
+</div>
+
+<div class="callout warn">
+  <span class="title">אל תשימו פרויקטים בתוך OneDrive</span>
+  <p>ב-Windows, התיקיות Desktop ו-Documents מסונכרנות לעיתים קרובות ל-OneDrive. פרויקט קוד מכיל אלפי קבצים קטנים שמשתנים כל הזמן, והסנכרון מאט אותו ולפעמים נועל קבצים. לכן עובדים בתיקייה <code>C:\Users\you\projects</code>, שאינה מסונכרנת.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.4</span>מתקינים את הכלים</h2>
+
+<p>צריך שלושה כלים. ב-Windows יש מנהל התקנות מובנה בשם <code>winget</code>, אז מתקינים את שלושתם מה-<span class="en">terminal</span>:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>winget install --id astral-sh.uv -e
+winget install --id Git.Git -e
+winget install --id Microsoft.VisualStudioCode -e</code></pre>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th>כלי</th><th>מה התפקיד שלו</th><th>מתי נשתמש</th></tr>
+  <tr><td><code>uv</code></td><td>מתקין את Python עצמו, יוצר <span class="en">virtual environments</span>, ומנהל חבילות</td><td>כבר בפרק הזה</td></tr>
+  <tr><td><code>git</code></td><td>שומר היסטוריה של הקוד ומאפשר לעבוד עליו עם אחרים</td><td>פרק 2</td></tr>
+  <tr><td>VS Code</td><td>עורך קוד עם <span class="en">debugger</span> ו-<span class="en">terminal</span> מובנה</td><td>כבר בפרק הזה</td></tr>
+</table>
+</div>
+
+<p><strong>סגרו את חלון ה-terminal ופתחו חדש.</strong> חלון שהיה פתוח בזמן ההתקנה לא מכיר את הכלים החדשים. אחר כך ודאו שהכול הותקן:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv --version
+git --version
+code --version</code></pre>
+</div>
+
+<p>כל פקודה צריכה להדפיס מספר גרסה. אם אחת מהן מחזירה <span class="en">"is not recognized"</span>, עברו לטבלת התקלות בסעיף 1.11.</p>
+
+<div class="callout">
+  <span class="title">ומה עם Python עצמו?</span>
+  <p>לא צריך להתקין אותו בנפרד. כש-<code>uv</code> צריך גרסת Python שאין במחשב, הוא מוריד אותה לבד. אם כבר יש לכם Python מותקן, זה בסדר גמור, <code>uv</code> ישתמש בו.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.5</span>דוגמה מודרכת: מקובץ לפרויקט</h2>
+
+<p>עכשיו עושים את זה ביחד, צעד אחרי צעד. הקלידו את הפקודות בעצמכם. המטרה של הסעיף היא שהידיים שלכם יכירו את התהליך.</p>
+
+<div class="step">
+  <h3><span class="step-num">1</span>יוצרים תיקייה ומביאים את הקבצים</h3>
+  <p>בתיקייה שבה נמצאת החוברת יש תיקייה בשם <code>starter</code> ובה שלושה קבצים. העתיקו אותם לתיקיית פרויקט חדשה. החליפו את הנתיב בשורה השלישית בנתיב שבו שמרתם את החוברת:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects
+mkdir my-agent
+cp C:\path\to\behind-the-code\starter\* my-agent
+cd my-agent
+ls</code></pre>
+</div>
+  <p>הפקודה <code>ls</code> צריכה להראות שלושה קבצים: <code>chat.py</code>, <code>debug_me.py</code> ו-<code>.env.example</code>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>מריצים, ונכשלים</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python chat.py</code></pre>
+</div>
+  <p>תקבלו את השגיאה מתחילת הפרק: <code>ModuleNotFoundError: No module named 'anthropic'</code>. קראו אותה מלמטה למעלה, כמו כל <span class="en">traceback</span> ב-Python: השורה האחרונה אומרת <em>מה</em> קרה (אין מודול כזה), והשורה שמעליה אומרת <em>איפה</em> (שורה 16, <code>import anthropic</code>).</p>
+  <p><code>anthropic</code> היא חבילה חיצונית. היא לא חלק מ-Python, מישהו צריך להתקין אותה. השאלה היא איפה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>למה לא פשוט <code>pip install</code>?</h3>
+  <p>הדרך המוכרת היא <code>pip install anthropic</code>. זה מתקין את החבילה ב-Python הראשי של המחשב, והיא משותפת לכל הפרויקטים שלכם. זה עובד עד שיש שני פרויקטים:</p>
+  <ul>
+    <li>פרויקט א' נכתב מול גרסה 1 של חבילה מסוימת.</li>
+    <li>פרויקט ב' צריך את גרסה 2 של אותה חבילה, שבה שינו שמות של פונקציות.</li>
+  </ul>
+  <p>אפשר להתקין רק גרסה אחת במקום אחד, ולכן אחד הפרויקטים יישבר. הפתרון הוא לתת לכל פרויקט מקום משלו: תיקייה בשם <code>.venv</code> בתוך הפרויקט, שמכילה עותק של Python ואת החבילות של הפרויקט הזה בלבד. זה ה-<strong><span class="en">virtual environment</span></strong>.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>הופכים את התיקייה לפרויקט</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv init --bare</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Initialized project `my-agent`</code></pre>
+</div>
+  <p>נוצר קובץ אחד חדש, <code>pyproject.toml</code>. זו "תעודת הזהות" של הפרויקט. הציגו אותו עם <code>cat pyproject.toml</code>:</p>
+<div class="codebox output">
+  <div class="label"><span>pyproject.toml</span></div>
+<pre><code>[project]
+name = "my-agent"
+version = "0.1.0"
+requires-python = "&gt;=3.12"
+dependencies = []</code></pre>
+</div>
+  <p>שימו לב לשתי שורות: <code>requires-python</code> קובעת איזו גרסת Python הפרויקט דורש (המספר אצלכם עשוי להיות שונה), ו-<code>dependencies</code> היא רשימת החבילות שהוא צריך. כרגע היא ריקה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>מוסיפים את החבילות</h3>
+  <p>הקוד מייבא שתי חבילות חיצוניות: <code>anthropic</code> (לדבר עם Claude) ו-<code>dotenv</code> (לקרוא קובץ <code>.env</code>, נגיע אליו מיד). שימו לב שהחבילה השנייה נקראת <code>python-dotenv</code> בהתקנה ו-<code>dotenv</code> ב-<code>import</code>. זה קורה לפעמים.</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv add anthropic python-dotenv</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Creating virtual environment at: .venv
+Resolved 19 packages in 1.2s
+Installed 17 packages in 480ms
+ + anthropic==2.10.0
+ + pydantic==2.14.3
+ + python-dotenv==1.2.4
+ ...</code></pre>
+</div>
+  <p>פקודה אחת עשתה שלושה דברים. הריצו <code>ls</code> ותראו מה נוסף:</p>
+  <div class="table-wrap">
+  <table>
+    <tr><th>מה נוצר או השתנה</th><th>מה יש בו</th><th>מי כותב אותו</th></tr>
+    <tr><td><code>pyproject.toml</code></td><td>שתי החבילות נוספו ל-<code>dependencies</code>, עם גרסה מינימלית: <code>"anthropic&gt;=2.10.0"</code></td><td>אתם (דרך <code>uv add</code>)</td></tr>
+    <tr><td><code>uv.lock</code></td><td>הגרסה <em>המדויקת</em> של כל חבילה שהותקנה, כולל חבילות שהחבילות שלכם צריכות</td><td>רק <code>uv</code>. לא עורכים ביד</td></tr>
+    <tr><td><code>.venv\</code></td><td>ה-<span class="en">virtual environment</span> עצמו: Python והחבילות המותקנות</td><td>רק <code>uv</code>. אפשר למחוק ולבנות מחדש</td></tr>
+  </table>
+  </div>
+  <p>ביקשתם שתי חבילות והותקנו שבע-עשרה. הסיבה: <code>anthropic</code> עצמה צריכה חבילות אחרות כדי לעבוד, והן צריכות עוד חבילות. לאלה קוראים <span class="en">transitive dependencies</span>, ו-<code>uv</code> מוצא ומתקין את כולן.</p>
+</div>
+
+<div class="callout">
+  <span class="title">למה שני קבצים, <code>pyproject.toml</code> וגם <code>uv.lock</code>?</span>
+  <p><code>pyproject.toml</code> אומר מה אתם <em>רוצים</em>: "anthropic, מגרסה 2.10.0 ומעלה". <code>uv.lock</code> מתעד מה <em>קיבלתם בפועל</em>: הגרסה המדויקת של כל אחת מהחבילות שהותקנו. מי שיבנה את הפרויקט מחר, או בעוד שנה, יקבל מה-<span class="en">lock file</span> בדיוק את אותן גרסאות, גם אם בינתיים יצאו חדשות. כך נפתרת הבעיה של "אצלי זה עובד".</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">6</span>מריצים שוב</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python chat.py</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>ANTHROPIC_API_KEY is not set.
+Put it in a .env file, or set CHAT_MOCK=1 to run without a key.</code></pre>
+</div>
+  <p>התקדמנו: ה-<code>import</code> הצליח, והשגיאה עכשיו אחרת. התוכנית מחפשת משהו בשם <code>ANTHROPIC_API_KEY</code> ולא מוצאת. זה משתנה סביבה, והוא הנושא של הסעיף הבא.</p>
+  <p>ומה עושה <code>uv run</code>? הוא מריץ את הפקודה שאחריו <em>בתוך</em> ה-<code>.venv</code> של הפרויקט. בלי <code>uv run</code>, הפקודה <code>python chat.py</code> הייתה משתמשת ב-Python הראשי של המחשב, שבו החבילות לא מותקנות. לפני הריצה, <code>uv run</code> גם בודק שה-<code>.venv</code> תואם ל-<code>uv.lock</code>, ומתקן אותו אם לא.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.6</span>משתני סביבה וקובץ <code>.env</code></h2>
+
+<p>פתחו את <code>chat.py</code> והסתכלו על השורות האלה:</p>
+
+<div class="codebox">
+  <div class="label"><span>chat.py</span></div>
+<pre><code>load_dotenv()
+
+MODEL = os.getenv("CHAT_MODEL", "claude-opus-5-5")
+MOCK = os.getenv("CHAT_MOCK", "0") == "1"</code></pre>
+</div>
+
+<p>התוכנית לא מחליטה בעצמה עם איזה מודל לעבוד. היא שואלת את הסביבה: "יש משתנה בשם <code>CHAT_MODEL</code>? אם לא, אשתמש בברירת המחדל". <strong>משתנה סביבה</strong> (<span class="en">environment variable</span>) הוא זוג של שם וערך, שנמצא מחוץ לקוד, וכל תוכנית שרצה יכולה לקרוא אותו.</p>
+
+<h3>למה לא לכתוב את הערכים בקוד?</h3>
+
+<ul>
+  <li><strong>סודות.</strong> מפתח <span class="en">API</span> הוא כמו סיסמה לחשבון הבנק. הקוד ישותף עם אחרים ויעלה ל-GitHub. אם המפתח כתוב בקוד, הוא משותף יחד איתו. זו אחת הטעויות הנפוצות והיקרות ביותר של מתכנתים מתחילים.</li>
+  <li><strong>אותו קוד, סביבות שונות.</strong> במחשב שלכם תרצו מצב <span class="en">mock</span>. בשרת האמיתי תרצו מודל אמיתי ומפתח של החברה. הקוד נשאר זהה ורק הסביבה משתנה. תפגשו את הרעיון הזה שוב בפרק 10, על <span class="en">deployment</span>.</li>
+</ul>
+
+<h3>דרך ראשונה: להגדיר ב-terminal</h3>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>$env:CHAT_MOCK = "1"       <span class="cm"># set a variable</span>
+$env:CHAT_MOCK             <span class="cm"># print its value</span>
+uv run python chat.py</code></pre>
+</div>
+
+<p>הפעם התוכנית עולה ואפשר לדבר איתה. הקלידו הודעה או שתיים, ואז <code>exit</code>:</p>
+
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Running in MOCK mode - answers are fake, nothing is sent to the API.
+Type a message and press Enter. Type 'exit' to quit.
+
+you&gt; hello
+agent&gt; [mock reply, turn 1] You said: hello
+
+you&gt; exit
+Bye!</code></pre>
+</div>
+
+<p>החיסרון: משתנה שהוגדר כך חי רק בחלון ה-<span class="en">terminal</span> הזה. סגרתם את החלון, והוא נעלם. כדי למחוק אותו בלי לסגור את החלון:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>Remove-Item Env:CHAT_MOCK</code></pre>
+</div>
+
+<h3>דרך שנייה: קובץ <code>.env</code></h3>
+
+<p>קובץ <code>.env</code> הוא קובץ טקסט פשוט בתיקיית הפרויקט, עם שורה לכל משתנה. הפונקציה <code>load_dotenv()</code> בתחילת <code>chat.py</code> קוראת אותו והופכת כל שורה למשתנה סביבה. בתיקייה יש כבר תבנית, <code>.env.example</code>. העתיקו אותה:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cp .env.example .env
+cat .env</code></pre>
+</div>
+
+<div class="codebox output">
+  <div class="label"><span>.env</span></div>
+<pre><code># Your secret key from https://platform.claude.com (not needed in mock mode)
+ANTHROPIC_API_KEY=
+
+# Which Claude model to chat with
+CHAT_MODEL=claude-opus-5-5
+
+# 1 = fake answers, free, no key needed. 0 = real answers from the API.
+CHAT_MOCK=1</code></pre>
+</div>
+
+<p>הריצו שוב <code>uv run python chat.py</code>. התוכנית עולה במצב <span class="en">mock</span>, בלי שהגדרתם דבר ב-<span class="en">terminal</span>.</p>
+
+<div class="callout warn">
+  <span class="title">שני קבצים, שני תפקידים</span>
+  <p><code>.env</code> מכיל את הערכים האמיתיים שלכם, כולל סודות. הוא <strong>פרטי</strong>: לא שולחים אותו לאף אחד, ולא מעלים אותו ל-git (בפרק 2 תלמדו איך מוודאים את זה). <code>.env.example</code> מכיל רק את <em>שמות</em> המשתנים, בלי ערכים סודיים. הוא <strong>משותף</strong>, והתפקיד שלו לספר למי שמקבל את הפרויקט אילו משתנים צריך להגדיר.</p>
+</div>
+
+<h3>רוצים תשובות אמיתיות? (רשות)</h3>
+
+<p>כל החוברת אפשרית במצב <span class="en">mock</span>. אם תרצו לדבר עם Claude אמיתי, צריך מפתח <span class="en">API</span>, והשימוש עולה כסף לפי כמות הטקסט. לשיחות הקצרות של החוברת מדובר בסכומים קטנים.</p>
+<ol>
+  <li>היכנסו ל-<code>platform.claude.com</code>, פתחו חשבון והוסיפו אמצעי תשלום.</li>
+  <li>צרו מפתח בעמוד <span class="en">API Keys</span> והעתיקו אותו. הוא מוצג פעם אחת בלבד.</li>
+  <li>פתחו את <code>.env</code>, הדביקו את המפתח אחרי <code>ANTHROPIC_API_KEY=</code>, ושנו את <code>CHAT_MOCK</code> ל-<code>0</code>.</li>
+</ol>
+<p>כדי להוזיל, אפשר לשנות את <code>CHAT_MODEL</code> בקובץ <code>.env</code> למודל קטן וזול יותר, למשל <code>claude-haiku-5-5</code>. שימו לב שלא נגעתם בקוד כדי להחליף מודל. זה בדיוק היתרון של משתני סביבה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.7</span>מבנה הפרויקט</h2>
+
+<p>כך נראית התיקייה שלכם עכשיו. לכל קובץ יש תפקיד, וחשוב לדעת אילו מהם משתפים עם אחרים ואילו לא:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>קובץ או תיקייה</th><th>תפקיד</th><th>משתפים?</th></tr>
+  <tr><td><code>chat.py</code></td><td>הקוד</td><td>כן</td></tr>
+  <tr><td><code>debug_me.py</code></td><td>קובץ לתרגיל 5</td><td>כן</td></tr>
+  <tr><td><code>pyproject.toml</code></td><td>שם הפרויקט, גרסת Python, רשימת החבילות</td><td>כן</td></tr>
+  <tr><td><code>uv.lock</code></td><td>הגרסאות המדויקות של כל החבילות</td><td>כן</td></tr>
+  <tr><td><code>.env.example</code></td><td>תבנית של משתני הסביבה, בלי סודות</td><td>כן</td></tr>
+  <tr><td><code>.env</code></td><td>הערכים האמיתיים שלכם, כולל סודות</td><td><strong>לעולם לא</strong></td></tr>
+  <tr><td><code>.venv\</code></td><td>החבילות המותקנות</td><td>לא. כל אחד בונה אותה אצלו מ-<code>uv.lock</code></td></tr>
+</table>
+</div>
+
+<p>הכלל שמאחורי הטבלה: משתפים את <em>ההוראות</em> לבניית הסביבה, ולא את הסביבה עצמה. התיקייה <code>.venv</code> גדולה, תלויה במערכת ההפעלה, וניתנת לשחזור מלא בפקודה אחת (<code>uv sync</code>). אין סיבה לשלוח אותה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.8</span>ה-IDE וה-debugger</h2>
+
+<p>עד עכשיו עבדתם ב-<span class="en">terminal</span>. לכתיבת קוד משתמשים ב-<span class="en">IDE</span>, עורך שמבין את הקוד. פתחו את הפרויקט ב-VS Code מתוך התיקייה שלו:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>code .</code></pre>
+</div>
+
+<p>הנקודה אומרת "פתח את התיקייה הנוכחית". תמיד פותחים את <em>התיקייה</em> של הפרויקט ולא קובץ בודד, כדי ש-VS Code יזהה את ה-<code>.venv</code>.</p>
+
+<h3>הכנה חד-פעמית</h3>
+<ol>
+  <li>התקינו את התוסף של Python: לחצו <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>, חפשו <code>Python</code>, והתקינו את התוסף של Microsoft.</li>
+  <li>בחרו את ה-<span class="en">interpreter</span> של הפרויקט: לחצו <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>, הקלידו <code>Python: Select Interpreter</code>, ובחרו בשורה שמכילה <code>.venv</code>.</li>
+  <li>פתחו <span class="en">terminal</span> בתוך VS Code עם <kbd>Ctrl</kbd>+<kbd>`</kbd>. הוא נפתח ישר בתיקיית הפרויקט.</li>
+</ol>
+
+<h3>מה זה debugger ולמה לא מספיק <code>print</code></h3>
+
+<p>כשקוד לא עושה מה שציפיתם, האינסטינקט הוא להוסיף <code>print</code> בכל מקום. זה עובד, אבל לאט: צריך לנחש מראש מה להדפיס, להריץ, ולנחש שוב. <strong><span class="en">debugger</span></strong> עוצר את התוכנית באמצע הריצה, בשורה שבחרתם, ומראה את <em>כל</em> המשתנים באותו רגע. משם אפשר להתקדם שורה אחרי שורה ולראות מה משתנה.</p>
+
+<h3>נסו עכשיו</h3>
+<ol>
+  <li>פתחו את <code>chat.py</code> ומצאו את השורה <code>messages.append({"role": "assistant", "content": reply})</code>.</li>
+  <li>לחצו בשוליים, משמאל למספר השורה. מופיעה נקודה אדומה. זו <strong><span class="en">breakpoint</span></strong>: בקשה לעצור כאן.</li>
+  <li>לחצו <kbd>F5</kbd> ובחרו <code>Python Debugger</code> ואז <code>Python File</code>.</li>
+  <li>התוכנית עולה ב-<span class="en">terminal</span> שבתחתית. הקלידו הודעה ולחצו <kbd>Enter</kbd>.</li>
+  <li>הריצה נעצרת על השורה שסימנתם. בצד מופיעה חלונית <span class="en">Variables</span>. פתחו בה את <code>messages</code> והסתכלו מה יש בפנים.</li>
+</ol>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מקש</th><th>שם</th><th>מה הוא עושה</th></tr>
+  <tr><td><kbd>F5</kbd></td><td><span class="en">Continue</span></td><td>ממשיך לרוץ עד ה-<span class="en">breakpoint</span> הבאה</td></tr>
+  <tr><td><kbd>F10</kbd></td><td><span class="en">Step Over</span></td><td>מריץ את השורה הנוכחית ועוצר בשורה הבאה</td></tr>
+  <tr><td><kbd>F11</kbd></td><td><span class="en">Step Into</span></td><td>אם השורה קוראת לפונקציה, נכנס לתוכה</td></tr>
+  <tr><td><kbd>Shift</kbd>+<kbd>F5</kbd></td><td><span class="en">Stop</span></td><td>מפסיק את התוכנית</td></tr>
+</table>
+</div>
+
+<div class="callout">
+  <span class="title">מה שתראו ב-<code>messages</code> הוא הזיכרון של הסוכן</span>
+  <p>הרשימה מכילה את כל השיחה: הודעה עם <code>role</code> של <code>user</code>, אחריה הודעה עם <code>role</code> של <code>assistant</code>, וחוזר חלילה. בכל תור, <code>chat.py</code> שולח ל-<span class="en">API</span> את <em>כל</em> הרשימה, כי ה-<span class="en">API</span> עצמו אינו זוכר דבר בין בקשה לבקשה. סגרתם את התוכנית, והרשימה נמחקת. את הבעיה הזו תפתרו בפרק 6, עם בסיס נתונים.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.9</span>תרגילים</h2>
+
+<p>התרגילים מסודרים מהמודרך אל הפתוח. עשו אותם לפי הסדר, כי כל אחד נשען על הקודם. סמנו כל תרגיל שסיימתם, והסימון יישמר בדפדפן הזה. לשאלות הכתובות יש מקום לתשובה, שגם הוא נשמר. פתרונות מלאים נמצאים <a href="solutions/chapter-01.html">בדף נפרד</a>. פתחו אותו רק אחרי שניסיתם באמת.</p>
+
+<!-- ex 1 -->
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · ניווט בלי עכבר</h3><span class="level">מודרך</span></div>
+  <p>בצעו את כל המשימות מה-<span class="en">terminal</span> בלבד, בלי סייר הקבצים:</p>
+  <ol>
+    <li>עברו לתיקיית הבית, ומשם ל-<code>projects</code>.</li>
+    <li>צרו תיקייה בשם <code>playground</code> ובתוכה תיקייה בשם <code>notes</code>.</li>
+    <li>היכנסו ל-<code>notes</code> והדפיסו את הנתיב המלא שלה.</li>
+    <li>מתוך <code>notes</code>, בפקודה אחת ובנתיב יחסי, הציגו את תוכן הקובץ <code>chat.py</code> שנמצא ב-<code>my-agent</code>.</li>
+    <li>חזרו ל-<code>my-agent</code> בפקודת <code>cd</code> אחת.</li>
+  </ol>
+  <label class="answer-label" for="n-ex1">הפקודה שכתבתם במשימה 4:</label>
+  <textarea class="answer" id="n-ex1" data-id="c01-n1" dir="ltr"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c01-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<!-- ex 2 -->
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · להרוס ולבנות מחדש</h3><span class="level">מודרך</span></div>
+  <p>התרגיל הזה מוכיח לכם ש-<code>.venv</code> היא תוצר שאפשר לשחזר, ולא משהו שצריך לשמור עליו.</p>
+  <ol>
+    <li>מחקו את ה-<span class="en">virtual environment</span>: <code>Remove-Item -Recurse -Force .venv</code></li>
+    <li>ודאו עם <code>ls</code> שהיא נעלמה.</li>
+    <li>בנו אותה מחדש: <code>uv sync</code></li>
+    <li>הריצו את <code>chat.py</code> וודאו שהוא עובד כמו קודם.</li>
+  </ol>
+  <label class="answer-label" for="n-ex2">מאיזה קובץ <code>uv sync</code> ידע אילו חבילות ואילו גרסאות להתקין? ומה היה קורה אילו מחקתם גם אותו?</label>
+  <textarea class="answer" id="n-ex2" data-id="c01-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c01-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<!-- ex 3 -->
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · משתנה סביבה משלכם</h3><span class="level mid">בינוני</span></div>
+  <p>כרגע התשובות מודפסות אחרי <code>agent&gt;</code>. תנו לסוכן שם שאפשר לשנות בלי לגעת בקוד.</p>
+  <ol>
+    <li>ב-<code>chat.py</code>, הוסיפו קבוע בשם <code>AGENT_NAME</code> שנקרא ממשתנה סביבה באותו שם. ברירת המחדל היא <code>agent</code>.</li>
+    <li>השתמשו בו בשורה שמדפיסה את התשובה.</li>
+    <li>הוסיפו את המשתנה לקובץ <code>.env</code> עם שם שבחרתם, והריצו.</li>
+    <li>הוסיפו אותו גם ל-<code>.env.example</code>, עם הערה קצרה שמסבירה מה הוא. חשבו: למה צריך לעדכן גם את הקובץ הזה?</li>
+    <li><strong>ניסוי:</strong> בלי לשנות את <code>.env</code>, הגדירו ב-<span class="en">terminal</span> ערך <em>אחר</em>: <code>$env:AGENT_NAME = "shell"</code>, והריצו שוב.</li>
+  </ol>
+  <label class="answer-label" for="n-ex3">מי ניצח בניסוי, הערך מ-<code>.env</code> או הערך מה-<span class="en">terminal</span>? למה לדעתכם זו ההתנהגות שנבחרה?</label>
+  <textarea class="answer" id="n-ex3" data-id="c01-n3"></textarea>
+  <p>בסיום, מחקו את המשתנה מה-<span class="en">terminal</span>: <code>Remove-Item Env:AGENT_NAME</code></p>
+  <label class="check ex-done"><input type="checkbox" data-id="c01-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<!-- ex 4 -->
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · להוסיף חבילה</h3><span class="level mid">בינוני</span></div>
+  <p>החבילה <code>rich</code> מדפיסה טקסט צבעוני ל-<span class="en">terminal</span>. השתמשו בה כדי שהתשובות של הסוכן יופיעו בצבע.</p>
+  <ol>
+    <li>לפני שמתחילים, הציצו ב-<code>pyproject.toml</code> וזכרו איך נראית הרשימה <code>dependencies</code>.</li>
+    <li>הוסיפו את החבילה: <code>uv add rich</code>. שימו לב כמה חבילות הותקנו.</li>
+    <li>ב-<code>chat.py</code>, הוסיפו בראש הקובץ <code>from rich.console import Console</code>, וצרו אובייקט אחד: <code>console = Console()</code>.</li>
+    <li>החליפו את ה-<code>print</code> של התשובה בשורה הזו:</li>
+  </ol>
+<div class="codebox">
+  <div class="label"><span>chat.py</span></div>
+<pre><code>console.print(f"{AGENT_NAME}&gt; {reply}\n", style="cyan", markup=False)</code></pre>
+</div>
+  <label class="answer-label" for="n-ex4">ביקשתם חבילה אחת. כמה הותקנו, ולמה? מה השתנה ב-<code>pyproject.toml</code>, ומה השתנה ב-<code>uv.lock</code>?</label>
+  <textarea class="answer" id="n-ex4" data-id="c01-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c01-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<!-- ex 5 -->
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · ציד באגים עם ה-debugger</h3><span class="level mid">בינוני</span></div>
+  <p>שיחות ארוכות עולות יותר כסף, ולכן סוכנים רבים שומרים רק את התורות האחרונים. בקובץ <code>debug_me.py</code> יש פונקציה שאמורה לעשות את זה, ויש בה באג. הריצו אותה:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>uv run python debug_me.py</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Expected: 6 messages, the first one from 'user'
+Got:      3 messages, the first one from 'assistant'</code></pre>
+</div>
+  <p><strong>הכלל של התרגיל:</strong> אסור להוסיף <code>print</code>, ואסור לתקן לפני שראיתם את הבעיה בעיניים.</p>
+  <ol>
+    <li>שימו <span class="en">breakpoint</span> על השורה הראשונה בתוך <code>trim_history</code> והריצו עם <kbd>F5</kbd>.</li>
+    <li>בחלונית <span class="en">Variables</span>, בדקו כמה איברים יש ב-<code>messages</code> ומה הערך של <code>max_turns</code>.</li>
+    <li>התקדמו עם <kbd>F10</kbd> עד שורת ה-<code>return</code>.</li>
+    <li>בתחתית המסך יש לשונית <span class="en">Debug Console</span>. הקלידו בה את הביטוי שמופיע אחרי ה-<code>return</code> ובדקו מה הוא מחזיר. נסו שם גם ביטויים אחרים, עד שתמצאו אחד שמחזיר את התוצאה הנכונה.</li>
+    <li>תקנו את הקוד והריצו שוב.</li>
+  </ol>
+  <label class="answer-label" for="n-ex5">מה היה הבאג? ולמה היה מסוכן במיוחד שהרשימה מתחילה בהודעה של <code>assistant</code>? (רמז: ה-<span class="en">API</span> דורש שההודעה הראשונה תהיה של <code>user</code>.)</label>
+  <textarea class="answer" id="n-ex5" data-id="c01-n5"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c01-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<!-- ex 6 -->
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · מבחן החבר</h3><span class="level open">פתוח</span></div>
+  <p>פרויקט טוב הוא פרויקט שאדם אחר מצליח להריץ בלי לשאול אתכם שאלות. כתבו קובץ <code>README.md</code> בתיקיית הפרויקט (באנגלית, כמקובל), שמסביר בקצרה:</p>
+  <ul>
+    <li>מה הפרויקט עושה, במשפט או שניים.</li>
+    <li>מה צריך להיות מותקן במחשב.</li>
+    <li>אילו פקודות מריצים, לפי הסדר, כדי להגיע לשיחה ראשונה עם הסוכן.</li>
+    <li>אילו משתני סביבה קיימים ומה כל אחד עושה.</li>
+  </ul>
+  <p><strong>עכשיו בדקו את עצמכם.</strong> צרו תיקייה חדשה, <code>~\projects\friend-test</code>, והעתיקו אליה רק את הקבצים שסימנתם בסעיף 1.7 כ"משתפים". בלי <code>.venv</code> ובלי <code>.env</code>. אחר כך בצעו את ההוראות שכתבתם ב-<code>README.md</code>, מילה במילה, בלי להוסיף שום דבר מהזיכרון.</p>
+  <label class="answer-label" for="n-ex6">מה היה חסר בהוראות שלכם בניסיון הראשון?</label>
+  <textarea class="answer" id="n-ex6" data-id="c01-n6"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c01-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.10</span>בדקו את עצמכם</h2>
+
+<p>סמנו רק מה שאתם מסוגלים להסביר בקול רם לאדם אחר, בלי להציץ בפרק. מה שלא סימנתם הוא מה שכדאי לקרוא שוב.</p>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c01-chk1"><span>אני יודע/ת להסביר מה ההבדל בין נתיב מוחלט לנתיב יחסי, ומה המשמעות של <code>.</code> ושל <code>..</code></span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c01-chk2"><span>אני יודע/ת להסביר איזו בעיה <span class="en">virtual environment</span> פותר, עם דוגמה של שני פרויקטים.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c01-chk3"><span>אני יודע/ת להסביר מה ההבדל בין <code>pyproject.toml</code> ל-<code>uv.lock</code>, ולמה צריך את שניהם.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c01-chk4"><span>אני יודע/ת מה עושות <code>uv add</code>, <code>uv sync</code> ו-<code>uv run</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c01-chk5"><span>אני יודע/ת להסביר למה מפתח <span class="en">API</span> לא נכתב בתוך הקוד.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c01-chk6"><span>אני יודע/ת מה ההבדל בין <code>.env</code> ל-<code>.env.example</code>, ואיזה מהם משתפים.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c01-chk7"><span>אני יודע/ת לשים <span class="en">breakpoint</span>, לעצור עליה, ולבדוק ערך של משתנה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c01-chk8"><span>אני יודע/ת להסביר למה <code>chat.py</code> שולח את כל השיחה בכל תור.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.11</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr>
+    <td><code>uv</code> (או <code>git</code>, או <code>code</code>)<br><span class="en">is not recognized</span></td>
+    <td>חלון ה-<span class="en">terminal</span> נפתח לפני ההתקנה</td>
+    <td>סגרו את כל חלונות ה-<span class="en">terminal</span> ופתחו חדש. אם זה לא עוזר, הפעילו מחדש את המחשב</td>
+  </tr>
+  <tr>
+    <td><code>ModuleNotFoundError</code> גם אחרי <code>uv add</code></td>
+    <td>הרצתם <code>python chat.py</code> בלי <code>uv run</code>, ולכן רץ ה-Python הראשי</td>
+    <td>הריצו <code>uv run python chat.py</code></td>
+  </tr>
+  <tr>
+    <td>ב-VS Code, קו גלי מתחת ל-<code>import anthropic</code></td>
+    <td>VS Code משתמש ב-<span class="en">interpreter</span> הלא נכון</td>
+    <td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>, <code>Python: Select Interpreter</code>, ובחרו את <code>.venv</code></td>
+  </tr>
+  <tr>
+    <td>שיניתם את <code>.env</code> והתוכנית מתעלמת</td>
+    <td>אותו משתנה מוגדר גם ב-<span class="en">terminal</span>, והוא גובר (תרגיל 3)</td>
+    <td><code>Remove-Item Env:NAME</code>, או פתחו חלון חדש</td>
+  </tr>
+  <tr>
+    <td><span class="en">The API rejected your key</span></td>
+    <td>המפתח ב-<code>.env</code> שגוי, חלקי, או עם רווח מיותר</td>
+    <td>העתיקו אותו מחדש, בלי מירכאות ובלי רווחים סביב ה-<code>=</code></td>
+  </tr>
+  <tr>
+    <td>עברית מופיעה הפוכה ב-<span class="en">terminal</span></td>
+    <td>ה-<span class="en">terminal</span> של Windows לא תומך היטב בכתיבה מימין לשמאל</td>
+    <td>דברו עם הסוכן באנגלית. בפרק 5 הוא יקבל ממשק שבו עברית עובדת</td>
+  </tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.12</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>terminal</dt><dd>חלון שבו מפעילים תוכנות בהקלדת פקודות.</dd>
+  <dt>PowerShell</dt><dd>שפת הפקודות שרצה בתוך ה-terminal ב-Windows.</dd>
+  <dt>working directory</dt><dd>התיקייה שבה ה-terminal "עומד" כרגע. נתיבים יחסיים נמדדים ממנה.</dd>
+  <dt>interpreter</dt><dd>התוכנה שקוראת קוד Python ומריצה אותו.</dd>
+  <dt>package</dt><dd>ספריית קוד שמישהו אחר כתב ואפשר להתקין ולהשתמש בה.</dd>
+  <dt>dependency</dt><dd>חבילה שהפרויקט שלכם צריך כדי לעבוד.</dd>
+  <dt>virtual environment</dt><dd>תיקייה (<code>.venv</code>) עם Python וחבילות ששייכים לפרויקט אחד בלבד.</dd>
+  <dt>lock file</dt><dd>קובץ (<code>uv.lock</code>) שמתעד את הגרסה המדויקת של כל חבילה, כדי שכולם יקבלו אותה סביבה.</dd>
+  <dt>environment variable</dt><dd>זוג של שם וערך שנמצא מחוץ לקוד, והתוכנית קוראת אותו בזמן ריצה.</dd>
+  <dt>API key</dt><dd>מחרוזת סודית שמזהה אתכם מול שירות חיצוני. מתנהגים איתה כמו עם סיסמה.</dd>
+  <dt>mock</dt><dd>תחליף מזויף לרכיב אמיתי, שמאפשר להריץ ולבדוק קוד בלי תלות בו.</dd>
+  <dt>IDE</dt><dd>עורך קוד שכולל גם כלים להרצה, לניווט ול-debugging.</dd>
+  <dt>breakpoint</dt><dd>סימון על שורה, שמורה ל-debugger לעצור כשהריצה מגיעה אליה.</dd>
+  <dt>traceback</dt><dd>הדוח ש-Python מדפיס כשיש שגיאה. קוראים אותו מלמטה למעלה.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">1.13</span>מה הלאה</h2>
+
+<p>יש לכם פרויקט שרץ, ושכל אחד יכול לבנות מחדש. אבל שימו לב מה קרה בתרגילים: שיניתם את <code>chat.py</code> כמה פעמים, ואין לכם דרך לחזור לגרסה שעבדה לפני שעה. אם תשלחו את התיקייה לחבר והוא ישנה משהו, לא תדעו מה השתנה, ולא תוכלו לאחד את השינויים שלו עם שלכם. ועדיין לא ברור מה מונע מהקובץ <code>.env</code> להישלח בטעות יחד עם השאר.</p>
+
+<p>שלוש הבעיות האלה הן הנושא של <strong>פרק 2: <span class="en">Git</span> ו-<span class="en">GitHub</span></strong>.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-01</code> נמצא הפרויקט כפי שהוא אמור להיראות בסוף הפרק, אחרי כל התרגילים. אם משהו אצלכם לא עובד, השוו את הקבצים.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-01.html">פתרונות לפרק 1</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

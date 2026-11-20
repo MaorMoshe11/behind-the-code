@@ -1,0 +1,976 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרק 2 · Git ו-GitHub | מאחורי הקוד</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-chapter="02">
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <a href="index.html">→ תוכן העניינים</a>
+    <span>פרק 2 · Git ו-GitHub</span>
+    <span class="spacer"></span>
+    <span class="progress-wrap">
+      <span class="progress-text">0 / 0</span>
+      <span class="progress-bar"><span></span></span>
+    </span>
+    <button class="btn" type="button" data-print>הדפסה</button>
+  </div>
+</div>
+
+<main class="page">
+
+<header class="chapter-head">
+  <div class="chapter-num">פרק 2 מתוך 21</div>
+  <h1>Git ו-GitHub</h1>
+  <p class="lead">איך שומרים כל גרסה של הקוד, חוזרים לגרסה שעבדה, ועובדים על אותו פרויקט עם אנשים אחרים בלי לדרוס אחד את השני.</p>
+</header>
+
+<section class="goals">
+  <h3>בסוף הפרק תדעו</h3>
+  <ul>
+    <li>להסביר מה זה <span class="en">commit</span>, ולשמור את ההיסטוריה של הפרויקט בצעדים קטנים עם הודעות ברורות.</li>
+    <li>לוודא עם <code>.gitignore</code> שסודות ותיקיות שנבנות מחדש לא נכנסים ל-git.</li>
+    <li>לחזור אחורה: לבטל שינוי שעוד לא נשמר, ולבטל <span class="en">commit</span> שכבר נשלח.</li>
+    <li>לעבוד על <span class="en">branch</span>, למזג אותו, ולהסביר מתי <span class="en">merge</span> ומתי <span class="en">rebase</span>.</li>
+    <li>לפתור <span class="en">merge conflict</span> אמיתי מול שותף לצוות.</li>
+    <li>להסביר מה זה <span class="en">pull request</span>, לכתוב תיאור טוב לאחד, ולעשות <span class="en">code review</span> לקוד של מישהו אחר.</li>
+  </ul>
+  <p><strong>זמן משוער:</strong> ארבע עד חמש שעות, כולל התרגילים. <strong>מה צריך:</strong> הפרויקט מפרק 1 ו-<code>git</code> שהתקנתם שם. את כל הפרק אפשר לעשות בלי חשבון בשום אתר: את השרת המרוחק מדמים בתיקייה במחשב שלכם. חשבון GitHub חינמי נדרש רק לתרגיל האחרון, והוא רשות.</p>
+</section>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.1</span>הבעיה: "אתמול זה עבד"</h2>
+
+<p>בתרגילים של פרק 1 שיניתם את <code>chat.py</code> כמה פעמים. עכשיו דמיינו שעבר שבוע. ניקיתם את הקובץ, מחקתם פונקציה שנראתה מיותרת, והיום אתם מריצים ומקבלים:</p>
+
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Traceback (most recent call last):
+  File "C:\Users\you\projects\my-agent\chat.py", line 70, in main
+    reply = ask_mock(messages) if MOCK else ask_claude(client, messages)
+            ^^^^^^^^
+NameError: name 'ask_mock' is not defined</code></pre>
+</div>
+
+<p>הפונקציה נמחקה, ואתם לא זוכרים מה היה כתוב בה. <kbd>Ctrl</kbd>+<kbd>Z</kbd> לא עוזר, כי הקובץ נסגר מאז. ומי שעבד פעם בלי כלי מתאים מכיר את הפתרון הביתי: תיקיות בשם <code>my-agent-backup</code>, <code>my-agent-final</code> ו-<code>my-agent-final-2</code>, שאף אחד לא זוכר מה ההבדל ביניהן.</p>
+
+<p>עכשיו הוסיפו עוד אדם. עמיתה מבקשת את הקוד, משנה אותו, ושולחת בחזרה. בינתיים גם אתם שיניתם. ארבע שאלות עולות מיד:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>השאלה</th><th>בלי כלי</th><th>עם git</th></tr>
+  <tr><td>מה השתנה, מתי, ולמה?</td><td>משווים קבצים בעיניים</td><td>כל שינוי נשמר עם תאריך, שם והסבר (<span class="en">commit</span>)</td></tr>
+  <tr><td>איך חוזרים לגרסה שעבדה?</td><td>מקווים שיש גיבוי</td><td>כל גרסה שנשמרה זמינה, בפקודה אחת</td></tr>
+  <tr><td>איך מאחדים את השינויים שלה עם שלי?</td><td>מעתיקים שורות ביד, ומפספסים</td><td>git מאחד לבד, ועוצר רק כששניכם שיניתם אותה שורה (<span class="en">merge</span>)</td></tr>
+  <tr><td>מה מונע מ-<code>.env</code> להישלח?</td><td>זיכרון טוב</td><td>רשימה של קבצים ש-git מתעלם מהם (<code>.gitignore</code>)</td></tr>
+</table>
+</div>
+
+<p><strong>Git</strong> הוא תוכנה שרצה אצלכם במחשב ושומרת את ההיסטוריה של תיקייה. <strong>GitHub</strong> הוא אתר שמחזיק עותק של ההיסטוריה הזו בשרת, כדי שכמה אנשים יוכלו לעבוד עליה, ומוסיף מעליה כלים לעבודת צוות. אלה שני דברים נפרדים: git עובד מצוין בלי GitHub, ורוב הפרק נעשה בלעדיו.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.2</span>המפה: ארבעה מקומות שבהם קוד נמצא</h2>
+
+<p>כמעט כל פקודת git מעבירה שינויים ממקום אחד לאחר. אם תזכרו את ארבעת המקומות האלה, רוב הפקודות יסבירו את עצמן:</p>
+
+<div class="diagram">
+  <div class="flow">
+    <div class="layer machine">
+      <div class="name">Your computer: my-agent\</div>
+      <div class="flow steps">
+        <div class="layer l4">
+          <div class="name">Working directory</div>
+          <div class="what">הקבצים שאתם רואים ועורכים ב-VS Code</div>
+        </div>
+        <div class="hop"><b>git add</b>&rarr;</div>
+        <div class="layer l3">
+          <div class="name">Staging area</div>
+          <div class="what">השינויים שבחרתם להכניס לשמירה הבאה</div>
+        </div>
+        <div class="hop"><b>git commit</b>&rarr;</div>
+        <div class="layer l2">
+          <div class="name">Local repository (.git\)</div>
+          <div class="what">כל ההיסטוריה: כל ה-commits שנשמרו</div>
+        </div>
+      </div>
+    </div>
+    <div class="hop"><b>git push</b>&rarr;<br>&larr;<b>git fetch / pull</b></div>
+    <div class="layer">
+      <div class="name">Remote repository</div>
+      <div class="what">עותק משותף בשרת: GitHub, או בפרק הזה תיקייה מקומית שמדמה שרת</div>
+    </div>
+  </div>
+  <div class="caption">שלושת הראשונים נמצאים אצלכם ועובדים בלי אינטרנט. רק <code>push</code>, <code>fetch</code> ו-<code>pull</code> מדברים עם השרת.</div>
+</div>
+
+<p>החידוש למי שמגיע מ-Google Docs הוא ה-<strong><span class="en">staging area</span></strong>, תחנת ביניים. שיניתם חמישה קבצים, אבל רק שלושה מהם שייכים לתיקון שאתם רוצים לשמור עכשיו? מכניסים ל-<span class="en">staging</span> רק אותם, ושומרים. השניים האחרים מחכים לשמירה נפרדת. כך כל שמירה מספרת סיפור אחד.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.3</span>מה זה <span class="en">commit</span>, והגדרה חד-פעמית</h2>
+
+<p><strong><span class="en">Commit</span></strong> הוא צילום של כל הפרויקט ברגע מסוים, ולא רק של מה שהשתנה. לכל צילום יש:</p>
+
+<ul>
+  <li><strong>מזהה</strong> (<span class="en">hash</span>): מחרוזת כמו <code>517d756bba66f14c2df085a654bda1663c0842b1</code>, שמחושבת מהתוכן. בדרך כלל מספיקים שבעת התווים הראשונים, <code>517d756</code>.</li>
+  <li><strong>מחבר ותאריך</strong>: מי שמר ומתי.</li>
+  <li><strong>הודעה</strong> (<span class="en">commit message</span>): משפט שאתם כותבים, ומסביר מה השתנה ולמה.</li>
+  <li><strong>הורה</strong> (<span class="en">parent</span>): ה-<span class="en">commit</span> שקדם לו. כך נוצרת שרשרת, וזו ההיסטוריה.</li>
+</ul>
+
+<p>כדי ש-git ידע מה לכתוב בשדה "מחבר", צריך להציג את עצמכם פעם אחת לכל מחשב. הדגל <code>--global</code> אומר "לכל הפרויקטים במחשב הזה":</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+git config --global core.editor "code --wait"</code></pre>
+</div>
+
+<p>השורה השלישית חשובה יותר ממה שנראה. יש פקודות git שפותחות עורך טקסט כדי שתכתבו בו הודעה. ברירת המחדל של Git for Windows היא Vim, עורך שמי שלא מכיר לא יודע אפילו איך לצאת ממנו. השורה הזו אומרת ל-git לפתוח את VS Code במקום, ולחכות (<code>--wait</code>) עד שתסגרו את הלשונית.</p>
+
+<div class="callout warn">
+  <span class="title">האימייל יהיה ציבורי</span>
+  <p>מה שתכתבו ב-<code>user.email</code> נשמר בכל <span class="en">commit</span>, ומי שיקבל את הקוד יראה אותו. אם תעלו פרויקט ציבורי ל-GitHub ולא תרצו לחשוף את האימייל הפרטי, GitHub נותן כתובת חלופית בהגדרות החשבון, בעמוד <span class="en">Emails</span>.</p>
+</div>
+
+<h3>מה הופך <span class="en">commit</span> לטוב</h3>
+
+<ul>
+  <li><strong>שינוי הגיוני אחד.</strong> "הוספתי פקודת <code>/reset</code>" ולא "הוספתי <code>/reset</code>, תיקנתי שגיאת כתיב ושיניתי את המודל". כשמשהו נשבר, קל למצוא ולבטל שינוי אחד קטן. קשה לבטל ערבוב.</li>
+  <li><strong>הודעה בציווי, באנגלית, קצרה:</strong> <code>Add /reset command</code>, ולא <code>added stuff</code> או <code>fix</code>. נסו להשלים את המשפט "<span class="en">If applied, this commit will...</span>". מה שבא אחריו הוא ההודעה.</li>
+  <li><strong>הקוד עובד</strong> בכל <span class="en">commit</span>. מי שיחזור לנקודה הזו בעוד חודש צריך לקבל פרויקט שרץ.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.4</span>דוגמה מודרכת: הפרויקט נכנס ל-git</h2>
+
+<p>עובדים על הפרויקט מפרק 1, בתיקייה <code>~\projects\my-agent</code>. אם התיקייה שלכם התבלגנה, העתיקו לתיקייה ריקה את הקבצים מ-<code>checkpoints\chapter-01</code> (כולל <code>.env.example</code>), הריצו <code>uv sync</code>, ויצרו <code>.env</code> כמו בפרק 1.</p>
+
+<p>המזהים (<span class="en">hashes</span>) והשעות בפלטים כאן הם אלה שהתקבלו כשהפרק נכתב. אצלכם הם יהיו אחרים, וזה תקין.</p>
+
+<div class="step">
+  <h3><span class="step-num">1</span>יוצרים <span class="en">repository</span></h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects\my-agent
+git init -b main</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Initialized empty Git repository in C:/Users/you/projects/my-agent/.git/</code></pre>
+</div>
+  <p>התיקייה הפכה ל-<strong><span class="en">repository</span></strong> (בקיצור <span class="en">repo</span>): תיקייה ש-git עוקב אחריה. הדגל <code>-b main</code> קובע שהענף הראשי ייקרא <code>main</code>, השם המקובל היום. בלעדיו גרסאות מסוימות של git קוראות לו <code>master</code>.</p>
+  <p>כל ההיסטוריה תישמר בתיקייה נסתרת אחת, <code>.git</code>. כדי לראות אותה צריך את הדגל <code>-Force</code>, שמציג גם קבצים נסתרים:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>ls -Force</code></pre>
+</div>
+  <p>לא עורכים שום דבר בתוך <code>.git</code> ביד. ומי שמוחק אותה, מוחק את כל ההיסטוריה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">2</span>שואלים את git מה הוא רואה</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git status</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>On branch main
+
+No commits yet
+
+Untracked files:
+  (use "git add &lt;file&gt;..." to include in what will be committed)
+	<span class="hl">.env</span>
+	.env.example
+	README.md
+	chat.py
+	debug_me.py
+	pyproject.toml
+	uv.lock
+
+nothing added to commit but untracked files present (use "git add" to track)</code></pre>
+</div>
+  <p><code>git status</code> היא הפקודה החשובה ביותר בפרק. הריצו אותה לפני ואחרי כל פעולה, עד שזה יהפוך להרגל. כאן היא אומרת שיש שבעה קבצים ש-git עוד לא עוקב אחריהם (<span class="en">untracked</span>), ושאחד מהם הוא <code>.env</code>, עם המפתח הסודי. פקודה אחת לא זהירה, והוא בהיסטוריה לתמיד.</p>
+  <p>ולמה <code>.venv</code> לא מופיעה? כי <code>uv</code> יצר בתוכה קובץ <code>.gitignore</code> קטן שאומר ל-git להתעלם מכל מה שבתיקייה. זו הגנה שקיבלתם במתנה. על <code>.env</code> אף אחד לא הגן בשבילכם.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">3</span>כותבים <code>.gitignore</code></h3>
+  <p>הקובץ <code>.gitignore</code> הוא רשימה של שמות ותבניות ש-git יתעלם מהם. פתחו קובץ חדש ב-VS Code:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>code .gitignore</code></pre>
+</div>
+  <p>כתבו בו את התוכן הבא ושמרו (<kbd>Ctrl</kbd>+<kbd>S</kbd>):</p>
+<div class="codebox">
+  <div class="label"><span>.gitignore</span></div>
+<pre><code># Secrets and private settings: never commit these
+.env
+
+# The virtual environment is rebuilt from uv.lock with `uv sync`
+.venv/
+
+# Files Python generates while running
+__pycache__/
+*.pyc
+
+# Editor settings that belong to one person
+.vscode/
+.idea/</code></pre>
+</div>
+  <p>שורה שמתחילה ב-<code>#</code> היא הערה. <code>.venv/</code> עם לוכסן בסוף פירושו "תיקייה בשם הזה". <code>*.pyc</code> פירושו "כל קובץ שמסתיים ב-<code>.pyc</code>". את <code>.venv</code> כתבנו למרות ש-<code>uv</code> כבר מגן עליה, כי מי שקורא את הקובץ צריך לראות את כל הכללים במקום אחד.</p>
+  <div class="callout warn">
+    <span class="title">אל תיצרו את הקובץ עם <code>&gt;</code> ב-PowerShell</span>
+    <p>הפקודה <code>".env" &gt; .gitignore</code> נראית כמו קיצור דרך, אבל ב-Windows PowerShell 5.1 היא כותבת את הקובץ בקידוד UTF-16, ו-git לא מבין אותו. התוצאה: יש <code>.gitignore</code>, הוא נראה תקין, ו-<code>.env</code> עדיין מופיע ב-<code>git status</code>. בדקנו את זה, וזה בדיוק מה שקורה. צרו את הקובץ ב-VS Code.</p>
+  </div>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">4</span>מוודאים שזה עובד</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git status
+git check-ignore -v .env</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Untracked files:
+  (use "git add &lt;file&gt;..." to include in what will be committed)
+	.env.example
+	.gitignore
+	README.md
+	chat.py
+	debug_me.py
+	pyproject.toml
+	uv.lock
+
+.gitignore:2:.env	.env</code></pre>
+</div>
+  <p><code>.env</code> נעלם מהרשימה, ו-<code>.gitignore</code> עצמו הופיע. <code>git check-ignore -v</code> עונה על השאלה "למה הקובץ הזה מוסתר?": שורה 2 בקובץ <code>.gitignore</code>, הכלל <code>.env</code>. כשמשהו מוסתר ואתם לא מבינים למה, זו הפקודה.</p>
+  <p>שימו לב ש-<code>.gitignore</code> <em>כן</em> נכנס ל-git. הוא חלק מהפרויקט, וכל מי שיקבל את הפרויקט יקבל גם את ההגנה.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">5</span>מכניסים ל-<span class="en">staging</span></h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git add .
+git status</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'pyproject.toml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'uv.lock', LF will be replaced by CRLF the next time Git touches it
+On branch main
+
+No commits yet
+
+Changes to be committed:
+  (use "git rm --cached &lt;file&gt;..." to unstage)
+	new file:   .env.example
+	new file:   .gitignore
+	new file:   README.md
+	new file:   chat.py
+	new file:   debug_me.py
+	new file:   pyproject.toml
+	new file:   uv.lock</code></pre>
+</div>
+  <p>הנקודה ב-<code>git add .</code> פירושה "כל מה שבתיקייה הנוכחית", חוץ ממה ש-<code>.gitignore</code> מסתיר. זו בדיוק הסיבה שכותבים את <code>.gitignore</code> <em>לפני</em> ה-<code>add</code> הראשון.</p>
+  <p>האזהרות על <code>LF</code> ו-<code>CRLF</code> אינן שגיאה. Windows מסיים שורות בשני תווים (<code>CRLF</code>), ו-Linux ו-macOS בתו אחד (<code>LF</code>). Git for Windows מתרגם ביניהם אוטומטית, כדי שכולם יעבדו עם אותו קובץ, ומודיע לכם שהוא עושה את זה. אפשר להתעלם.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">6</span>ה-<span class="en">commit</span> הראשון</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git commit -m "Initial commit: chat agent from chapter 1"</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>[main (root-commit) 0d1691e] Initial commit: chat agent from chapter 1
+ 7 files changed, 651 insertions(+)
+ create mode 100644 .env.example
+ create mode 100644 .gitignore
+ create mode 100644 README.md
+ create mode 100644 chat.py
+ create mode 100644 debug_me.py
+ create mode 100644 pyproject.toml
+ create mode 100644 uv.lock</code></pre>
+</div>
+  <p><code>-m</code> הוא ההודעה. <code>root-commit</code> אומר שזה הראשון, בלי הורה. <code>0d1691e</code> הוא המזהה המקוצר שלו. מעכשיו, מה שלא יקרה לקבצים, תמיד אפשר לחזור לנקודה הזו.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">7</span>שינוי קטן, ומה git רואה</h3>
+  <p>פתחו את <code>chat.py</code> ומצאו את השורה שבודקת אם המשתמש רוצה לצאת. הוסיפו את המילה <code>"bye"</code>:</p>
+<div class="codebox">
+  <div class="label"><span>chat.py</span></div>
+<pre><code>        if user_text.lower() in ("exit", "quit", <span class="hl">"bye"</span>):</code></pre>
+</div>
+  <p>שמרו, והסתכלו מה השתנה:</p>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git status
+git diff</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output (shortened)</span></div>
+<pre><code>Changes not staged for commit:
+  (use "git add &lt;file&gt;..." to update what will be committed)
+  (use "git restore &lt;file&gt;..." to discard changes in working directory)
+	modified:   chat.py
+
+diff --git a/chat.py b/chat.py
+index de9b955..aa0b189 100644
+--- a/chat.py
++++ b/chat.py
+@@ -66,7 +66,7 @@ def main():
+
+     while True:
+         user_text = input("you&gt; ").strip()
+-        if user_text.lower() in ("exit", "quit"):
++        if user_text.lower() in ("exit", "quit", "bye"):
+             break
+         if not user_text:
+             continue</code></pre>
+</div>
+  <p>כך קוראים <span class="en">diff</span>: שורה שמתחילה ב-<code>-</code> נמחקה, שורה שמתחילה ב-<code>+</code> נוספה, ושינוי בשורה מוצג כמחיקה ואחריה הוספה. השורות בלי סימן הן הקשר, כדי שתבינו איפה בקובץ אתם. השורה <code>@@ -66,7 +66,7 @@</code> אומרת שמדובר בשבע שורות שמתחילות בשורה 66.</p>
+  <p>אם הפלט ארוך מהמסך, git מציג אותו עמוד אחרי עמוד ובתחתית מופיעות נקודתיים. רווח מתקדם, <kbd>q</kbd> יוצא.</p>
+</div>
+
+<div class="step">
+  <h3><span class="step-num">8</span>שומרים, ומסתכלים על ההיסטוריה</h3>
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git add chat.py
+git commit -m "Accept 'bye' as a way to quit"
+git log</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>[main 517d756] Accept 'bye' as a way to quit
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+commit 517d756bba66f14c2df085a654bda1663c0842b1
+Author: Your Name &lt;you@example.com&gt;
+Date:   Wed Nov 18 12:02:33 2026 +0200
+
+    Accept 'bye' as a way to quit
+
+commit 0d1691edd1dff33511b5cd315041d4affc56a811
+Author: Your Name &lt;you@example.com&gt;
+Date:   Wed Nov 18 12:02:22 2026 +0200
+
+    Initial commit: chat agent from chapter 1</code></pre>
+</div>
+  <p>הפעם הוספנו ל-<span class="en">staging</span> קובץ אחד בשמו, ולא את כל התיקייה. <code>git log</code> מציג את ה-<span class="en">commits</span> מהחדש לישן. לתצוגה מקוצרת, שורה לכל <span class="en">commit</span>, יש <code>git log --oneline</code>, ותשתמשו בה הרבה.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.5</span><code>.gitignore</code> וסודות</h2>
+
+<p>מה נכנס ל-<code>.gitignore</code>? הכלל מפרק 1 נשאר: משתפים את ההוראות לבניית הסביבה ולא את הסביבה עצמה. בפועל, מתעלמים משלושה סוגים של קבצים:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>סוג</th><th>דוגמאות</th><th>למה לא לשמור</th></tr>
+  <tr><td>סודות והגדרות פרטיות</td><td><code>.env</code></td><td>מי שמקבל את הקוד מקבל גם את המפתח שלכם</td></tr>
+  <tr><td>דברים שנבנים מחדש</td><td><code>.venv/</code>, <code>__pycache__/</code>, ובהמשך קבצי <span class="en">build</span> ובסיסי נתונים מקומיים</td><td>גדולים, תלויים במחשב, ואפשר לשחזר אותם בפקודה</td></tr>
+  <tr><td>העדפות אישיות</td><td><code>.vscode/</code>, <code>.idea/</code></td><td>שייכים לאדם אחד, ויוצרים שינויים מיותרים אצל כולם</td></tr>
+</table>
+</div>
+
+<p>שימו לב ש-<code>.env.example</code> <em>לא</em> ברשימה. התבנית בלי הסודות היא בדיוק מה שרוצים לשתף.</p>
+
+<h3>ומה אם כבר שמרתם סוד?</h3>
+
+<p><code>.gitignore</code> משפיע רק על קבצים ש-git עוד לא עוקב אחריהם. אם <code>.env</code> כבר נכנס ל-<span class="en">commit</span> לפני שהוספתם את הכלל, git ימשיך לעקוב אחריו. כדי להפסיק לעקוב בלי למחוק את הקובץ מהדיסק:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git rm --cached .env
+git commit -m "Stop tracking .env"</code></pre>
+</div>
+
+<p>אבל זה <strong>לא מספיק</strong>. ה-<span class="en">commit</span> הישן עדיין קיים בהיסטוריה, ובתוכו המפתח, וכל מי שיש לו עותק יכול להגיע אליו. אם הקוד כבר נשלח לשרת, הנחת העבודה היחידה הבטוחה היא שהמפתח דלף: נכנסים ל-<code>platform.claude.com</code>, מבטלים את המפתח, ויוצרים חדש. קודם מחליפים את המפתח, ורק אחר כך מנקים. לנושא הזה, כולל כלים שסורקים קוד ומחפשים סודות, נחזור בפרק 14 על אבטחה.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.6</span>היסטוריה וחזרה אחורה</h2>
+
+<p>זו ההבטחה מסוף פרק 1: דרך לחזור לגרסה שעבדה. יש כמה מצבים, ולכל אחד פקודה משלו. לפני הטבלה, שלוש פקודות לקריאת ההיסטוריה:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git log --oneline -- chat.py   <span class="cm"># only the commits that changed chat.py</span>
+git show 517d756               <span class="cm"># what one commit changed, as a diff</span>
+git diff --staged              <span class="cm"># what is in staging, about to be committed</span></code></pre>
+</div>
+
+<p>בפקודות git אפשר לכתוב <code>HEAD</code> במקום מזהה. <strong><span class="en">HEAD</span></strong> פירושו "ה-<span class="en">commit</span> שאני עומד עליו עכשיו", ו-<code>HEAD~1</code> הוא זה שלפניו.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>המצב</th><th>הפקודה</th><th>מה היא עושה</th></tr>
+  <tr><td>שיניתי קובץ, עוד לא <code>add</code>, ואני רוצה לבטל</td><td><code>git restore chat.py</code></td><td>מחזירה את הקובץ למצב שלו ב-<span class="en">commit</span> האחרון. השינויים נמחקים</td></tr>
+  <tr><td>עשיתי <code>add</code> לקובץ שלא רציתי</td><td><code>git restore --staged chat.py</code></td><td>מוציאה מה-<span class="en">staging</span>. השינויים נשארים בקובץ</td></tr>
+  <tr><td>אני צריך את הגרסה של קובץ מלפני כמה <span class="en">commits</span></td><td><code>git restore --source=517d756 chat.py</code></td><td>מביאה את הקובץ כפי שהיה ב-<span class="en">commit</span> ההוא. אחר כך בודקים ושומרים ב-<span class="en">commit</span> רגיל</td></tr>
+  <tr><td>שמרתי <span class="en">commit</span> גרוע, ואולי כבר שלחתי אותו</td><td><code>git revert &lt;hash&gt;</code></td><td>יוצרת <span class="en">commit</span> חדש שמבטל את השינוי. ההיסטוריה לא נמחקת, רק מתווסף לה תיקון</td></tr>
+</table>
+</div>
+
+<p>שימו לב לכיוון של <code>git revert</code>: הוא לא מוחק את העבר, הוא מוסיף לו. זה נראה פחות "נקי", אבל זו הדרך הבטוחה, כי אם מישהו אחר כבר קיבל את ה-<span class="en">commit</span> הגרוע, ההיסטוריה שלו ושלכם נשארות תואמות. תתרגלו את זה בתרגיל 1.</p>
+
+<div class="callout warn">
+  <span class="title">פקודות שמשכתבות היסטוריה</span>
+  <p>תפגשו באינטרנט את <code>git reset --hard</code> ואת <code>git commit --amend</code>. שתיהן משנות את ההיסטוריה עצמה. <code>reset --hard</code> גם מוחקת שינויים שלא נשמרו, בלי לשאול ובלי דרך פשוטה להחזיר. הכלל: מותר לשכתב רק היסטוריה שעוד לא שלחתם לשום מקום. מה שכבר נשלח, מתקנים עם <code>revert</code>.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.7</span><span class="en">Remote</span>: עותק משותף</h2>
+
+<p>עד עכשיו ההיסטוריה נמצאת רק במחשב שלכם. אם הדיסק ייהרס, היא תיעלם יחד איתו, ואף אחד אחר לא יכול לעבוד עליה. <strong><span class="en">Remote</span></strong> הוא עוד עותק של ה-<span class="en">repository</span>, בדרך כלל בשרת, שכולם שולחים אליו ומושכים ממנו.</p>
+
+<p>בעבודה אמיתית ה-<span class="en">remote</span> נמצא ב-GitHub (או בשירות דומה כמו GitLab). בפרק הזה נדמה אותו בתיקייה מקומית, כדי שתוכלו לתרגל הכול בלי חשבון ובלי אינטרנט. מבחינת git אין הבדל: אותן פקודות בדיוק עובדות מול תיקייה ומול שרת.</p>
+
+<h3>יוצרים <span class="en">remote</span> מקומי</h3>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd ~\projects
+git init --bare -b main remotes\my-agent.git</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Initialized empty Git repository in C:/Users/you/projects/remotes/my-agent.git/</code></pre>
+</div>
+
+<p><span class="en">Bare repository</span> הוא <span class="en">repository</span> בלי <span class="en">working directory</span>: רק ההיסטוריה, בלי קבצים שאפשר לערוך. זה בדיוק מה ששרת מחזיק. אל תעבדו בתוך התיקייה הזו. עכשיו מחברים אליה את הפרויקט, ושולחים:</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>cd my-agent
+git remote add origin $HOME\projects\remotes\my-agent.git
+git push -u origin main</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>To C:\Users\you\projects\remotes\my-agent.git
+ * [new branch]      main -&gt; main
+branch 'main' set up to track 'origin/main'.</code></pre>
+</div>
+
+<p><code>origin</code> הוא שם ל-<span class="en">remote</span>, כמו כינוי באנשי קשר. זה השם המקובל ל-<span class="en">remote</span> הראשי. <code>$HOME</code> הוא משתנה של PowerShell שמכיל את תיקיית הבית שלכם, כי git צריך כאן נתיב מלא. הדגל <code>-u</code> אומר ל-git לזכור שהענף <code>main</code> שלכם קשור ל-<code>main</code> שב-<code>origin</code>, ולכן מעכשיו מספיק לכתוב <code>git push</code> ו-<code>git pull</code> בלי פרטים. הריצו <code>git status</code> ותראו שורה חדשה: <code>Your branch is up to date with 'origin/main'</code>.</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th>פקודה</th><th>מה היא עושה</th></tr>
+  <tr><td><code>git clone &lt;url&gt; &lt;folder&gt;</code></td><td>מורידה עותק מלא של <span class="en">repository</span> לתיקייה חדשה, כולל כל ההיסטוריה</td></tr>
+  <tr><td><code>git push</code></td><td>שולחת ל-<span class="en">remote</span> את ה-<span class="en">commits</span> שיש לכם ואין לו</td></tr>
+  <tr><td><code>git fetch</code></td><td>מורידה את ה-<span class="en">commits</span> שיש ל-<span class="en">remote</span> ואין לכם, <em>בלי</em> לגעת בקבצים שלכם</td></tr>
+  <tr><td><code>git pull</code></td><td><code>fetch</code> ומיד אחריו <code>merge</code>: מורידה ומאחדת לתוך הענף שלכם</td></tr>
+</table>
+</div>
+
+<h3>אותו דבר, מול GitHub</h3>
+
+<p>את החלק הזה לא תעשו עכשיו. הוא כאן כדי שתדעו מה משתנה כשה-<span class="en">remote</span> אמיתי, ותעשו אותו בתרגיל 6 אם תרצו:</p>
+<ol>
+  <li>ב-<code>github.com</code>, יוצרים <span class="en">repository</span> חדש: כפתור <span class="en">New</span>, שם, ובחירה ב-<span class="en">Private</span>. <strong>לא</strong> מסמנים יצירה של <code>README</code>, <code>.gitignore</code> או רישיון, כי ה-<span class="en">repository</span> צריך להיות ריק כדי לקבל את ההיסטוריה שכבר יש לכם.</li>
+  <li>GitHub מציג כתובת בצורה <code>https://github.com/&lt;user&gt;/my-agent.git</code>. מחברים אותה עם <code>git remote add</code>, כמו קודם, ושולחים עם <code>git push -u</code>. אם השם <code>origin</code> כבר תפוס, בוחרים שם אחר.</li>
+  <li>בפעם הראשונה ייפתח חלון דפדפן להתחברות. זה <span class="en">Git Credential Manager</span>, שמותקן עם Git for Windows, והוא שומר את ההרשאה כדי שלא תצטרכו להתחבר שוב. אל תכתבו סיסמה או <span class="en">token</span> בתוך הכתובת.</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.8</span><span class="en">Branches</span> ו-<span class="en">merge</span></h2>
+
+<p>נניח שאתם מתחילים לבנות פקודה חדשה, וזה לוקח יומיים. בינתיים מישהו מבקש תיקון דחוף. אם כל העבודה נעשית ישר על <code>main</code>, הקוד החצי-גמור שלכם מעורבב בתיקון. <strong><span class="en">Branch</span></strong> (ענף) פותר את זה: קו פיתוח נפרד, שבו עובדים על דבר אחד בלי להפריע לאחרים, ומחברים אותו חזרה רק כשהוא מוכן.</p>
+
+<p>טכנית, <span class="en">branch</span> הוא רק תווית עם שם, שמצביעה על <span class="en">commit</span>. כשאתם שומרים <span class="en">commit</span> חדש, התווית של הענף שאתם עומדים עליו זזה קדימה אליו. לכן יצירה של <span class="en">branch</span> לוקחת אפס זמן ואפס מקום, וזה בסדר גמור ליצור הרבה מהם.</p>
+
+<div class="codebox">
+  <div class="label"><span>PowerShell</span></div>
+<pre><code>git switch -c feature/reset-command   <span class="cm"># create a branch and move to it</span>
+git branch                            <span class="cm"># list branches; * marks the current one</span>
+git switch main                       <span class="cm"># move back to main</span>
+git merge feature/reset-command       <span class="cm"># bring the branch's commits into main</span>
+git branch -d feature/reset-command   <span class="cm"># delete the label once it is merged</span></code></pre>
+</div>
+
+<p>כשעוברים ענף, git מחליף את הקבצים בתיקייה לגרסה של הענף ההוא. אל תיבהלו כשקוד "נעלם" אחרי <code>git switch main</code>: הוא מחכה בענף שלו.</p>
+
+<h3>שני סוגים של <span class="en">merge</span></h3>
+
+<p>אם מאז שיצרתם את הענף אף אחד לא שמר <span class="en">commit</span> חדש ב-<code>main</code>, אין מה לאחד. git פשוט מזיז את התווית <code>main</code> קדימה עד הסוף של הענף שלכם. זה נקרא <strong><span class="en">fast-forward</span></strong>, וההיסטוריה נשארת קו ישר. תראו את זה בתרגיל 2.</p>
+
+<p>אם בזמן הזה נוספו <span class="en">commits</span> גם ב-<code>main</code>, יש שני קווים שהתפצלו. git יוצר <strong><span class="en">merge commit</span></strong>: <span class="en">commit</span> מיוחד עם שני הורים, שמחבר את הקווים. כך זה נראה ב-<code>git log --oneline --graph</code>, אחרי תרגיל 3:</p>
+
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>*   637eb78 (HEAD -&gt; main) Merge remote-tracking branch 'origin/main'
+|\
+| * 3ac2720 (origin/main, origin/HEAD) Ask for clear answers in the system prompt
+* | d68df42 Answer in the user's language
+|/
+* 405a787 Add /reset command to clear the conversation</code></pre>
+</div>
+
+<p>קוראים מלמטה למעלה: מ-<code>405a787</code> יצאו שני קווים, ב-<code>637eb78</code> הם התאחדו. הכוכביות הן <span class="en">commits</span>, והקווים הם הקשרים להורים.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.9</span>קונפליקטים: <span class="en">merge conflicts</span></h2>
+
+<p>ברוב המקרים git מאחד לבד: אתם שיניתם את תחילת הקובץ, השותפה את סופו, ו-git לוקח את שני השינויים. הוא נעצר רק כששני הצדדים שינו <em>את אותן שורות</em> בצורות שונות. אז אין לו דרך לדעת מה נכון, והוא מחזיר את ההחלטה אליכם. זה <strong><span class="en">merge conflict</span></strong>. זו לא שגיאה ולא תקלה, זו שאלה.</p>
+
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>Auto-merging chat.py
+CONFLICT (content): Merge conflict in chat.py
+Automatic merge failed; fix conflicts and then commit the result.</code></pre>
+</div>
+
+<p>git כותב את שתי הגרסאות לתוך הקובץ, מסומנות כך:</p>
+
+<div class="codebox output">
+  <div class="label"><span>chat.py</span></div>
+<pre><code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD
+SYSTEM_PROMPT = "You are a friendly assistant. Answer in the language the user writes in."
+=======
+SYSTEM_PROMPT = "You are a friendly assistant. Keep your answers short and clear."
+&gt;&gt;&gt;&gt;&gt;&gt;&gt; origin/main</code></pre>
+</div>
+
+<p>מה שבין <code>&lt;&lt;&lt;&lt;&lt;&lt;&lt; HEAD</code> לבין <code>=======</code> הוא הגרסה שלכם. מה שבין <code>=======</code> לבין <code>&gt;&gt;&gt;&gt;&gt;&gt;&gt;</code> הוא הגרסה שמגיעה מבחוץ. פותרים בארבעה צעדים:</p>
+
+<ol>
+  <li><strong>מחליטים</strong> מה התוצאה הנכונה: אחת הגרסאות, או שילוב. כאן שני השינויים רצויים, אז משלבים.</li>
+  <li><strong>עורכים</strong> את הקובץ כך שיכיל רק את התוצאה, ומוחקים את שלוש שורות הסימון. VS Code מציג מעל הקונפליקט כפתורים: <span class="en">Accept Current Change</span> (שלכם), <span class="en">Accept Incoming Change</span> (שלהם), <span class="en">Accept Both Changes</span> (שניהם). אפשר להתחיל מהם ולתקן ביד.</li>
+  <li><strong>מריצים</strong> את הקוד. git בודק רק טקסט, לא היגיון. שילוב של שתי שורות תקינות יכול לתת תוכנית שבורה.</li>
+  <li><strong>מסמנים ושומרים</strong>: <code>git add chat.py</code>, ואז <code>git commit</code>.</li>
+</ol>
+
+<p>ואם התבלבלתם באמצע ורוצים לחזור למצב שלפני הניסיון לאחד, <code>git merge --abort</code> מבטל הכול.</p>
+
+<div class="callout good">
+  <span class="title">איך מקטינים קונפליקטים</span>
+  <p>קונפליקטים גדלים עם הזמן. ענף שחי שבועיים צובר הרבה שינויים, וגם <code>main</code> צובר, ובסוף מתנגשים בעשרה מקומות. ענף שחי יום, ומתעדכן מ-<code>main</code> לעיתים קרובות, מתנגש לכל היותר במקום אחד. ענפים קטנים וקצרים הם ההרגל החשוב ביותר בפרק.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.10</span><span class="en">Rebase</span></h2>
+
+<p>יש דרך שנייה להביא את השינויים של <code>main</code> לתוך הענף שלכם. נניח שפתחתם ענף, שמרתם בו <span class="en">commit</span>, ובינתיים מישהו הוסיף <span class="en">commit</span> ל-<code>main</code>:</p>
+
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>* 0efd356 (origin/main, origin/HEAD, main) Document the chat commands in README
+| * c338483 (HEAD -&gt; docs/contributing) Add CONTRIBUTING.md with the team git workflow
+|/
+*   637eb78 Merge remote-tracking branch 'origin/main'</code></pre>
+</div>
+
+<p><code>merge</code> היה מחבר את הקווים עם <span class="en">merge commit</span>. <strong><code>git rebase main</code></strong> עושה משהו אחר: הוא לוקח את ה-<span class="en">commits</span> של הענף שלכם, ו"משחק אותם מחדש" אחד אחד מעל הסוף של <code>main</code>, כאילו התחלתם לעבוד רק עכשיו:</p>
+
+<div class="codebox output">
+  <div class="label"><span>output</span></div>
+<pre><code>* <span class="hl">4a68c39</span> (HEAD -&gt; docs/contributing) Add CONTRIBUTING.md with the team git workflow
+* 0efd356 (origin/main, origin/HEAD, main) Document the chat commands in README
+*   637eb78 Merge remote-tracking branch 'origin/main'</code></pre>
+</div>
+
+<p>ההיסטוריה ישרה, ואפשר לאחד בעזרת <span class="en">fast-forward</span>. אבל שימו לב למזהה: ה-<span class="en">commit</span> שהיה <code>c338483</code> הוא עכשיו <code>4a68c39</code>. התוכן זהה, ההורה השתנה, ולכן זה <span class="en">commit</span> חדש. <code>rebase</code> משכתב היסטוריה.</p>
+
+<div class="callout warn">
+  <span class="title">כלל הזהב של rebase</span>
+  <p>עושים <code>rebase</code> רק לענף שאתם לבד עובדים עליו. אם כבר שלחתם את הענף ל-<span class="en">remote</span>, אחרי <code>rebase</code> הפקודה <code>git push</code> תיכשל, כי מבחינת השרת ההיסטוריה שלכם סותרת את שלו. במקרה כזה, ורק בענף שלכם, שולחים עם <code>git push --force-with-lease</code>, שמסכים לדרוס רק אם אף אחד אחר לא שלח לענף בינתיים. על <code>main</code>, או על ענף משותף, לא עושים <code>rebase</code> אף פעם.</p>
+</div>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th><code>merge</code></th><th><code>rebase</code></th></tr>
+  <tr><td>ההיסטוריה</td><td>אמיתית: רואים שעבדו במקביל</td><td>ישרה: נראית כאילו עבדו בתור</td></tr>
+  <tr><td>משכתב <span class="en">commits</span>?</td><td>לא</td><td>כן, נוצרים מזהים חדשים</td></tr>
+  <tr><td>קונפליקטים</td><td>פותרים פעם אחת, ב-<span class="en">merge commit</span></td><td>עלולים לחזור בכל <span class="en">commit</span> שמשוחק מחדש</td></tr>
+  <tr><td>מתי</td><td>תמיד בטוח. ברירת המחדל כשלא בטוחים</td><td>לעדכן ענף פרטי מ-<code>main</code> לפני שמבקשים לאחד אותו</td></tr>
+</table>
+</div>
+
+<p>צוותים שונים בוחרים אחרת, ושתי הגישות לגיטימיות. מה שחשוב הוא שכולם בצוות יעבדו באותה דרך, ושהיא כתובה במקום שכולם רואים. תכתבו מסמך כזה בתרגיל 4.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.11</span><span class="en">Pull requests</span> ו-<span class="en">code review</span></h2>
+
+<p>בצוות, אף אחד לא מאחד ענף ל-<code>main</code> לבד ובשקט. במקום זה פותחים <strong><span class="en">pull request</span></strong> (ב-GitLab קוראים לזה <span class="en">merge request</span>): בקשה רשמית לאחד ענף לתוך <code>main</code>, שאחרים קוראים, מעירים עליה ומאשרים. <span class="en">Pull request</span> אינו פקודת git. זה כלי של GitHub שבנוי מעל <span class="en">branches</span> ו-<code>merge</code>.</p>
+
+<h3>מחזור החיים</h3>
+<ol>
+  <li>יוצרים ענף מ-<code>main</code> מעודכן, עובדים, שומרים <span class="en">commits</span>.</li>
+  <li>שולחים את הענף: <code>git push -u origin feature/reset-command</code>.</li>
+  <li>ב-GitHub פותחים <span class="en">pull request</span> מהענף אל <code>main</code>, עם כותרת ותיאור.</li>
+  <li>בדיקות אוטומטיות רצות על הקוד. את זה תבנו בפרק 9.</li>
+  <li>חבר צוות עושה <strong><span class="en">code review</span></strong>: קורא את השינויים בלשונית <span class="en">Files changed</span>, מעיר על שורות ספציפיות, ומסיים באחד משלושה: <span class="en">Comment</span>, <span class="en">Approve</span> או <span class="en">Request changes</span>.</li>
+  <li>מתקנים לפי ההערות עם <span class="en">commits</span> נוספים באותו ענף. ה-<span class="en">pull request</span> מתעדכן לבד.</li>
+  <li>אחרי אישור, לוחצים <span class="en">Merge</span>, ומוחקים את הענף.</li>
+</ol>
+
+<h3>תיאור טוב</h3>
+<p>מי שקורא את ה-<span class="en">pull request</span> לא היה בראש שלכם. תנו לו את מה שהוא צריך כדי לבדוק בעשר דקות:</p>
+
+<div class="codebox">
+  <div class="label"><span>pull request description</span></div>
+<pre><code>## What
+Adds a /reset command that clears the conversation and starts a new one.
+
+## Why
+Long conversations get slow and expensive. Users had to restart the program to start over.
+
+## How to test
+1. Set CHAT_MOCK=1 and run `uv run python chat.py`.
+2. Send two messages, then `/reset`, then one more.
+3. The mock reply should say "turn 1" again.
+
+## Notes for the reviewer
+The help line printed at startup also changed.</code></pre>
+</div>
+
+<h3>איך עושים <span class="en">review</span></h3>
+<ul>
+  <li><strong>האם זה עושה מה שהתיאור אומר?</strong> הריצו את הקוד לפי "<span class="en">How to test</span>", אל תסתפקו בקריאה.</li>
+  <li><strong>מה עלול להישבר?</strong> קלט ריק, שיחה ארוכה, הודעת שגיאה מה-<span class="en">API</span>.</li>
+  <li><strong>האם נכנס משהו שלא שייך?</strong> סודות, הדפסות שנשארו מ-debugging, שינויים שלא קשורים לנושא.</li>
+  <li><strong>האם יבינו את זה בעוד חצי שנה?</strong> שמות, הערות, הודעות <span class="en">commit</span>.</li>
+</ul>
+<p>כתבו הערות על הקוד ולא על האדם ("השורה הזו מדפיסה את כל השיחה", ולא "שכחת להוריד print"), הסבירו למה, והבחינו בין "חייב לתקן" לבין "הצעה". ומהצד השני: כשמקבלים הערה, עונים על כל אחת, בתיקון או בהסבר. <span class="en">Review</span> הוא שיחה על הקוד, לא מבחן.</p>
+
+<h3>שלוש דרכים ללחוץ <span class="en">Merge</span></h3>
+<div class="table-wrap">
+<table>
+  <tr><th>אפשרות ב-GitHub</th><th>מה קורה ל-<code>main</code></th></tr>
+  <tr><td><span class="en">Create a merge commit</span></td><td>כל ה-<span class="en">commits</span> של הענף נכנסים, ועוד <span class="en">merge commit</span> שמחבר</td></tr>
+  <tr><td><span class="en">Squash and merge</span></td><td>כל הענף נדחס ל-<span class="en">commit</span> אחד. היסטוריה נקייה, אבל הצעדים הקטנים הולכים לאיבוד</td></tr>
+  <tr><td><span class="en">Rebase and merge</span></td><td>ה-<span class="en">commits</span> של הענף משוחקים מחדש מעל <code>main</code>, בלי <span class="en">merge commit</span></td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.12</span>אסטרטגיית <span class="en">branching</span></h2>
+
+<p>ברגע שיש יותר מאדם אחד, צריך להסכים על כללים: מאיזה ענף יוצאים, איך קוראים לענפים, ומי מאחד לאן. לזה קוראים <span class="en">branching strategy</span>. שתי הנפוצות:</p>
+
+<div class="table-wrap">
+<table>
+  <tr><th></th><th><span class="en">GitHub flow</span> (או <span class="en">trunk-based</span>)</th><th><span class="en">Git flow</span></th></tr>
+  <tr><td>ענפים קבועים</td><td>רק <code>main</code></td><td><code>main</code> ו-<code>develop</code>, ועוד ענפי <code>release/</code> ו-<code>hotfix/</code></td></tr>
+  <tr><td>עבודה</td><td>ענף קצר מ-<code>main</code>, <span class="en">pull request</span>, חזרה ל-<code>main</code></td><td>ענף מ-<code>develop</code>, חזרה ל-<code>develop</code>, ומשם בגרסאות מתוכננות ל-<code>main</code></td></tr>
+  <tr><td>מתאים ל</td><td>שירותים שמעדכנים הרבה פעמים, רוב הצוותים היום</td><td>מוצרים שיוצאים בגרסאות ממוספרות, עם כמה גרסאות נתמכות במקביל</td></tr>
+</table>
+</div>
+
+<p>לפרויקט שלכם, ולרוב הצוותים שתפגשו, <span class="en">GitHub flow</span> מספיק: <code>main</code> תמיד עובד, כל שינוי בענף קצר עם שם שמסביר אותו (<code>feature/reset-command</code>, <code>fix/empty-input</code>), ושום דבר לא נכנס ל-<code>main</code> בלי <span class="en">pull request</span>. ב-GitHub אפשר לאכוף את הכלל האחרון בעזרת <span class="en">branch protection</span>, הגדרה שחוסמת <code>push</code> ישיר ל-<code>main</code> ודורשת אישור. בחברות תפגשו לפעמים גם ענפים לפי סביבה, כמו <code>staging</code>. נדבר על סביבות בפרק 10.</p>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.13</span>תרגילים</h2>
+
+<p>התרגילים בונים זה על זה ומספרים סיפור אחד: אתם מוסיפים יכולת לסוכן, מצטרפת שותפה, ואתם לומדים לעבוד יחד. עשו אותם לפי הסדר, באותו <span class="en">repository</span>. פתרונות, כולל הפלט שהתקבל בכל צעד, נמצאים <a href="solutions/chapter-02.html">בדף נפרד</a>.</p>
+
+<!-- ex 1 -->
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 1 · מכונת זמן</h3><span class="level">מודרך</span></div>
+  <p><strong>חלק א: שינוי שעוד לא נשמר.</strong></p>
+  <ol>
+    <li>ב-<code>chat.py</code>, מחקו את כל הפונקציה <code>ask_mock</code> ושמרו. הריצו את הסוכן במצב <span class="en">mock</span> ושלחו הודעה. תקבלו את השגיאה מתחילת הפרק.</li>
+    <li>הריצו <code>git status</code> ואז <code>git diff --stat</code>. כמה שורות נמחקו?</li>
+    <li>החזירו את הקובץ: <code>git restore chat.py</code>. הריצו שוב את הסוכן.</li>
+  </ol>
+  <p><strong>חלק ב: commit שכבר נשמר.</strong></p>
+  <ol>
+    <li>הוסיפו את השורה <code>print(messages)</code> מיד אחרי <code>messages.append({"role": "user", "content": user_text})</code>.</li>
+    <li>שמרו בפקודה אחת: <code>git commit -am "Print the conversation before each request"</code>. הדגל <code>-a</code> מכניס ל-<span class="en">staging</span> את כל הקבצים שכבר במעקב ששונו, כך שאין צורך ב-<code>git add</code> נפרד. קבצים חדשים הוא לא מכניס.</li>
+    <li>הריצו את הסוכן. הרשימה מודפסת לפני כל תשובה, וזה מכוער. בטלו: <code>git revert --no-edit HEAD</code>. הדגל <code>--no-edit</code> מקבל את הודעת ברירת המחדל בלי לפתוח עורך.</li>
+    <li>הסתכלו על <code>git log --oneline</code>, ושלחו הכול ל-<span class="en">remote</span> עם <code>git push</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex1">כמה <span class="en">commits</span> נוספו בחלק ב, ולמה לא אפס? מתי הייתם בוחרים ב-<code>restore</code> ומתי ב-<code>revert</code>?</label>
+  <textarea class="answer" id="n-ex1" data-id="c02-n1"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c02-ex1"><span>סיימתי את תרגיל 1</span></label>
+</div>
+
+<!-- ex 2 -->
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 2 · הפקודה <code>/reset</code> על ענף</h3><span class="level">מודרך</span></div>
+  <p>בפרק 1 ראיתם שהסוכן שולח את כל השיחה בכל תור. כשרוצים להתחיל נושא חדש, צריך היום לסגור את התוכנית. הוסיפו פקודה שמנקה את השיחה, על ענף נפרד.</p>
+  <ol>
+    <li>צרו ענף ועברו אליו: <code>git switch -c feature/reset-command</code></li>
+    <li>ב-<code>chat.py</code>, בתוך הלולאה, מיד אחרי הבדיקה <code>if not user_text:</code> והשורה <code>continue</code> שאחריה, הוסיפו:</li>
+  </ol>
+<div class="codebox">
+  <div class="label"><span>chat.py</span></div>
+<pre><code>        if user_text == "/reset":
+            # Forget the whole conversation and start a new one.
+            messages.clear()
+            print("Conversation cleared. Starting over.\n")
+            continue</code></pre>
+</div>
+  <ol start="3">
+    <li>עדכנו את שורת ההסבר שמודפסת בהתחלה ל-<code>"Type a message and press Enter. Type '/reset' to start over, 'exit' to quit.\n"</code></li>
+    <li>בדקו במצב <span class="en">mock</span>: שתי הודעות, <code>/reset</code>, ועוד הודעה. מה מספר התור בתשובה האחרונה?</li>
+    <li>שמרו: <code>git add chat.py</code> ואז <code>git commit -m "Add /reset command to clear the conversation"</code>. שלחו את הענף, כפי שהייתם עושים לפני <span class="en">pull request</span>: <code>git push -u origin feature/reset-command</code></li>
+    <li>חזרו ל-<code>main</code> עם <code>git switch main</code>, ובדקו שהפקודה לא שם: <code>Select-String -Path chat.py -Pattern "/reset"</code> לא מחזיר כלום. הריצו <code>git log --oneline --graph --all</code>.</li>
+    <li>אחדו: <code>git merge feature/reset-command</code>, ושלחו: <code>git push</code>.</li>
+    <li>נקו: <code>git branch -d feature/reset-command</code> ו-<code>git push origin --delete feature/reset-command</code></li>
+  </ol>
+  <label class="answer-label" for="n-ex2">איזו מילה הופיעה בפלט של ה-<code>merge</code>, ולמה לא נוצר <span class="en">merge commit</span>?</label>
+  <textarea class="answer" id="n-ex2" data-id="c02-n2"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c02-ex2"><span>סיימתי את תרגיל 2</span></label>
+</div>
+
+<!-- ex 3 -->
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 3 · שותפה לצוות וקונפליקט</h3><span class="level mid">בינוני</span></div>
+  <p>אין לכם שותפה? תהיו שניכם. תיקייה שנייה במחשב, עם שם אחר בהגדרות, מתנהגת בדיוק כמו אדם אחר עם מחשב אחר.</p>
+  <ol>
+    <li>פתחו חלון <span class="en">terminal</span> שני, ובו "הצטרפו לצוות":
+<div class="codebox">
+  <div class="label"><span>PowerShell (teammate)</span></div>
+<pre><code>cd ~\projects
+git clone $HOME\projects\remotes\my-agent.git teammate
+cd teammate
+git config user.name "Dana Teammate"
+git config user.email "dana@example.com"</code></pre>
+</div>
+      כאן <code>git config</code> בלי <code>--global</code>: ההגדרה חלה רק על ה-<span class="en">repository</span> הזה. הסתכלו ב-<code>ls -Force</code> מה הגיע בשכפול, ומה לא.</li>
+    <li>בתור דנה: שנו ב-<code>chat.py</code> את <code>SYSTEM_PROMPT</code> ל-<code>"You are a friendly assistant. Keep your answers short and clear."</code>, שמרו עם <code>git commit -am "Ask for clear answers in the system prompt"</code>, ושלחו עם <code>git push</code>.</li>
+    <li>בחלון הראשון, בתור עצמכם, ב-<code>my-agent</code>: שנו את אותה שורה ל-<code>"You are a friendly assistant. Answer in the language the user writes in."</code>, ושמרו עם <code>git commit -am "Answer in the user's language"</code>.</li>
+    <li>נסו <code>git push</code>. קראו את ההודעה.</li>
+    <li>הורידו את מה שחסר לכם ובדקו את המצב: <code>git fetch</code>, <code>git status</code>, <code>git log --oneline --graph --all</code>.</li>
+    <li>אחדו: <code>git merge origin/main</code>. פתרו את הקונפליקט כך ששתי הבקשות יישמרו, הריצו את הסוכן, ואז <code>git add chat.py</code>, <code>git commit --no-edit</code> ו-<code>git push</code>.</li>
+    <li>בחלון של דנה: <code>git pull</code>. עכשיו גם אצלה יש את הפתרון.</li>
+  </ol>
+  <label class="answer-label" for="n-ex3">למה git לא הצליח לאחד לבד, למרות שאת <code>/reset</code> ואת <code>"bye"</code> הוא איחד בלי לשאול? ולמה צריך להריץ את הקוד אחרי שפותרים קונפליקט?</label>
+  <textarea class="answer" id="n-ex3" data-id="c02-n3"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c02-ex3"><span>סיימתי את תרגיל 3</span></label>
+</div>
+
+<!-- ex 4 -->
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 4 · כללי הצוות, ו-<span class="en">rebase</span></h3><span class="level mid">בינוני</span></div>
+  <p>עכשיו כשיש צוות, כתבו את כללי העבודה שלו, על ענף. בזמן שאתם כותבים, דנה מעדכנת את <code>main</code>.</p>
+  <ol>
+    <li>ב-<code>my-agent</code>: <code>git switch -c docs/contributing</code></li>
+    <li>צרו קובץ <code>CONTRIBUTING.md</code> (באנגלית) עם שלושה חלקים: <code>## Branches</code> (מאיפה יוצאים, איך קוראים לענפים), <code>## Commits</code> (מה נכנס ל-<span class="en">commit</span> אחד, איך נראית הודעה, מה אסור לשמור), ו-<code>## Pull requests</code> (הצעדים מהענף ועד ה-<code>merge</code>). השתמשו במה שלמדתם בסעיפים 2.3, 2.5, 2.11 ו-2.12. שמרו ב-<span class="en">commit</span>: <code>"Add CONTRIBUTING.md with the team git workflow"</code>.</li>
+    <li>בחלון של דנה: ב-<code>README.md</code>, החליפו את השורה <code>Type a message and press Enter. Type `exit` to quit.</code> בטבלה של הפקודות בצ'אט:
+<div class="codebox">
+  <div class="label"><span>README.md</span></div>
+<pre><code>Type a message and press Enter.
+
+## Commands inside the chat
+
+| Command | What it does |
+|---|---|
+| `/reset` | Forget the conversation and start a new one. |
+| `exit`, `quit`, `bye` | Leave the chat. |</code></pre>
+</div>
+      שמרו עם <code>git commit -am "Document the chat commands in README"</code> ושלחו עם <code>git push</code>.</li>
+    <li>בחלון שלכם, עדכנו את <code>main</code>: <code>git switch main</code> ואז <code>git pull</code>.</li>
+    <li>חזרו לענף (<code>git switch docs/contributing</code>) והסתכלו על <code>git log --oneline --graph --all</code>. שני קווים.</li>
+    <li><code>git rebase main</code>, ושוב <code>git log --oneline --graph --all</code>. קו אחד. השוו את המזהה של ה-<span class="en">commit</span> שלכם לפני ואחרי.</li>
+    <li>אחדו ושלחו: <code>git switch main</code>, <code>git merge docs/contributing</code>, <code>git push</code>, <code>git branch -d docs/contributing</code>.</li>
+  </ol>
+  <label class="answer-label" for="n-ex4">למה המזהה של ה-<span class="en">commit</span> השתנה? ואילו הייתם שולחים את הענף ל-<span class="en">remote</span> לפני ה-<code>rebase</code>, מה היה קורה ב-<code>git push</code> שאחריו, ומה הייתם עושים?</label>
+  <textarea class="answer" id="n-ex4" data-id="c02-n4"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c02-ex4"><span>סיימתי את תרגיל 4</span></label>
+</div>
+
+<!-- ex 5 -->
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 5 · <span class="en">code review</span></h3><span class="level mid">בינוני</span></div>
+  <p>מתכנת חדש בצוות פתח <span class="en">pull request</span> מהענף <code>feature/history</code>. הכותרת: <code>fix stuff</code>. התיאור: ריק. הוא אומר שהוא מוסיף פקודה <code>/history</code> שמראה כמה תורות יש בשיחה. זה ה-<span class="en">diff</span> המלא:</p>
+<div class="codebox output">
+  <div class="label"><span>git diff main</span></div>
+<pre><code>diff --git a/chat.py b/chat.py
+index 4e3def8..35e4b7f 100644
+--- a/chat.py
++++ b/chat.py
+@@ -21,7 +21,7 @@ from rich.console import Console
+ # Read the .env file (if there is one) into environment variables.
+ load_dotenv()
+
+-MODEL = os.getenv("CHAT_MODEL", "claude-opus-5-5")
++MODEL = os.getenv("CHAT_MODEL", "claude-haiku-5-5")
+ MOCK = os.getenv("CHAT_MOCK", "0") == "1"
+ AGENT_NAME = os.getenv("AGENT_NAME", "agent")
+ SYSTEM_PROMPT = (
+@@ -61,7 +61,7 @@ def main():
+             print("ANTHROPIC_API_KEY is not set.")
+             print("Put it in a .env file, or set CHAT_MOCK=1 to run without a key.")
+             sys.exit(1)
+-        client = anthropic.Anthropic()
++        client = anthropic.Anthropic(api_key="sk-ant-xxxxxxxxxxxxxxxx")
+         print(f"Chatting with {MODEL}.")
+
+     print("Type a message and press Enter. Type '/reset' to start over, 'exit' to quit.\n")
+@@ -78,6 +78,10 @@ def main():
+             messages.clear()
+             print("Conversation cleared. Starting over.\n")
+             continue
++        if user_text == "/history":
++            print("DEBUG", messages)
++            print(f"{len(messages)} turns so far.\n")
++            continue
+
+         messages.append({"role": "user", "content": user_text})
+ </code></pre>
+</div>
+  <ol>
+    <li>כתבו <span class="en">review</span>: הערה לכל בעיה שמצאתם, עם השורה, מה הבעיה, ולמה היא חשובה. סמנו כל הערה כ"חובה" או "הצעה". יש לפחות חמש בעיות, ואחת מהן היא באג שמתגלה רק כשמריצים.</li>
+    <li>החליטו: <span class="en">Approve</span>, <span class="en">Comment</span> או <span class="en">Request changes</span>?</li>
+    <li>עכשיו הצד השני: כתבו תיאור <span class="en">pull request</span> לענף <code>docs/contributing</code> שלכם מתרגיל 4, לפי התבנית בסעיף 2.11.</li>
+  </ol>
+  <label class="answer-label" for="n-ex5">ה-<span class="en">review</span> שלכם, והחלטה:</label>
+  <textarea class="answer" id="n-ex5" data-id="c02-n5"></textarea>
+  <label class="answer-label" for="n-ex5b">תיאור ה-<span class="en">pull request</span> שלכם:</label>
+  <textarea class="answer" id="n-ex5b" data-id="c02-n6" dir="ltr"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c02-ex5"><span>סיימתי את תרגיל 5</span></label>
+</div>
+
+<!-- ex 6 -->
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 6 · מחזור מלא ב-GitHub</h3><span class="level open">פתוח</span></div>
+  <p>התרגיל הזה דורש חשבון GitHub חינמי, והוא רשות. כל מה שקודם לו נעשה בלי חשבון.</p>
+  <p>העלו את הפרויקט ל-<span class="en">repository</span> פרטי חדש ב-GitHub, לפי סעיף 2.7. מכיוון שהשם <code>origin</code> כבר תפוס על ידי ה-<span class="en">remote</span> המקומי, תנו לחדש שם אחר, למשל <code>git remote add github &lt;url&gt;</code>, ושלחו עם <code>git push -u github main</code>. אחר כך עשו מחזור אחד שלם של <span class="en">pull request</span>, על שינוי קטן לבחירתכם: ענף, <span class="en">commit</span>, <code>push</code>, פתיחה עם תיאור לפי התבנית, <span class="en">review</span> עם הערה אחת לפחות על שורה, תיקון בעקבות ההערה, <code>merge</code>, מחיקת הענף, ו-<code>git pull</code> אצלכם.</p>
+  <p>אין כאן הוראות צעד אחרי צעד. חלק מהתרגיל הוא למצוא בממשק של GitHub איפה כל דבר נמצא. החליטו בעצמכם באיזו מבין שלוש אפשרויות ה-<span class="en">merge</span> להשתמש, ונסו להפעיל <span class="en">branch protection</span> על <code>main</code>.</p>
+  <label class="answer-label" for="n-ex6">באיזו אפשרות <span class="en">merge</span> בחרתם ולמה? מה ראיתם כשניסיתם לאשר (<span class="en">Approve</span>) <span class="en">pull request</span> של עצמכם? מה היה שונה ממה שעשיתם מול ה-<span class="en">remote</span> המקומי?</label>
+  <textarea class="answer" id="n-ex6" data-id="c02-n7"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c02-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.14</span>בדקו את עצמכם</h2>
+
+<p>סמנו רק מה שאתם מסוגלים להסביר בקול רם לאדם אחר, בלי להציץ בפרק.</p>
+
+<ul class="checklist">
+  <li><label class="check"><input type="checkbox" data-id="c02-chk1"><span>אני יודע/ת לצייר את ארבעת המקומות מסעיף 2.2, ואיזו פקודה מעבירה שינוי מכל אחד לבא אחריו.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c02-chk2"><span>אני יודע/ת להסביר מה יש ב-<span class="en">commit</span>, ומה הופך הודעת <span class="en">commit</span> לטובה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c02-chk3"><span>אני יודע/ת אילו קבצים נכנסים ל-<code>.gitignore</code> ולמה, ומה עושים אם סוד כבר נשמר ב-<span class="en">commit</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c02-chk4"><span>אני יודע/ת לבחור בין <code>git restore</code> לבין <code>git revert</code> לפי המצב.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c02-chk5"><span>אני יודע/ת להסביר מה זה <span class="en">branch</span>, ומה ההבדל בין <span class="en">fast-forward</span> לבין <span class="en">merge commit</span>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c02-chk6"><span>אני יודע/ת מה ההבדל בין <code>fetch</code>, <code>pull</code> ו-<code>push</code>.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c02-chk7"><span>אני יודע/ת לקרוא סימוני קונפליקט ולפתור קונפליקט עד הסוף.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c02-chk8"><span>אני יודע/ת להסביר מה <code>rebase</code> עושה, ומתי אסור להשתמש בו.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c02-chk9"><span>אני יודע/ת לתאר את מחזור החיים של <span class="en">pull request</span>, ומה מחפשים ב-<span class="en">code review</span>.</span></label></li>
+</ul>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.15</span>תקלות נפוצות</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>מה רואים</th><th>למה זה קורה</th><th>מה עושים</th></tr>
+  <tr>
+    <td><span class="en">Author identity unknown</span><br><span class="en">*** Please tell me who you are.</span></td>
+    <td>לא הגדרתם שם ואימייל</td>
+    <td>שתי פקודות ה-<code>git config --global</code> מסעיף 2.3</td>
+  </tr>
+  <tr>
+    <td><code>.env</code> מופיע ב-<code>git status</code> למרות שהוא ב-<code>.gitignore</code></td>
+    <td>הקובץ <code>.gitignore</code> נוצר עם <code>&gt;</code> או <code>echo</code> ב-PowerShell, בקידוד UTF-16</td>
+    <td>מחקו אותו וצרו מחדש ב-VS Code. בדקו עם <code>git check-ignore -v .env</code></td>
+  </tr>
+  <tr>
+    <td>קובץ ממשיך להופיע כ-<code>modified</code> למרות שהוספתם אותו ל-<code>.gitignore</code></td>
+    <td>הוא כבר נשמר ב-<span class="en">commit</span>, ו-<code>.gitignore</code> לא חל על קבצים במעקב</td>
+    <td><code>git rm --cached &lt;file&gt;</code> ו-<span class="en">commit</span>. אם זה סוד, החליפו אותו (סעיף 2.5)</td>
+  </tr>
+  <tr>
+    <td><span class="en">LF will be replaced by CRLF</span></td>
+    <td>Git for Windows מתרגם סופי שורות</td>
+    <td>כלום. זו הודעה, לא שגיאה</td>
+  </tr>
+  <tr>
+    <td>אחרי <code>git commit</code> או <code>git merge</code> המסך מתמלא בטילדות (<code>~</code>) ולא מגיב להקלדה</td>
+    <td>נפתח Vim, עורך ברירת המחדל</td>
+    <td>הקישו <kbd>Esc</kbd>, אחר כך <code>:wq</code> ו-<kbd>Enter</kbd>. ואז הגדירו <code>core.editor</code> (סעיף 2.3)</td>
+  </tr>
+  <tr>
+    <td>הפלט של <code>git log</code> נעצר, ובתחתית יש <code>:</code></td>
+    <td>git מציג פלט ארוך עמוד אחרי עמוד</td>
+    <td>רווח לעמוד הבא, <kbd>q</kbd> ליציאה</td>
+  </tr>
+  <tr>
+    <td><code>! [rejected] main -&gt; main (fetch first)</code></td>
+    <td>מישהו שלח ל-<span class="en">remote</span> <span class="en">commits</span> שאין לכם</td>
+    <td><code>git fetch</code> ואז <code>git merge origin/main</code> (או <code>git pull</code>), פתרו קונפליקטים אם יש, ואז <code>git push</code></td>
+  </tr>
+  <tr>
+    <td><code>fatal: Need to specify how to reconcile divergent branches.</code></td>
+    <td><code>git pull</code> לא יודע אם לאחד ב-<code>merge</code> או ב-<code>rebase</code>, כי זה לא הוגדר</td>
+    <td><code>git config --global pull.rebase false</code> (כלומר <code>merge</code>), ושוב <code>git pull</code></td>
+  </tr>
+  <tr>
+    <td><span class="en">Your local changes to the following files would be overwritten by checkout</span></td>
+    <td>ניסיתם לעבור ענף עם שינויים שלא נשמרו, שהיו נדרסים</td>
+    <td>שמרו אותם ב-<span class="en">commit</span>, או החביאו זמנית עם <code>git stash</code> והחזירו אחר כך עם <code>git stash pop</code></td>
+  </tr>
+  <tr>
+    <td><code>! [rejected] ... (non-fast-forward)</code> אחרי <code>rebase</code></td>
+    <td>הענף כבר נשלח, ו-<code>rebase</code> שכתב אותו</td>
+    <td>רק אם הענף שלכם בלבד: <code>git push --force-with-lease</code>. אף פעם לא על <code>main</code></td>
+  </tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.16</span>מילון מונחים</h2>
+
+<dl class="glossary">
+  <dt>repository (repo)</dt><dd>תיקייה ש-git עוקב אחריה, יחד עם כל ההיסטוריה שלה (בתיקייה <code>.git</code>).</dd>
+  <dt>working directory</dt><dd>הקבצים שאתם רואים ועורכים, בגרסה של הענף הנוכחי.</dd>
+  <dt>staging area</dt><dd>תחנת ביניים: השינויים שנבחרו (עם <code>git add</code>) להיכנס ל-commit הבא.</dd>
+  <dt>commit</dt><dd>צילום של הפרויקט, עם מזהה, מחבר, תאריך, הודעה והפניה ל-commit הקודם.</dd>
+  <dt>hash</dt><dd>המזהה של commit, מחושב מהתוכן. מספיקים בדרך כלל שבעת התווים הראשונים.</dd>
+  <dt>HEAD</dt><dd>ה-commit (ובדרך כלל הענף) שאתם עומדים עליו עכשיו.</dd>
+  <dt>.gitignore</dt><dd>קובץ עם רשימת שמות ותבניות ש-git מתעלם מהם.</dd>
+  <dt>diff</dt><dd>תצוגה של ההבדלים בין שתי גרסאות: שורות שנמחקו (<code>-</code>) ושנוספו (<code>+</code>).</dd>
+  <dt>revert</dt><dd>commit חדש שמבטל את השינוי של commit קודם, בלי למחוק אותו מההיסטוריה.</dd>
+  <dt>branch</dt><dd>קו פיתוח נפרד. טכנית, תווית עם שם שמצביעה על commit וזזה איתו.</dd>
+  <dt>merge</dt><dd>איחוד של ענף אחד לתוך אחר.</dd>
+  <dt>fast-forward</dt><dd>merge שבו רק מזיזים את התווית קדימה, כי ענף היעד לא השתנה בינתיים.</dd>
+  <dt>merge commit</dt><dd>commit עם שני הורים, שמחבר שני קווי פיתוח שהתפצלו.</dd>
+  <dt>merge conflict</dt><dd>מצב שבו שני הצדדים שינו את אותן שורות, ו-git מבקש מכם להחליט.</dd>
+  <dt>rebase</dt><dd>העברה של commits לבסיס חדש, על ידי משחק מחדש שלהם. יוצר commits חדשים.</dd>
+  <dt>remote</dt><dd>עותק נוסף של ה-repository, בדרך כלל בשרת. השם המקובל לראשי הוא <code>origin</code>.</dd>
+  <dt>bare repository</dt><dd>repository בלי working directory, רק היסטוריה. מה ששרת מחזיק.</dd>
+  <dt>clone / fetch / pull / push</dt><dd>העתקה של repository / הורדת commits חדשים / הורדה ואיחוד / שליחה.</dd>
+  <dt>pull request</dt><dd>בקשה ב-GitHub לאחד ענף, שאחרים קוראים, מעירים עליה ומאשרים.</dd>
+  <dt>code review</dt><dd>קריאה ביקורתית של שינוי בקוד על ידי אדם אחר, לפני שהוא מאוחד.</dd>
+  <dt>branching strategy</dt><dd>הכללים המוסכמים בצוות: אילו ענפים קיימים, איך קוראים להם, ומי מאחד לאן.</dd>
+</dl>
+
+<!-- ============================================================ -->
+<h2><span class="sec">2.17</span>מה הלאה</h2>
+
+<p>לכל שינוי בפרויקט יש עכשיו היסטוריה, הסבר, ודרך חזרה, ואתם יודעים לעבוד עליו עם אחרים. אבל שימו לב איך מצאתם את הבעיות בתרגיל 5: קראתם כל שורה בעיניים, והבאג של ספירת התורות התגלה רק כשהרצתם ביד. בפרק 1 הבאג ב-<code>trim_history</code> היה מתגלה רק בשיחה ארוכה. ו-<code>chat.py</code> הולך ומתארך, כשהכול בקובץ אחד.</p>
+
+<p><span class="en">Reviewer</span> אנושי לא אמור לחפש לבד באגים שמכונה יכולה למצוא בשנייה. <strong>פרק 3: איכות קוד</strong> מוסיף בדיקות אוטומטיות שרצות בפקודה אחת, כלי שמוצא בעיות בסגנון ובקוד לפני שמישהו קורא אותו, ומבנה של חבילה במקום קובץ אחד גדול.</p>
+
+<div class="callout good">
+  <span class="title">רוצים להשוות?</span>
+  <p>בתיקייה <code>checkpoints\chapter-02</code> נמצאים הקבצים של הפרויקט כפי שהם אמורים להיראות בסוף הפרק, אחרי כל התרגילים. התיקייה לא מכילה <span class="en">repository</span> של git, רק את הקבצים. את ההיסטוריה שאמורה להיות לכם, <code>git log --oneline --graph</code> בסוף תרגיל 4, תמצאו <a href="solutions/chapter-02.html">בדף הפתרונות</a>.</p>
+</div>
+
+<nav class="footer-nav">
+  <a href="index.html">→ תוכן העניינים</a>
+  <a href="solutions/chapter-02.html">פתרונות לפרק 2</a>
+  <button class="btn" type="button" data-reset>איפוס הסימונים בפרק</button>
+</nav>
+
+</main>
+<script src="assets/workbook.js"></script>
+</body>
+</html>

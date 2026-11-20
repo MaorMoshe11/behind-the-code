@@ -1,0 +1,24 @@
+# What `docker build` must not send into the image.
+# Private settings and local data stay on your computer.
+.env
+*.db
+*.db-journal
+*.log
+
+# Rebuilt inside the image from uv.lock
+.venv/
+
+# History, caches and editor settings: not needed to run the agent
+.git/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.vscode/
+.idea/
+
+# Not needed in the running service
+tests/
+
+# CI settings: not needed inside the image
+.github/
