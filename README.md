@@ -130,3 +130,10 @@ Some things could not be run while writing, and are written from knowledge:
   chapter 12 (the DAG itself was run once).
 
 If you find a mistake, please open an issue.
+
+## License
+
+The workbook text (chapters, solutions, printable editions, READMEs) is licensed under
+[CC BY 4.0](LICENSE-CC-BY-4.0): share and adapt it freely, with credit. The code
+(`checkpoints/`, `starter/`, `tools/`, and the samples inside the chapters) is licensed
+under the [MIT License](LICENSE-MIT). See [`LICENSE`](LICENSE).

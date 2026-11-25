@@ -1,0 +1,17 @@
+Behind the Code · מאחורי הקוד
+Copyright (c) 2026 Maor Moshe
+
+This repository is licensed in two parts.
+
+1. The workbook text: the chapters, solutions pages, printable editions,
+   diagrams and READMEs (everything under workbook/ and parts/, and the
+   README files) is licensed under the Creative Commons Attribution 4.0
+   International license (CC BY 4.0). You may share and adapt it for any
+   purpose, including commercially, as long as you give credit, link to the
+   license and say if you changed anything.
+   Full text: LICENSE-CC-BY-4.0
+   https://creativecommons.org/licenses/by/4.0/
+
+2. The code: everything under checkpoints/, starter/ and tools/, and the code
+   samples shown inside the chapters, is licensed under the MIT License.
+   Full text: LICENSE-MIT
