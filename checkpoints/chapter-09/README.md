@@ -207,6 +207,7 @@ The echo server and the agent's API both use port 8000: run one at a time.
 | `uv run python scripts/copy_conversations.py <from> <to>` | Copies every conversation from one database into another, empty one (for example SQLite to Postgres). |
 | `uv run --locked python scripts/ci_local.py` | Runs the commands of the CI workflow on this computer, in the same order (see "Checks and CI"). |
 | `uv run python scripts/index_lab.py` | Times one query on 500,000 messages, without and with an index (in memory, no file). |
+| `uv run python scripts/cache_lab.py` | A small TTL cache in front of a slow source: what it saves, and when it returns a stale answer. |
 
 To see what the agent really sends, start the echo server, then in a second terminal:
 

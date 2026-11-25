@@ -1,0 +1,25 @@
+name: "טעות בחוברת · Report a mistake"
+description: "פקודה שלא עובדת, פלט שונה ממה שכתוב, הסבר לא נכון או לא ברור."
+title: "טעות: "
+labels: ["mistake"]
+body:
+  - type: input
+    id: where
+    attributes:
+      label: "איפה? · Where?"
+      description: "פרק וסעיף או תרגיל, למשל: פרק 6, תרגיל 3."
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: "מה קרה, ומה ציפיתם שיקרה? · What happened, and what did you expect?"
+      description: "אם יש הודעת שגיאה, הדביקו אותה. בלי מפתחות API או סיסמאות."
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: "מערכת הפעלה וגרסת Python · OS and Python version"
+    validations:
+      required: false

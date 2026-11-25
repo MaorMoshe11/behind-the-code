@@ -6,6 +6,8 @@
 
 החוברת מיועדת למי שכבר יודע לכתוב Python ומכיר מודלי שפה, אבל עוד לא עבד בצוות פיתוח. ההסברים בעברית. הקוד, הפקודות והמונחים המקצועיים באנגלית, כי כך תפגשו אותם בעבודה. כדי להתחיל, הורידו את המאגר ופתחו את הקובץ `workbook/index.html` בדפדפן.
 
+**מה חסר לכם?** החוברת ממשיכה לגדול: פרקים, תרגילים והכוונות נוספים ייכתבו לפי מה שתבקשו. [כתבו לנו מה הייתם רוצים לראות](https://github.com/MaorMoshe11/behind-the-code/issues/new?template=suggestion.yml).
+
 </div>
 
 A hands-on workbook, written in Hebrew, for people who can already write Python and know
@@ -129,7 +131,15 @@ Some things could not be run while writing, and are written from knowledge:
 - **Installing Docker Desktop** in chapter 8, and Airflow's scheduler and web interface in
   chapter 12 (the DAG itself was run once).
 
-If you find a mistake, please open an issue.
+## What is missing? Tell us
+
+The workbook keeps growing, and what gets written next depends on what readers ask for:
+new chapters, more exercises, guidance.
+
+- [Suggest a topic, a chapter or an exercise](https://github.com/MaorMoshe11/behind-the-code/issues/new?template=suggestion.yml)
+- [Report a mistake](https://github.com/MaorMoshe11/behind-the-code/issues/new?template=mistake.yml)
+
+Hebrew or English, one line is enough. You need a GitHub account to post.
 
 ## License
 

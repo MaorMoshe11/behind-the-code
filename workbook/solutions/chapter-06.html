@@ -296,7 +296,121 @@ FAILED tests/test_conversations.py::test_a_failed_reply_saves_nothing - asser...
 </table>
 </div>
 <p>שימו לב שבשני התרחישים הראשונים התשובה מתחילה ב"עוד לא". ההחלטה להוסיף מאגר צריכה מדידה, כמו בתרגיל 3, ולא תחושה.</p>
-<p>ה-<span class="en">README</span> המעודכן ו-<code>.env.example</code> (עם <code># DATABASE_URL=sqlite:///agent.db</code> והסבר) נמצאים ב-<code>checkpoints\chapter-06</code>. ההיסטוריה בסוף הפרק, אחרי <code>git merge</code>:</p>
+<h2><span class="sec">7</span><span class="en">cache</span> קטן, ונתון שהתיישן</h2>
+<div class="codebox">
+  <div class="label"><span>scripts\cache_lab.py</span></div>
+<pre><code>"""A small cache in front of a slow source: what it saves, and when it lies.
+
+Run it with: uv run python scripts/cache_lab.py
+The "slow source" stands in for anything expensive: a paid model call, a heavy query.
+"""
+
+import time
+
+# The source of truth. In real life: a database table, or a call to the model.
+SOURCE = {"opening hours": "Sunday to Thursday, 9:00 to 17:00"}
+SOURCE_DELAY = 0.2  # seconds: what one real answer costs us
+
+
+def slow_answer(question: str) -&gt; str:
+    """Ask the source. Always correct, always slow."""
+    time.sleep(SOURCE_DELAY)
+    return SOURCE[question]
+
+
+class TTLCache:
+    """Keeps each value for `ttl` seconds, then forgets it."""
+
+    def __init__(self, ttl: float) -&gt; None:
+        self.ttl = ttl
+        self.hits = 0
+        self.misses = 0
+        self._items: dict[str, tuple[str, float]] = {}
+
+    def get(self, key: str) -&gt; str | None:
+        item = self._items.get(key)
+        if item is None or item[1] &lt; time.monotonic():
+            self.misses += 1
+            return None
+        self.hits += 1
+        return item[0]
+
+    def set(self, key: str, value: str) -&gt; None:
+        self._items[key] = (value, time.monotonic() + self.ttl)
+
+    def delete(self, key: str) -&gt; None:
+        self._items.pop(key, None)
+
+
+def cached_answer(cache: TTLCache, question: str) -&gt; str:
+    """Cache-aside: look in the cache first, go to the source only on a miss."""
+    answer = cache.get(question)
+    if answer is None:
+        answer = slow_answer(question)
+        cache.set(question, answer)
+    return answer
+
+
+def timed(label: str, cache: TTLCache | None, question: str) -&gt; None:
+    start = time.perf_counter()
+    answer = slow_answer(question) if cache is None else cached_answer(cache, question)
+    print(f"{label}: {(time.perf_counter() - start) * 1000:7.2f} ms  {answer}")
+
+
+def main() -&gt; None:
+    question = "opening hours"
+
+    print("1. Without a cache, every question pays the full price")
+    for i in range(3):
+        timed(f"   call {i + 1}", None, question)
+
+    print("2. With a cache, only the first one does")
+    cache = TTLCache(ttl=1.0)
+    for i in range(3):
+        timed(f"   call {i + 1}", cache, question)
+    print(f"   hits: {cache.hits}, misses: {cache.misses}")
+
+    print("3. The source changes, and the cache does not know")
+    SOURCE[question] = "Sunday to Thursday, 8:00 to 16:00"
+    timed("   cached", cache, question)
+
+    print("4. Fix A: wait for the TTL to pass")
+    time.sleep(1.1)
+    timed("   cached", cache, question)
+
+    print("5. Fix B: whoever changes the source also deletes the key")
+    SOURCE[question] = "Sunday to Thursday, 8:00 to 16:00, Friday 9:00 to 12:00"
+    cache.delete(question)
+    timed("   cached", cache, question)
+
+
+if __name__ == "__main__":
+    main()</code></pre>
+</div>
+<div class="codebox output">
+  <div class="label"><span>uv run python scripts\cache_lab.py</span></div>
+<pre><code>1. Without a cache, every question pays the full price
+   call 1:  200.47 ms  Sunday to Thursday, 9:00 to 17:00
+   call 2:  200.17 ms  Sunday to Thursday, 9:00 to 17:00
+   call 3:  200.32 ms  Sunday to Thursday, 9:00 to 17:00
+2. With a cache, only the first one does
+   call 1:  200.18 ms  Sunday to Thursday, 9:00 to 17:00
+   call 2:    0.01 ms  Sunday to Thursday, 9:00 to 17:00
+   call 3:    0.00 ms  Sunday to Thursday, 9:00 to 17:00
+   hits: 2, misses: 1
+3. The source changes, and the cache does not know
+   cached:    0.00 ms  Sunday to Thursday, 9:00 to 17:00
+4. Fix A: wait for the TTL to pass
+   cached:  200.62 ms  Sunday to Thursday, 8:00 to 16:00
+5. Fix B: whoever changes the source also deletes the key
+   cached:  200.44 ms  Sunday to Thursday, 8:00 to 16:00, Friday 9:00 to 12:00</code></pre>
+</div>
+<p><strong>שלב 2:</strong> הקריאה הראשונה היא <span class="en">miss</span> ומשלמת 200 מילישניות. שתי הבאות הן <span class="en">hit</span>, ולוקחות מאית מילישנייה: חיפוש במילון. בשירות אמיתי החיסכון הוא גם בכסף, כי קריאה למודל שלא יצאה לא עולה דבר.</p>
+<p><strong>שלב 3 הוא התשובה הלא נכונה.</strong> המקור כבר אומר 8:00 עד 16:00, וה-<span class="en">cache</span> עדיין מחזיר 9:00 עד 17:00, באותה מהירות ובלי שום אזהרה. שום דבר לא נכשל ושום שגיאה לא נרשמה. לכן נתון <span class="en">stale</span> קשה כל כך לגלות: מי שמתלונן הוא לקוח שהגיע בארבע וחצי למקום סגור.</p>
+<p><strong>שני התיקונים.</strong> ב-<span class="en">TTL</span> (שלב 4) לא עשיתם דבר: אחרי שנייה הערך פג, הקריאה הבאה היא <span class="en">miss</span>, והיא מביאה את התשובה החדשה. הטעות מוגבלת בזמן, אבל קיימת עד אז. ב-<span class="en">invalidation</span> (שלב 5) מי ששינה את המקור מחק את המפתח, ולכן כבר הקריאה הבאה נכונה. המחיר הוא שכל קוד שכותב למקור צריך להכיר את ה-<span class="en">cache</span>. בפועל משלבים: <span class="en">invalidation</span> בכתיבה, ו-<span class="en">TTL</span> כרשת ביטחון למקרה ששכחתם מקום אחד.</p>
+<p>שימו לב ל-<code>time.monotonic()</code> ולא ל-<code>time.time()</code>: שעון המחשב יכול לזוז אחורה (סנכרון, שעון קיץ), ושעון <span class="en">monotonic</span> רק מתקדם, ולכן הוא הנכון למדידת "כמה זמן עבר". ועוד דבר שהמעבדה הזו לא מראה: המילון חי בתוך התהליך. שני תהליכים של השרת היו מחזיקים שני מילונים, ומחיקה באחד לא הייתה מגיעה לשני. בשביל זה יש Redis.</p>
+
+<p>ה-<span class="en">README</span> המעודכן ו-<code>.env.example</code> (עם <code># DATABASE_URL=sqlite:///agent.db</code> והסבר) נמצאים ב-<code>checkpoints\chapter-06</code>. ההיסטוריה בסוף הפרק, אחרי <code>git merge</code> (ה-<span class="en">commit</span> של תרגיל 7, <code>Add scripts/cache_lab.py</code>, יושב אצלכם בין שתי השורות העליונות):</p>
 <div class="codebox output">
   <div class="label"><span>git log --oneline</span></div>
 <pre><code>d7eea80 Document the database and DATABASE_URL

@@ -38,6 +38,7 @@
     <li>להשתמש ב-<span class="en">transaction</span> כדי ששני שינויים יקרו יחד או לא יקרו בכלל.</li>
     <li>לעבוד עם <span class="en">ORM</span> (SQLAlchemy), ולהבין איזה <span class="en">SQL</span> הוא כותב בשבילכם.</li>
     <li>להסביר מתי בוחרים <span class="en">document store</span>, מאגר אנליטי או <span class="en">cache</span>, ומתי לא.</li>
+    <li>להסביר איך <span class="en">cache</span> עובד, מה זה <span class="en">TTL</span> ו-<span class="en">invalidation</span>, ומתי הוא מחזיר תשובה ישנה.</li>
   </ul>
   <p><strong>זמן משוער:</strong> ארבע עד חמש שעות, כולל התרגילים. <strong>מה צריך:</strong> הפרויקט מסוף פרק 5. אין צורך להתקין שרת בסיס נתונים, ואין צורך במפתח של Anthropic: הכול רץ במצב <span class="en">mock</span>.</p>
 </section>
@@ -686,6 +687,40 @@ def test_everything_is_saved_but_the_model_sees_only_recent_turns():
 
 <p>ומה עם שני תהליכים של השרת, שבפרק 5 ראינו שכל אחד מהם היה מכיר רק חצי מהשיחות? עכשיו שניהם קוראים את אותו בסיס נתונים. עם SQLite זה עובד כל עוד הם על אותו מחשב, וכותב אחד בכל רגע. כשהשרתים על מחשבים שונים, צריך בסיס נתונים שהוא שרת בעצמו, כמו Postgres. נגיע לזה בפרק 8.</p>
 
+<h3><span class="en">Cache</span> מקרוב: עותק מהיר, שלפעמים משקר</h3>
+
+<p>מכל המאגרים בטבלה, <span class="en">cache</span> הוא זה שתפגשו הכי הרבה, ולא רק בתור Redis. הרעיון תמיד זהה: משהו יקר להשיג, כמו שאלה כבדה לבסיס הנתונים או קריאה ל-Claude שעולה כסף ולוקחת שניות, ולכן שומרים את התוצאה במקום מהיר, ובפעם הבאה מחזירים אותה משם. התבנית הנפוצה נקראת <strong><span class="en">cache-aside</span></strong>: הקוד שלכם מסתכל קודם ב-<span class="en">cache</span>, ורק אם אין שם תשובה הוא הולך למקור ושומר את מה שקיבל.</p>
+
+<div class="codebox">
+  <div class="label"><span>cache-aside</span></div>
+<pre><code>def cached_answer(cache: TTLCache, question: str) -&gt; str:
+    answer = cache.get(question)          # 1. look in the cache
+    if answer is None:                    #    a miss: it is not there
+        answer = slow_answer(question)    # 2. go to the source
+        cache.set(question, answer)       # 3. keep a copy for next time
+    return answer</code></pre>
+</div>
+
+<p>כשהתשובה נמצאת ב-<span class="en">cache</span> זה <strong><span class="en">hit</span></strong>, וכשלא, <strong><span class="en">miss</span></strong>. היחס ביניהם קובע אם ה-<span class="en">cache</span> שווה משהו: על שאלות שכמעט לא חוזרות הוא רק מוסיף קוד וזיכרון.</p>
+
+<p>המחיר הוא שמרגע שיש עותק, יש שתי גרסאות של האמת. אם המקור משתנה, ה-<span class="en">cache</span> ממשיך להחזיר את התשובה הישנה, מהר ובלי שום סימן לכך שהיא ישנה. לנתון כזה קוראים <strong><span class="en">stale</span></strong>. יש שתי דרכים מקובלות להגביל את הנזק, ולרוב משתמשים בשתיהן:</p>
+
+<ul>
+  <li><strong><span class="en">TTL</span></strong> (<span class="en">time to live</span>): כל ערך נשמר לזמן קצוב, ואז נמחק מעצמו. פשוט, אבל עד שהזמן עובר התשובה עלולה להיות ישנה. ה-<span class="en">TTL</span> הוא התשובה לשאלה "כמה זמן מותר לנו לטעות?": לשעות פתיחה, שעה. ליתרה בחשבון, אפס.</li>
+  <li><strong><span class="en">Invalidation</span></strong>: מי שמשנה את המקור גם מוחק את המפתח מה-<span class="en">cache</span>. מדויק, אבל צריך לזכור לעשות את זה בכל מקום שכותב, ושכחה אחת היא באג שקשה למצוא.</li>
+</ul>
+
+<div class="callout warn">
+  <span class="title">שלושה כללים לפני שמוסיפים <span class="en">cache</span></span>
+  <p><strong>המפתח כולל כל מה שהתשובה תלויה בו.</strong> אם התשובה תלויה במשתמש והמפתח הוא רק השאלה, משתמש אחד יקבל תשובה של משתמש אחר. זו דליפת מידע, לא רק באג.</p>
+  <p><strong>המערכת עובדת נכון גם כשה-<span class="en">cache</span> ריק.</strong> הוא עותק ולא מקור. אם מחיקה שלו שוברת משהו, שמרתם בו דבר שאסור לאבד.</p>
+  <p><strong>מודדים קודם.</strong> <span class="en">Cache</span> מסתיר איטיות ולא מתקן אותה, ולפעמים <span class="en">index</span> (סעיף 6.5) מתקן אותה באמת.</p>
+</div>
+
+<p>ואיפה ה-<span class="en">cache</span> יושב? מילון בזיכרון של התהליך הוא הפשוט ביותר (ב-Python יש גם <code>functools.lru_cache</code>, בלי <span class="en">TTL</span>). אבל כל תהליך מחזיק עותק משלו, והעותק נמחק בכל הפעלה מחדש: אותה בעיה של שני התהליכים מפרק 5. Redis הוא שרת נפרד שכל התהליכים פונים אליו, ולכן כולם רואים אותו <span class="en">cache</span>. בתרגיל 7 תבנו את הגרסה שבזיכרון, ותראו אותה מחזירה תשובה ישנה.</p>
+
+<p>את אותו רעיון תפגשו שוב, בשמות אחרים: ה-<span class="en">layer cache</span> של Docker (פרק 8), <span class="en">cache</span> של תלויות ב-<span class="en">CI</span> (פרק 9), ו-<span class="en">prompt caching</span> מול Claude (פרק 19). גם הדפדפן שלכם שומר עותקים של דפים וקבצים. בכל המקרים השאלות זהות: מה המפתח, ומתי העותק מפסיק להיות נכון.</p>
+
 <!-- ============================================================ -->
 <h2><span class="sec">6.10</span>תרגילים</h2>
 
@@ -746,10 +781,18 @@ def test_everything_is_saved_but_the_model_sees_only_recent_turns():
     <li>שאלת "מה שעות הפתיחה?" נשאלת אלף פעם ביום, ותשובה של Claude עולה כסף.</li>
     <li>צריך להגביל כל <span class="en">API key</span> ל-60 בקשות בדקה (פרק 14).</li>
   </ol>
-  <p>בסוף, עדכנו את <code>README.md</code> (<code>DATABASE_URL</code> בטבלת המשתנים, איך מסתכלים לתוך <code>agent.db</code>, <code>--continue</code>, הקבצים החדשים) ואת <code>.env.example</code>, <span class="en">commit</span>, ואחדו: <code>git switch main</code>, <code>git merge feature/database</code>, <code>git push</code>, <code>git branch -d feature/database</code>.</p>
   <label class="answer-label" for="n-ex6">הבחירות שלכם, והמחיר של כל מאגר נוסף שהצעתם:</label>
   <textarea class="answer" id="n-ex6" data-id="c06-n6"></textarea>
   <label class="check ex-done"><input type="checkbox" data-id="c06-ex6"><span>סיימתי את תרגיל 6</span></label>
+</div>
+
+<div class="exercise">
+  <div class="ex-head"><h3>תרגיל 7 · <span class="en">cache</span> קטן, ונתון שהתיישן</h3><span class="level mid">בינוני</span></div>
+  <p>כתבו <code>scripts\cache_lab.py</code>, עם הספרייה הסטנדרטית בלבד. (א) מקור איטי: מילון <code>SOURCE</code> עם שאלה אחת ותשובה, ופונקציה <code>slow_answer(question)</code> שישנה 0.2 שניות (<code>time.sleep</code>) ואז מחזירה את התשובה. היא עומדת במקום קריאה יקרה למודל. (ב) מחלקה <code>TTLCache(ttl)</code> עם <code>get</code> (מחזירה <code>None</code> אם המפתח חסר או שזמנו עבר), <code>set</code>, <code>delete</code>, ומונים <code>hits</code> ו-<code>misses</code>. רמז: שמרו לכל מפתח את הערך ואת רגע התפוגה, עם <code>time.monotonic()</code>. (ג) <code>cached_answer</code> בתבנית <span class="en">cache-aside</span> מסעיף 6.9. (ד) <code>main</code> שמדפיס חמישה שלבים, עם הזמן של כל קריאה: שלוש קריאות בלי <span class="en">cache</span>; שלוש עם <span class="en">cache</span> (<span class="en">TTL</span> של שנייה) והמונים; שינוי של התשובה ב-<code>SOURCE</code> וקריאה נוספת; המתנה של 1.1 שניות וקריאה; ושינוי נוסף יחד עם <code>cache.delete</code>, וקריאה. <code>mypy agent scripts</code> צריך לעבור.</p>
+  <p>בסוף, עדכנו את <code>README.md</code> (<code>DATABASE_URL</code> בטבלת המשתנים, איך מסתכלים לתוך <code>agent.db</code>, <code>--continue</code>, הקבצים החדשים) ואת <code>.env.example</code>, <span class="en">commit</span>, ואחדו: <code>git switch main</code>, <code>git merge feature/database</code>, <code>git push</code>, <code>git branch -d feature/database</code>.</p>
+  <label class="answer-label" for="n-ex7">באיזה שלב קיבלתם תשובה לא נכונה, ולמה? ומה ההבדל בין שני התיקונים?</label>
+  <textarea class="answer" id="n-ex7" data-id="c06-n7"></textarea>
+  <label class="check ex-done"><input type="checkbox" data-id="c06-ex7"><span>סיימתי את תרגיל 7</span></label>
 </div>
 
 <!-- ============================================================ -->
@@ -767,6 +810,7 @@ def test_everything_is_saved_but_the_model_sees_only_recent_turns():
   <li><label class="check"><input type="checkbox" data-id="c06-chk7"><span>אני יודע/ת למה הבדיקות לא משאירות קובץ בסיס נתונים, ואיך בדיקה מדמה הפעלה מחדש.</span></label></li>
   <li><label class="check"><input type="checkbox" data-id="c06-chk8"><span>אני יודע/ת להסביר מה <code>create_all</code> לא יודע לעשות, ולמה בדיקות ירוקות לא הוכיחו כאן כלום.</span></label></li>
   <li><label class="check"><input type="checkbox" data-id="c06-chk9"><span>אני יודע/ת מתי לבחור <span class="en">document store</span>, מאגר אנליטי או <span class="en">cache</span>, ומה כל מאגר נוסף עולה.</span></label></li>
+  <li><label class="check"><input type="checkbox" data-id="c06-chk10"><span>אני יודע/ת להסביר <span class="en">cache-aside</span>, <span class="en">hit</span> ו-<span class="en">miss</span>, ומה ההבדל בין <span class="en">TTL</span> ל-<span class="en">invalidation</span>.</span></label></li>
 </ul>
 
 <!-- ============================================================ -->
@@ -807,6 +851,11 @@ def test_everything_is_saved_but_the_model_sees_only_recent_turns():
   <dt>document store</dt><dd>מאגר ששומר מסמכי JSON, בלי מבנה קבוע. למשל MongoDB.</dd>
   <dt>columnar / analytical</dt><dd>מאגר ששומר עמודה-עמודה, ומהיר בסיכומים על המון שורות. למשל ClickHouse.</dd>
   <dt>cache</dt><dd>עותק מהיר, בזיכרון, של נתונים שיש להם מקור אחר. למשל Redis.</dd>
+  <dt>cache hit / miss</dt><dd>התשובה נמצאה ב-<span class="en">cache</span> / לא נמצאה, והולכים למקור.</dd>
+  <dt>cache-aside</dt><dd>תבנית: בודקים ב-<span class="en">cache</span>, וב-<span class="en">miss</span> קוראים מהמקור ושומרים עותק.</dd>
+  <dt>TTL</dt><dd><span class="en">Time to live</span>: כמה זמן ערך נשמר ב-<span class="en">cache</span> לפני שהוא נמחק מעצמו.</dd>
+  <dt>stale</dt><dd>עותק שהמקור שלו כבר השתנה.</dd>
+  <dt>invalidation</dt><dd>מחיקה של ערך מה-<span class="en">cache</span> ברגע שהמקור שלו משתנה.</dd>
 </dl>
 
 <!-- ============================================================ -->

@@ -1,0 +1,51 @@
+name: "הצעה: מה חסר לכם? · Suggest a topic"
+description: "נושא, פרק, תרגיל או הכוונה שהייתם רוצים לראות בחוברת. אפשר לכתוב בעברית או באנגלית."
+title: "הצעה: "
+labels: ["suggestion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        <div dir="rtl">
+
+        תודה שאתם כותבים. החוברת ממשיכה להתפתח לפי מה שקוראים מבקשים: פרקים חדשים, תרגילים נוספים והכוונות. אין צורך למלא הכול, גם שורה אחת עוזרת.
+
+        </div>
+  - type: dropdown
+    id: kind
+    attributes:
+      label: "מה הייתם רוצים? · What would you like?"
+      options:
+        - "פרק חדש על נושא שלא מופיע · A new chapter"
+        - "הרחבה של נושא קיים · More depth on an existing topic"
+        - "עוד תרגילים · More exercises"
+        - "הכוונה: מסלול למידה, קריירה, ראיונות · Guidance"
+        - "משהו אחר · Something else"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: "מה הנושא? · What is the topic?"
+      description: "מה הייתם רוצים ללמוד או לתרגל? אם זו הרחבה, ציינו את הפרק."
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: "איפה נתקלתם בזה? · Where did you run into it?"
+      description: "בעבודה, בראיון, בפרויקט אישי? ההקשר עוזר לנו לכתוב דוגמה מהחיים."
+    validations:
+      required: false
+  - type: dropdown
+    id: background
+    attributes:
+      label: "הרקע שלכם · Your background"
+      options:
+        - "סטודנט/ית או בתחילת הדרך · Student or starting out"
+        - "data scientist / חוקר/ת · Data scientist or researcher"
+        - "מפתח/ת · Developer"
+        - "לא מתכנת/ת במקצוע, כותב/ת קוד בעבודה · I code at work but it is not my title"
+        - "אחר · Other"
+    validations:
+      required: false
